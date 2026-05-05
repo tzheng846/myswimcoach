@@ -44,9 +44,13 @@ def main():
         print("ERROR: no serial port found. Plug in Arduino or pass --port.")
         return
 
-    # Output file: swim_YYYYMMDD_HHMMSS.csv
-    filename = f"swim_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    out_path = Path("raw/"+filename)
+    session_label = input("Enter session label (e.g. tony_warmup): ").strip()
+    if not session_label:
+        session_label = "session"
+
+    filename = f"swim_{session_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    out_path = Path("raw") / filename
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Port:   {port} @ {args.baud} baud")
     print(f"Output: {out_path}")
