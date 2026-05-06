@@ -9,10 +9,10 @@ Extracting and analyze wimmer's stroke metrics.
 ## Pipeline
 
 ```
-logger.py  →  raw CSV  →  vel_acc_extraction.ipynb  →  processed/  →  swim_metrics.ipynb
+logger.py  →  raw/  →  vel_acc_extraction.py  →  processed/  →  swim_metrics.ipynb
 ```
 
-**`vel_acc_extraction.ipynb`** — converts raw encoder counts to velocity and acceleration
+**`vel_acc_extraction.py`** — converts raw encoder counts to velocity and acceleration
 - Unwraps angle, converts counts to meters
 - Resamples to uniform 50 Hz grid
 - Butterworth lowpass filter
@@ -34,7 +34,9 @@ logger.py  →  raw CSV  →  vel_acc_extraction.ipynb  →  processed/  →  sw
 # 1. record a session
 python logger.py
 
-# 2. open vel_acc_extraction.ipynb, set INPUT_FILE, run all cells
+# 2. process a single file or an entire folder
+python vel_acc_extraction.py raw/kenneth_3.csv
+python vel_acc_extraction.py raw/
 # output → processed/<session>.csv
 
 # 3. open swim_metrics.ipynb, update the filename, run all cells
