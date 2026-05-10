@@ -1,8 +1,8 @@
 import argparse
+import webbrowser
 import numpy as np
 import pandas as pd
-from scipy.signal import butter, filtfilt
-from scipy.stats import median_abs_deviation
+from scipy.signal import decimate
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
@@ -13,20 +13,27 @@ SESSION_STEM = "kenneth_3"
 INPUT_FILE  = f"raw/{SESSION_STEM}.csv"
 OUTPUT_FILE = f"processed/{SESSION_STEM}.csv"
 
+# ── Excluded time ranges ──────────────────────────────────────────────────
+# List of (start_s, end_s) pairs to remove from analysis (NaN'd out).
+# Empty list = keep everything.
+EXCLUDED_SEGMENTS = [
+
+
+]
+
 Path("processed").mkdir(parents=True, exist_ok=True)
 
 # ── Wheel physical constants ──────────────────────────────────────────────
-WHEEL_DIAMETER_M  = 0.044
+WHEEL_DIAMETER_M  = 0.06
 WHEEL_CIRCUM_M    = np.pi * WHEEL_DIAMETER_M
 COUNTS_PER_REV    = 4096
 METERS_PER_COUNT  = WHEEL_CIRCUM_M / COUNTS_PER_REV
 
-# ── Filter settings ───────────────────────────────────────────────────────
-TARGET_FS_HZ    = 50.0
-CUTOFF_HZ       = 2.0
-FILTER_ORDER    = 4
-MAD_THRESHOLD   = 6.0
-MAX_PHYSICAL_MS = 3.0
+# ── Decimation settings ───────────────────────────────────────────────────
+# Native rate is inferred from the data (~270 Hz for current sessions).
+# TARGET_FS_HZ is the output rate after decimation; decimation factor is
+# rounded to the nearest integer and the actual output rate is printed.
+TARGET_FS_HZ = 100.0   # ~5x decimation from 270 Hz
 
 
 def load_data(input_file):
@@ -59,54 +66,40 @@ def counts_to_distance(angle_unwrapped_counts, meters_per_count):
     return dist_m
 
 
-def compute_raw_velocity(dist_m, t):
-    vel_raw = np.gradient(dist_m, t)
-    vel_clipped = np.clip(vel_raw, -MAX_PHYSICAL_MS, MAX_PHYSICAL_MS)
-    n_clipped = np.sum(np.abs(vel_raw) > MAX_PHYSICAL_MS)
-    print(f"Spike clip: {n_clipped} samples clipped ({n_clipped/len(vel_raw)*100:.1f}%)")
-    print(f"Vel after clip: min={vel_clipped.min():.3f}  max={vel_clipped.max():.3f}")
-    return vel_raw, vel_clipped
 
 
-def interpolate_to_uniform(vel_clipped, t, target_fs_hz):
+def interpolate_to_uniform(signal, t, target_fs_hz):
     t_uniform = np.arange(t[0], t[-1], 1.0 / target_fs_hz)
-    vel_uniform = np.interp(t_uniform, t, vel_clipped)
-    return vel_uniform, t_uniform
+    signal_uniform = np.interp(t_uniform, t, signal)
+    return signal_uniform, t_uniform
 
 
-def apply_filters(vel_uniform, target_fs_hz, filter_order):
-    # Two cutoffs: velocity display preserves stroke shape; acceleration needs
-    # a lower cutoff because differentiation amplifies noise by 2π × frequency.
-    vel_cutoff_hz   = (target_fs_hz / 2) * 0.10
-    accel_cutoff_hz = (target_fs_hz / 2) * 0.02
-    b_vel,   a_vel   = butter(filter_order, vel_cutoff_hz   / (target_fs_hz / 2), btype="low")
-    b_accel, a_accel = butter(filter_order, accel_cutoff_hz / (target_fs_hz / 2), btype="low")
-    vel_filt      = filtfilt(b_vel,   a_vel,   vel_uniform)
-    vel_for_accel = filtfilt(b_accel, a_accel, vel_uniform)
-    accel_filt    = np.gradient(vel_for_accel, 1.0 / target_fs_hz)
-    print(f"Vel cutoff:   {vel_cutoff_hz:.2f} Hz")
-    print(f"Accel cutoff: {accel_cutoff_hz:.2f} Hz")
-    print(f"Vel range:    {vel_filt.min():.3f} to {vel_filt.max():.3f} m/s")
-    print(f"Accel range:  {accel_filt.min():.3f} to {accel_filt.max():.3f} m/s²")
-    return vel_filt, accel_filt
+def decimate_signal(dist_native, native_fs, target_fs):
+    factor = round(native_fs / target_fs)
+    if factor < 1:
+        factor = 1
+    dist_dec = decimate(dist_native, factor, zero_phase=True)
+    actual_fs = native_fs / factor
+    t_dec = np.arange(len(dist_dec)) / actual_fs
+    return dist_dec, t_dec, actual_fs
 
 
-def export_results(t_uniform, dist_m, t, vel_filt, accel_filt, output_file):
+def export_results(t_uniform, dist_filt, vel, accel, output_file, raw_total_dist):
     out = pd.DataFrame({
         "time_s":    t_uniform,
-        "dist_m":    np.interp(t_uniform, t, dist_m),
-        "vel_ms":    vel_filt,
-        "accel_ms2": accel_filt,
+        "dist_m":    dist_filt,
+        "vel_ms":    vel,
+        "accel_ms2": accel,
     })
     out.to_csv(output_file, index=False, float_format="%.4f")
     print(f"\nExported {len(out)} rows → {output_file}")
-    print(f"  Peak velocity:      {vel_filt.max():.3f} m/s")
-    print(f"  Peak acceleration:  {accel_filt.max():.3f} m/s²")
-    print(f"  Total distance:     {out['dist_m'].max():.3f} m")
+    print(f"  Peak velocity:      {np.nanmax(vel):.3f} m/s")
+    print(f"  Peak acceleration:  {np.nanmax(accel):.3f} m/s²")
+    print(f"  Total distance:     {raw_total_dist:.3f} m")
     return out
 
 
-def plot_results(out, t, vel_clipped):
+def plot_results(out, output_html):
     fig = make_subplots(
         rows=3, cols=1,
         shared_xaxes=True,
@@ -118,13 +111,8 @@ def plot_results(out, t, vel_clipped):
         name="Distance", line=dict(color="#1d9e75", width=1.5)
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
-        x=t, y=vel_clipped,
-        name="Vel raw (clipped)", line=dict(color="#b4b2a9", width=0.8),
-        opacity=0.5
-    ), row=2, col=1)
-    fig.add_trace(go.Scatter(
         x=out["time_s"], y=out["vel_ms"],
-        name="Vel filtered", line=dict(color="#185fa5", width=2)
+        name="Velocity (m/s)", line=dict(color="#185fa5", width=1.5)
     ), row=2, col=1)
     fig.add_trace(go.Scatter(
         x=out["time_s"], y=out["accel_ms2"],
@@ -134,32 +122,89 @@ def plot_results(out, t, vel_clipped):
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color="#888780", width=0.8, dash="dot"), row=3, col=1)
     fig.update_layout(
-        title="AS5600 Swim Data — Cleaned Pipeline",
+        title="AS5600 Swim Data",
         height=700,
         template="plotly_white",
         legend=dict(orientation="h", y=-0.08),
         font=dict(size=11),
     )
     fig.update_xaxes(title_text="Time (s)", row=3, col=1)
-    fig.show()
+    fig.write_html(str(output_html))
+    webbrowser.open(str(output_html))
 
 
-def process_file(csv_file, output_file):
+def plot_wavelet(t_dec, vel, actual_fs):
+    import pywt
+
+    window = int(actual_fs * 3)
+    trend = pd.Series(vel).rolling(window, center=True, min_periods=1).mean().values
+    vel_detrended = vel - trend
+
+    freqs_target = np.linspace(0.3, 3.0, 120)
+    scales = pywt.frequency2scale('cmor1.5-1.0', freqs_target / actual_fs)
+    coeffs, freqs_out = pywt.cwt(vel_detrended, scales, 'cmor1.5-1.0',
+                                 sampling_period=1.0 / actual_fs)
+    power_db = 10 * np.log10(np.abs(coeffs) ** 2 + 1e-12)
+    vmin = np.percentile(power_db, 2)
+    vmax = np.percentile(power_db, 98)
+
+    fig_wt, ax = plt.subplots(figsize=(14, 4))
+    fig_wt.suptitle(f"Velocity Wavelet Scalogram (Morlet CWT, detrended) — {actual_fs:.1f} Hz")
+    ax.pcolormesh(t_dec, freqs_out, power_db, shading='gouraud', cmap='inferno',
+                  vmin=vmin, vmax=vmax)
+    ax.set_ylabel("Freq (Hz)")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylim(0.3, 3.0)
+    plt.tight_layout()
+    plt.show()
+
+
+def process_file(csv_file, output_file, target_fs_hz):
     df = load_data(str(csv_file))
-    angle_unwrapped_rad, angle_unwrapped_counts = unwrap_angle(df)
+    _, angle_unwrapped_counts = unwrap_angle(df)
     dist_m = counts_to_distance(angle_unwrapped_counts, METERS_PER_COUNT)
     t = df["time_s"].values
-    vel_raw, vel_clipped = compute_raw_velocity(dist_m, t)
-    vel_uniform, t_uniform = interpolate_to_uniform(vel_clipped, t, TARGET_FS_HZ)
-    vel_filt, accel_filt = apply_filters(vel_uniform, TARGET_FS_HZ, FILTER_ORDER)
-    out = export_results(t_uniform, dist_m, t, vel_filt, accel_filt, str(output_file))
-    plot_results(out, t, vel_clipped)
+
+    native_fs = 1.0 / np.median(np.diff(t))
+    print(f"Inferred native rate: {native_fs:.1f} Hz")
+
+    dist_native, t_native = interpolate_to_uniform(dist_m, t, native_fs)
+    dist_dec, t_dec, actual_fs = decimate_signal(dist_native, native_fs, target_fs_hz)
+    t_dec = t_dec + t[0]   # re-anchor to session start
+
+    dt = 1.0 / actual_fs
+    vel = np.gradient(dist_dec, dt)
+
+    vel_for_accel, t_for_accel, fs_for_accel = decimate_signal(vel, actual_fs, 5.0)
+    t_for_accel = t_for_accel + t[0]
+    accel_coarse = np.gradient(vel_for_accel, 1.0 / fs_for_accel)
+    accel = np.interp(t_dec, t_for_accel, accel_coarse)
+
+    slack_mask_dec = np.zeros(len(t_dec), dtype=bool)  # all data valid by default
+    for start_s, end_s in EXCLUDED_SEGMENTS:
+        slack_mask_dec[(t_dec >= start_s) & (t_dec <= end_s)] = True
+    if EXCLUDED_SEGMENTS:
+        print(f"Excluded {len(EXCLUDED_SEGMENTS)} time range(s)")
+    dist_dec[slack_mask_dec] = np.nan
+    vel[slack_mask_dec]      = np.nan
+    accel[slack_mask_dec]    = np.nan
+
+    print(f"Decimated to: {actual_fs:.1f} Hz  (factor {round(native_fs / actual_fs)})")
+    print(f"Vel range:   {vel.min():.3f} to {vel.max():.3f} m/s")
+    print(f"Accel range: {accel.min():.3f} to {accel.max():.3f} m/s²")
+
+    out = export_results(t_dec, dist_dec, vel, accel, str(output_file), dist_m[-1])
+    html_path = Path(str(output_file).replace(".csv", ".html"))
+    plot_results(out, html_path)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Process swim encoder CSV data.")
     parser.add_argument("input", nargs="?", default=INPUT_FILE,
                         help="CSV file or folder of CSV files (default: %(default)s)")
+    parser.add_argument("--fs", type=float, default=TARGET_FS_HZ,
+                        help="Target output rate in Hz after decimation (default: %(default)s). "
+                             "Factor is rounded to nearest integer. Native rate printed at runtime.")
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -181,7 +226,7 @@ def main():
         print(f"\n{'=' * 50}")
         print(f"Processing: {csv_file}  →  {output_file}")
         print(f"{'=' * 50}")
-        process_file(csv_file, output_file)
+        process_file(csv_file, output_file, args.fs)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,7 @@
 *.claude
 *Kenneth
 *.ipynb
+*.csv
+*CLAUDE.md
+*.html
+*.txt
