@@ -16,7 +16,7 @@ import anthropic
 
 from metrics import compute_session_metrics
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-haiku-4-5-20251001"
 
 # Load .env from the repo root if present
 _env_file = Path(__file__).parent / ".env"

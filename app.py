@@ -405,11 +405,21 @@ def main():
     st.divider()
     st.subheader("Coach Chat")
 
+    MAX_TURNS = 5
+    used_turns = sum(1 for m in st.session_state.messages if m["role"] == "user")
+    remaining  = MAX_TURNS - used_turns
+    if remaining <= 0:
+        st.error(f"Question limit reached (0 / {MAX_TURNS} remaining). Load a new file to reset.")
+    elif remaining == 1:
+        st.warning(f"Last question! (1 / {MAX_TURNS} remaining)")
+    else:
+        st.info(f"Questions remaining: {remaining} / {MAX_TURNS}")
+
     # Suggested question chips
     chip_cols = st.columns(len(SUGGESTED))
     for col, q in zip(chip_cols, SUGGESTED):
         with col:
-            if st.button(q, use_container_width=True):
+            if st.button(q, use_container_width=True, disabled=remaining <= 0):
                 st.session_state.pending_question = q
 
     # Chat history
@@ -418,7 +428,7 @@ def main():
             st.markdown(msg["content"])
 
     # Input — chip question takes priority over typed input
-    user_input = st.chat_input("Ask your coach...")
+    user_input = None if remaining <= 0 else st.chat_input("Ask your coach...")
     if not user_input and "pending_question" in st.session_state:
         user_input = st.session_state.pop("pending_question")
 
@@ -433,6 +443,9 @@ def main():
                 _coaching_stream_multi(system_prompt, st.session_state.messages)
             )
         st.session_state.messages.append({"role": "assistant", "content": response})
+
+    st.divider()
+    st.markdown("💬 **[Share your feedback](https://forms.gle/fb2QoNBGFUjE6WvN6)** — takes 2 minutes, helps a lot.")
 
 
 if __name__ == "__main__":
