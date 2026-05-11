@@ -1,7 +1,10 @@
+.env
 *.claude
 *Kenneth
 *.ipynb
 *.csv
+!processed/breaststroke_sample.csv
 *CLAUDE.md
 *.html
 *.txt
+/__pycache__/

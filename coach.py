@@ -1,0 +1,191 @@
+"""
+coach.py — AI coaching feedback from processed tether-wheel swim data.
+
+Usage:
+    python coach.py processed/session.csv [--stroke {freestyle,breaststroke}] [--start T] [--end T]
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import anthropic
+
+from metrics import compute_session_metrics
+
+MODEL = "claude-sonnet-4-6"
+
+# Load .env from the repo root if present
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        if "=" in _line and not _line.startswith("#"):
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+_FREESTYLE_BIOMECHANICS = """\
+FREESTYLE BIOMECHANICS
+- Optimal knee bend is ~60° before the downkick; over-bending past ~90° causes the foot to drag
+  through water on the upkick and typically produces a trough_vel drop of 14%+ before the next kick.
+- trough_vel_ms near 0 or negative means the swimmer is nearly stopping between kicks — severe drag
+  or over-bending. This is the primary red flag to call out.
+- coast_fraction in freestyle reflects drag time, not intentional gliding — lower is better.
+- Fatigue signature: trough_vel_ms trends downward as the session progresses, arm_peak_vel declines.
+- Kick consistency: cv_arm_peak_vel reflects how repeatable each kick's propulsion is; above 0.20
+  indicates meaningful inconsistency.
+"""
+
+_BREASTSTROKE_BIOMECHANICS = """\
+BREASTSTROKE BIOMECHANICS
+- Stroke sequence is arm pull → kick → glide; coast/glide is intentional and a sign of efficiency.
+- coast_fraction: a well-timed glide is good; high coast_fraction with low DPS suggests the swimmer
+  is coasting passively rather than surfing the impulse.
+- cv_isi: stroke timing consistency — cv_isi above 0.15 indicates rhythm is breaking down.
+- DPS (dist_m per cycle) is the primary efficiency metric; monitor trend across cycles.
+- fatigue_index_pct > 5% = meaningful power loss from first to last quarter; > 10% = significant.
+- Kick detection caveat: the 2.5 Hz lowpass filter in the processing pipeline merges the arm-pull
+  and kick peaks into one broad peak. Do NOT infer kick absence from any kick-related metric.
+- trough_vel_ms near zero at the end of the recovery phase is normal in breaststroke; negative
+  values warrant investigation.
+"""
+
+
+def _build_system_prompt(stroke: str) -> str:
+    biomechanics = _FREESTYLE_BIOMECHANICS if stroke == "freestyle" else _BREASTSTROKE_BIOMECHANICS
+    return f"""\
+You are an expert swim coach analyzing biomechanical data from a tethered swim wheel encoder
+(AS5600 magnetic rotary encoder, ~100 Hz). The swimmer swims in place against a tether; the
+wheel rotation is converted to velocity and acceleration.
+
+METRIC GLOSSARY
+- arm_peak_vel (m/s): peak velocity during the arm pull phase of each cycle.
+- trough_vel_ms (m/s): minimum velocity in a cycle — the recovery phase floor. Reveals drag.
+- coast_fraction: fraction of cycle where velocity is below 50% of that cycle's arm-peak velocity.
+- duration_s / ISI: inter-stroke interval — the full cycle period in seconds.
+- dps_m: distance per stroke — distance covered in one cycle. Primary efficiency metric.
+- impulse_m: integral of positive velocity over the cycle — the propulsive area under the curve.
+- fatigue_index_pct: (Q1_arm_peak − Q4_arm_peak) / Q1 × 100. Positive = swimmer slowing down.
+- cv_*: coefficient of variation (std/mean). Lower = more consistent.
+
+{biomechanics}
+OUTPUT STYLE
+- Write like a coach talking directly to the athlete after a practice set — conversational prose.
+- Do NOT produce a bullet list of numbers. Interpret the data; don't just repeat it.
+- Lead with per-cycle observations: call out the best and worst cycles by number, flag outliers
+  (marked with * in the data) by name, and note any trends across the session.
+- End with a 2–3 sentence session summary covering overall efficiency, consistency, and one
+  concrete thing to focus on next.
+- Quote specific numbers with units when they support a coaching point.
+- If data quality is suspect (e.g. very few cycles, extreme outliers), say so briefly.
+"""
+
+
+def _build_user_message(stroke: str, session: dict, cycles: list) -> str:
+    # Session metrics — curated subset
+    session_keys = [
+        "lap_time_s", "total_dist_m", "stroke_count", "stroke_rate_spm",
+        "mean_vel_ms", "max_vel_ms", "mean_arm_peak_vel_ms", "cv_arm_peak_vel",
+        "mean_isi_s", "cv_isi", "mean_dps_m", "mean_coast_fraction",
+        "mean_trough_vel_ms", "fatigue_index_pct",
+    ]
+    if session.get("pct_cycles_with_kick", 0) or 0 > 0:
+        session_keys += ["mean_arm_kick_ratio", "mean_arm_kick_delay_s"]
+
+    lines = [f"Stroke: {stroke}", "", "Session Metrics:"]
+    for k in session_keys:
+        v = session.get(k)
+        if v is None:
+            continue
+        fmt = f"{v:.0f}" if k == "stroke_count" else f"{v:.3f}"
+        lines.append(f"  {k}: {fmt}")
+
+    # Per-cycle table
+    if cycles:
+        med_dur = np.median([c["duration_s"] for c in cycles])
+        lines += ["", f"Per-Cycle Data ({len(cycles)} cycles, * = short outlier, ph: S=steady R=ramp_up):"]
+        header = f"  {'#':>4}  ph  t_peak  arm_pk  trough  coast%   dur    dps"
+        lines.append(header)
+        lines.append("  " + "-" * (len(header) - 2))
+        for i, c in enumerate(cycles, 1):
+            outlier = "*" if c["duration_s"] < 0.80 * med_dur else " "
+            ph = "S" if c.get("phase") == "steady" else "R"
+            cycle_num = c.get("abs_num") or i
+            arm_pk = c.get("arm_peak_vel", float("nan"))
+            trough = c.get("trough_vel_ms", float("nan"))
+            coast  = c.get("coast_fraction", float("nan"))
+            dur    = c.get("duration_s", float("nan"))
+            dps    = c.get("dist_m", float("nan"))
+            lines.append(
+                f"  {outlier}{cycle_num:>3}  {ph}   {c.get('t_peak_s', float('nan')):6.2f}"
+                f"  {arm_pk:6.3f}  {trough:6.3f}  {int(coast*100):5}%"
+                f"  {dur:5.2f}  {dps:5.3f}"
+            )
+
+    return "\n".join(lines)
+
+
+def _stream_coaching(system_prompt: str, user_message: str) -> None:
+    client = anthropic.Anthropic()
+    with client.messages.stream(
+        model=MODEL,
+        max_tokens=2048,
+        system=[{
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }],
+        messages=[{"role": "user", "content": user_message}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print()
+
+
+def main() -> None:
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        print("Error: ANTHROPIC_API_KEY environment variable is not set.")
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(description="AI coaching feedback from processed swim CSV.")
+    parser.add_argument("input", help="Processed CSV file (time_s, vel_ms, dist_m, accel_ms2)")
+    parser.add_argument(
+        "--stroke", choices=["freestyle", "breaststroke"], default="breaststroke",
+        help="Stroke type for biomechanical context (default: breaststroke)",
+    )
+    parser.add_argument("--start", type=float, default=None, metavar="T",
+                        help="Start time in seconds (trim data before this)")
+    parser.add_argument("--end",   type=float, default=None, metavar="T",
+                        help="End time in seconds (trim data after this)")
+    args = parser.parse_args()
+
+    df        = pd.read_csv(args.input)
+    t_full    = df["time_s"].values
+    vel_full  = df["vel_ms"].values
+    dist_full = df["dist_m"].values
+
+    t, vel, dist = t_full, vel_full, dist_full
+    if args.start is not None or args.end is not None:
+        lo   = args.start if args.start is not None else t_full[0]
+        hi   = args.end   if args.end   is not None else t_full[-1]
+        mask = (t_full >= lo) & (t_full <= hi)
+        t    = t_full[mask]
+        vel  = vel_full[mask]
+        dist = dist_full[mask] - dist_full[mask][0]
+
+    result = compute_session_metrics(t, vel, dist)
+
+    # Attach t_peak_s to each cycle for the table (peak_idx is an array index into t)
+    for c in result["cycles"]:
+        idx = c.get("peak_idx")
+        c["t_peak_s"] = float(t[idx]) if idx is not None and idx < len(t) else float("nan")
+
+    system_prompt = _build_system_prompt(args.stroke)
+    user_message  = _build_user_message(args.stroke, result["session"], result["cycles"])
+    _stream_coaching(system_prompt, user_message)
+
+
+if __name__ == "__main__":
+    main()

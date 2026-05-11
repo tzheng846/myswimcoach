@@ -44,6 +44,14 @@ def load_data(input_file):
     if n_bad > 0:
         print(f"Dropping {n_bad} rows with magnet_ok=0")
     df = df[df["magnet_ok"] == 1].copy().reset_index(drop=True)
+    n_nan = df["timestamp_us"].isna().sum()
+    if n_nan > 0:
+        print(f"Dropping {n_nan} rows with NaN timestamps")
+        df = df.dropna(subset=["timestamp_us"]).reset_index(drop=True)
+    n_dup = df["timestamp_us"].duplicated().sum()
+    if n_dup > 0:
+        print(f"Dropping {n_dup} duplicate timestamps")
+        df = df.drop_duplicates(subset="timestamp_us").reset_index(drop=True)
     df["time_s"] = (df["timestamp_us"] - df["timestamp_us"].iloc[0]) / 1e6
     print(f"Session duration: {df['time_s'].iloc[-1]:.2f} s")
     return df
@@ -165,7 +173,11 @@ def process_file(csv_file, output_file, target_fs_hz):
     dist_m = counts_to_distance(angle_unwrapped_counts, METERS_PER_COUNT)
     t = df["time_s"].values
 
-    native_fs = 1.0 / np.median(np.diff(t))
+    pos_diffs = np.diff(t)
+    pos_diffs = pos_diffs[pos_diffs > 0]
+    if len(pos_diffs) == 0:
+        raise ValueError(f"No positive timestamp diffs in {csv_file} — file may be corrupt")
+    native_fs = 1.0 / np.median(pos_diffs)
     print(f"Inferred native rate: {native_fs:.1f} Hz")
 
     dist_native, t_native = interpolate_to_uniform(dist_m, t, native_fs)
@@ -224,7 +236,7 @@ def main():
     for csv_file in csv_files:
         output_file = Path("processed") / f"{csv_file.stem}.csv"
         print(f"\n{'=' * 50}")
-        print(f"Processing: {csv_file}  →  {output_file}")
+        print(f"Processing: {csv_file}  ->  {output_file}")
         print(f"{'=' * 50}")
         process_file(csv_file, output_file, args.fs)
 
