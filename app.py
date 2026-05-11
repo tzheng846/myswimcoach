@@ -131,9 +131,9 @@ def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
 
     # Zero line
     if show_accel:
-        fig.add_hline(y=0, line=dict(color="#999999", width=0.8, dash="dash"), row=1, col=1)
+        fig.add_hline(y=0, line=dict(color="rgba(150,150,150,0.6)", width=0.8, dash="dash"), row=1, col=1)
     else:
-        fig.add_hline(y=0, line=dict(color="#999999", width=0.8, dash="dash"))
+        fig.add_hline(y=0, line=dict(color="rgba(150,150,150,0.6)", width=0.8, dash="dash"))
 
     # Excluded region shading
     t_lo, t_hi = t_full[0], t_full[-1]
@@ -187,7 +187,7 @@ def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
         if show_labels:
             scatter_kw["customdata"] = pcd
             scatter_kw["hovertemplate"] = (
-                "<b>Cycle %{customdata[0]}</b>  t=%{x:.2f}s<br>"
+                "<b>Stroke %{customdata[0]}</b>  t=%{x:.2f}s<br>"
                 "arm peak: %{y:.3f} m/s<br>"
                 "trough: %{customdata[1]} m/s<br>"
                 "glide: %{customdata[2]}%<br>"
@@ -198,28 +198,26 @@ def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
             )
         else:
             scatter_kw["customdata"] = pcd
-            scatter_kw["hovertemplate"] = "Cycle %{customdata[0]}<extra></extra>"
+            scatter_kw["hovertemplate"] = "Stroke %{customdata[0]}<extra></extra>"
         fig.add_trace(go.Scatter(**scatter_kw), **vel_kw)
 
     if show_accel:
         fig.add_trace(go.Scatter(
             x=t_full, y=accel_full,
-            mode="lines", line=dict(color="#e8813a", width=0.9),
+            mode="lines", line=dict(color="#f97316", width=0.9),
             showlegend=False,
         ), row=2, col=1)
         fig.update_yaxes(title_text="vel (m/s)", row=1, col=1)
         fig.update_yaxes(title_text="accel (m/s²)", row=2, col=1)
         fig.update_xaxes(title_text="time (s)", row=2, col=1)
-        fig.update_layout(height=420, margin=dict(l=60, r=20, t=30, b=40),
-                          plot_bgcolor="white", paper_bgcolor="white")
+        fig.update_layout(height=420, margin=dict(l=60, r=20, t=30, b=40))
     else:
         fig.update_yaxes(title_text="Speed (m/s)")
         fig.update_xaxes(title_text="Time (s)")
-        fig.update_layout(height=280, margin=dict(l=60, r=20, t=30, b=40),
-                          plot_bgcolor="white", paper_bgcolor="white")
+        fig.update_layout(height=280, margin=dict(l=60, r=20, t=30, b=40))
 
-    fig.update_xaxes(showgrid=True, gridcolor="#eeeeee")
-    fig.update_yaxes(showgrid=True, gridcolor="#eeeeee")
+    fig.update_xaxes(showgrid=True, gridcolor="rgba(128,128,128,0.2)")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.2)")
     return fig
 
 
@@ -287,10 +285,9 @@ def _build_line_chart(labels, values, is_outlier_flags, title, y_label):
 
     fig.update_layout(title=dict(text=title, font=dict(size=13)),
                       yaxis_title=y_label, height=260,
-                      margin=dict(l=50, r=10, t=40, b=50),
-                      plot_bgcolor="white", paper_bgcolor="white")
+                      margin=dict(l=50, r=10, t=40, b=50))
     fig.update_xaxes(showgrid=False, tickangle=-45)
-    fig.update_yaxes(showgrid=True, gridcolor="#eeeeee")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.2)")
     return fig
 
 
@@ -410,12 +407,12 @@ def main():
     with st.expander("Adjust analysis window", expanded=False):
         if simple:
             st.caption(
-                "Try: narrow to 11–19 s to focus on top-end speeds. Watch the metrics change."
+                "Try: narrow to 11–19 Stroke Counts to focus on top-end speeds. Watch the metrics change."
             )
         st.slider("Analysis window (s)",
             min_value=t_min, max_value=t_max, step=0.1,
             key="time_range", on_change=_on_time_change)
-        st.slider("Cycle range",
+        st.slider("Stroke range",
             min_value=1, max_value=max(n_cycles, 1), step=1,
             key="cycle_range", on_change=_on_cycle_change)
 
@@ -426,6 +423,7 @@ def main():
                          show_accel=not simple, show_labels=not simple),
         use_container_width=True,
     )
+    st.caption("Click and drag on the chart to zoom in. Double-click to reset.")
 
     # ── Metric cards ──────────────────────────────────────────────────────────
     _build_stats_table(session, simple=simple)
