@@ -7,4 +7,5 @@
 *CLAUDE.md
 *.html
 *.txt
+!requirements.txt
 /__pycache__/
