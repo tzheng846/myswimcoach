@@ -47,6 +47,16 @@ SUGGESTED = [
     "How do my last strokes compare to the first?",
 ]
 
+SUGGESTED_COMPARE = [
+    "What improved between sessions?",
+    "What got worse?",
+    "Where should I focus next?",
+    "Why did my speed change?",
+]
+
+_CSV_A = "processed/sample_br_1.csv"
+_CSV_B = "processed/sample_br_2.csv"
+
 
 def _cycle_color(c: dict, is_outlier: bool, is_boundary: bool) -> str:
     if is_boundary:
@@ -307,6 +317,60 @@ Keep your answer short — 3 to 5 sentences maximum.
     return system + "\n\nSESSION DATA:\n" + metrics_block
 
 
+def _build_compare_metrics(session_a: dict, session_b: dict, newer_is_b: bool):
+    baseline = session_a if newer_is_b else session_b
+    newer    = session_b if newer_is_b else session_a
+    base_label  = "sample_br_1 (baseline)" if newer_is_b else "sample_br_2 (baseline)"
+    newer_label = "sample_br_2 (newer)"    if newer_is_b else "sample_br_1 (newer)"
+
+    st.caption(f"Baseline: {base_label} → Newer: {newer_label}. Delta = % change from baseline.")
+
+    specs = [
+        ("Stroke Rate",        "stroke_rate_spm",    lambda v: f"{v:.1f} spm", "off"),
+        ("Average Speed",      "mean_vel_ms",         lambda v: f"{v:.2f} m/s", "normal"),
+        ("Dist per Stroke",    "mean_dps_m",          lambda v: f"{v:.2f} m",   "normal"),
+        ("Glide Time",         "mean_coast_fraction", lambda v: f"{v*100:.0f}%","off"),
+        ("Fatigue Index",      "fatigue_index_pct",   lambda v: f"{v:.1f}%",    "inverse"),
+        ("Stroke Consistency", "cv_arm_peak_vel",     lambda v: f"{v:.3f}",     "inverse"),
+    ]
+    cols = st.columns(3)
+    for i, (label, key, fmt, delta_color) in enumerate(specs):
+        b_val = baseline.get(key) or 0
+        n_val = newer.get(key) or 0
+        pct   = ((n_val - b_val) / abs(b_val) * 100) if b_val != 0 else 0.0
+        with cols[i % 3]:
+            st.metric(label=label, value=fmt(n_val),
+                      delta=f"{pct:+.1f}%", delta_color=delta_color)
+
+
+def _build_compare_chat_system(session_a, cycles_a, session_b, cycles_b,
+                                newer_is_b: bool, simple: bool = False) -> str:
+    if newer_is_b:
+        base_session, base_cycles, base_name    = session_a, cycles_a, "sample_br_1"
+        newer_session, newer_cycles, newer_name = session_b, cycles_b, "sample_br_2"
+    else:
+        base_session, base_cycles, base_name    = session_b, cycles_b, "sample_br_2"
+        newer_session, newer_cycles, newer_name = session_a, cycles_a, "sample_br_1"
+
+    block_base  = _build_user_message("breaststroke", base_session,  base_cycles)
+    block_newer = _build_user_message("breaststroke", newer_session, newer_cycles)
+
+    if simple:
+        system = """\
+You are a friendly swim coach comparing two breaststroke sessions for a swimmer who doesn't know technical terms.
+Use plain, encouraging language. Focus on 1-2 concrete differences and whether they improved.
+Avoid jargon. Keep your answer to 3-5 sentences.
+"""
+    else:
+        system = _build_system_prompt("breaststroke")
+
+    return (
+        system
+        + f"\n\nBASELINE SESSION ({base_name}):\n" + block_base
+        + f"\n\nNEWER SESSION ({newer_name}):\n"   + block_newer
+    )
+
+
 def _coaching_stream_multi(system_prompt: str, messages: list):
     client = anthropic.Anthropic(api_key=_API_KEY)
     with client.messages.stream(
@@ -323,186 +387,318 @@ def _coaching_stream_multi(system_prompt: str, messages: list):
 # ── Main app ──────────────────────────────────────────────────────────────────
 def main():
     st.sidebar.title("SwimCoach")
+    compare_mode = st.sidebar.checkbox("Compare sessions", key="compare_mode")
 
-    processed_dir = Path("processed")
-    csv_files = sorted(processed_dir.glob("*.csv"))
-    if not csv_files:
-        st.error("No CSV files found in processed/")
-        return
-
-    selected = st.sidebar.selectbox(
-        "Session", csv_files, format_func=lambda p: p.stem
-    )
-
-    # On file change: load full-range cycle boundaries and reset state
-    if st.session_state.get("current_file") != str(selected):
-        t_min, t_max, boundaries = load_full_cycles(str(selected))
-        n = len(boundaries)
-        st.session_state.update(dict(
-            current_file     = str(selected),
-            cycle_boundaries = boundaries,
-            t_min=t_min, t_max=t_max, n_cycles=n,
-            time_range  = (t_min, t_max),
-            cycle_range = (1, max(n, 1)),
-            messages    = [],
-        ))
-
-    t_min    = st.session_state.t_min
-    t_max    = st.session_state.t_max
-    n_cycles = st.session_state.n_cycles
-
-    # Sync callbacks
-    def _on_time_change():
-        t_s, t_e = st.session_state.time_range
-        bounds   = st.session_state.cycle_boundaries
-        visible  = [i + 1 for i, (_, _, tp) in enumerate(bounds)
-                    if not np.isnan(tp) and t_s <= tp <= t_e]
-        if visible:
-            st.session_state.cycle_range = (min(visible), max(visible))
-
-    def _on_cycle_change():
-        c_s, c_e = st.session_state.cycle_range
-        bounds   = st.session_state.cycle_boundaries
-        t_s = bounds[c_s - 1][0]
-        t_e = bounds[c_e - 1][1]
-        if not (np.isnan(t_s) or np.isnan(t_e)):
-            st.session_state.time_range = (
-                round(t_s, 1),
-                round(t_e, 1),
-            )
-
-    # ── Mode toggle ───────────────────────────────────────────────────────────
+    # ── Mode toggle (shared across both modes) ────────────────────────────────
     mode   = st.radio("View", ["Simple", "Advanced"], horizontal=True,
                       key="mode", label_visibility="collapsed")
     simple = (mode == "Simple")
 
-    t_start, t_end = st.session_state.time_range
+    # ═══════════════════════════════════════════════════════════════════════════
+    # COMPARE MODE
+    # ═══════════════════════════════════════════════════════════════════════════
+    if compare_mode:
+        newer_key  = st.sidebar.radio("Which is newer?", ["sample_br_1", "sample_br_2"],
+                                      key="newer_session")
+        newer_is_b = (newer_key == "sample_br_2")
 
-    # Load trimmed data + metrics
-    t_full, vel_full, accel_full, t, vel, accel, result = load_and_compute(
-        str(selected), t_start, t_end
-    )
-    cycles  = result["cycles"]
-    session = result["session"]
+        # Init state once per compare session
+        if not st.session_state.get("compare_initialized"):
+            for suffix, csv in (("_a", _CSV_A), ("_b", _CSV_B)):
+                t_min, t_max, boundaries = load_full_cycles(csv)
+                n = len(boundaries)
+                st.session_state[f"t_min{suffix}"]            = t_min
+                st.session_state[f"t_max{suffix}"]            = t_max
+                st.session_state[f"n_cycles{suffix}"]         = n
+                st.session_state[f"cycle_boundaries{suffix}"] = boundaries
+                st.session_state[f"time_range{suffix}"]       = (t_min, t_max)
+                st.session_state[f"cycle_range{suffix}"]      = (1, max(n, 1))
+            st.session_state.messages_compare   = []
+            st.session_state.compare_initialized = True
 
-    full_boundaries = st.session_state.cycle_boundaries
+        # Sync callbacks — session A
+        def _on_time_change_a():
+            t_s, t_e = st.session_state.time_range_a
+            bounds   = st.session_state.cycle_boundaries_a
+            visible  = [i + 1 for i, (_, _, tp) in enumerate(bounds)
+                        if not np.isnan(tp) and t_s <= tp <= t_e]
+            if visible:
+                st.session_state.cycle_range_a = (min(visible), max(visible))
 
-    # Attach absolute cycle numbers so the LLM sees full-recording indices
-    for c in cycles:
-        t_pk = c.get("t_peak_s", float("nan"))
-        c["abs_num"] = _abs_cycle_num(t_pk, full_boundaries) or None
+        def _on_cycle_change_a():
+            c_s, c_e = st.session_state.cycle_range_a
+            bounds   = st.session_state.cycle_boundaries_a
+            t_s = bounds[c_s - 1][0]; t_e = bounds[c_e - 1][1]
+            if not (np.isnan(t_s) or np.isnan(t_e)):
+                st.session_state.time_range_a = (round(t_s, 1), round(t_e, 1))
 
-    st.title(f"Session: {selected.stem}")
+        # Sync callbacks — session B
+        def _on_time_change_b():
+            t_s, t_e = st.session_state.time_range_b
+            bounds   = st.session_state.cycle_boundaries_b
+            visible  = [i + 1 for i, (_, _, tp) in enumerate(bounds)
+                        if not np.isnan(tp) and t_s <= tp <= t_e]
+            if visible:
+                st.session_state.cycle_range_b = (min(visible), max(visible))
 
-    # ── How-to-use (simple mode only) ────────────────────────────────────────
-    if simple:
-        st.info(
-            "**How to use:** Select your session from the sidebar. "
-            "The chart shows your speed over time — each numbered peak is one stroke. "
-            "Use the analysis window below to zoom in on any section, "
-            "then ask your coach a question."
-        )
+        def _on_cycle_change_b():
+            c_s, c_e = st.session_state.cycle_range_b
+            bounds   = st.session_state.cycle_boundaries_b
+            t_s = bounds[c_s - 1][0]; t_e = bounds[c_e - 1][1]
+            if not (np.isnan(t_s) or np.isnan(t_e)):
+                st.session_state.time_range_b = (round(t_s, 1), round(t_e, 1))
 
-    # ── Analysis window sliders ───────────────────────────────────────────────
-    with st.expander("Adjust analysis window", expanded=False):
-        if simple:
-            st.caption(
-                "Try: narrow to 11–19 Stroke Counts to focus on top-end speeds. Watch the metrics change."
-            )
-        st.slider("Analysis window (s)",
-            min_value=t_min, max_value=t_max, step=0.1,
-            key="time_range", on_change=_on_time_change)
-        st.slider("Stroke range",
-            min_value=1, max_value=max(n_cycles, 1), step=1,
-            key="cycle_range", on_change=_on_cycle_change)
+        st.title("Session Comparison")
 
-    # ── Velocity chart ────────────────────────────────────────────────────────
-    st.plotly_chart(
-        _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end,
-                         cycles, full_boundaries,
-                         show_accel=not simple, show_labels=not simple),
-        use_container_width=True,
-    )
-    st.caption("Click and drag on the chart to zoom in. Double-click to reset.")
+        with st.expander("Session A window (sample_br_1)", expanded=False):
+            st.slider("Analysis window (s)",
+                min_value=st.session_state.t_min_a,
+                max_value=st.session_state.t_max_a, step=0.1,
+                key="time_range_a", on_change=_on_time_change_a)
+            st.slider("Stroke range",
+                min_value=1, max_value=max(st.session_state.n_cycles_a, 1), step=1,
+                key="cycle_range_a", on_change=_on_cycle_change_a)
 
-    # ── Metric cards ──────────────────────────────────────────────────────────
-    _build_stats_table(session, simple=simple)
+        with st.expander("Session B window (sample_br_2)", expanded=False):
+            st.slider("Analysis window (s)",
+                min_value=st.session_state.t_min_b,
+                max_value=st.session_state.t_max_b, step=0.1,
+                key="time_range_b", on_change=_on_time_change_b)
+            st.slider("Stroke range",
+                min_value=1, max_value=max(st.session_state.n_cycles_b, 1), step=1,
+                key="cycle_range_b", on_change=_on_cycle_change_b)
 
-    st.divider()
+        t_start_a, t_end_a = st.session_state.time_range_a
+        t_start_b, t_end_b = st.session_state.time_range_b
 
-    # ── Coach Chat ────────────────────────────────────────────────────────────
-    st.subheader("Coach Chat")
+        t_full_a, vel_full_a, accel_full_a, _, _, _, result_a = load_and_compute(
+            _CSV_A, t_start_a, t_end_a)
+        t_full_b, vel_full_b, accel_full_b, _, _, _, result_b = load_and_compute(
+            _CSV_B, t_start_b, t_end_b)
 
-    MAX_TURNS = 5
-    used_turns = sum(1 for m in st.session_state.messages if m["role"] == "user")
-    remaining  = MAX_TURNS - used_turns
-    if remaining <= 0:
-        st.error(f"Question limit reached (0 / {MAX_TURNS} remaining). Load a new file to reset.")
-    elif remaining == 1:
-        st.warning(f"Last question! (1 / {MAX_TURNS} remaining)")
-    else:
-        st.info(f"Questions remaining: {remaining} / {MAX_TURNS}")
+        cycles_a  = result_a["cycles"];  session_a = result_a["session"]
+        cycles_b  = result_b["cycles"];  session_b = result_b["session"]
+        bounds_a  = st.session_state.cycle_boundaries_a
+        bounds_b  = st.session_state.cycle_boundaries_b
 
-    # Suggested question chips
-    chip_cols = st.columns(len(SUGGESTED))
-    for col, q in zip(chip_cols, SUGGESTED):
-        with col:
-            if st.button(q, use_container_width=True, disabled=remaining <= 0):
-                st.session_state.pending_question = q
+        for c in cycles_a:
+            c["abs_num"] = _abs_cycle_num(c.get("t_peak_s", float("nan")), bounds_a) or None
+        for c in cycles_b:
+            c["abs_num"] = _abs_cycle_num(c.get("t_peak_s", float("nan")), bounds_b) or None
 
-    # Chat history
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+        st.markdown("**Session A — sample_br_1**")
+        st.plotly_chart(
+            _build_vel_chart(t_full_a, vel_full_a, accel_full_a, t_start_a, t_end_a,
+                             cycles_a, bounds_a, show_accel=False, show_labels=not simple),
+            use_container_width=True)
+        st.caption("Click and drag to zoom. Double-click to reset.")
 
-    # Input — chip question takes priority over typed input
-    user_input = None if remaining <= 0 else st.chat_input("Ask your coach...")
-    if not user_input and "pending_question" in st.session_state:
-        user_input = st.session_state.pop("pending_question")
+        st.markdown("**Session B — sample_br_2**")
+        st.plotly_chart(
+            _build_vel_chart(t_full_b, vel_full_b, accel_full_b, t_start_b, t_end_b,
+                             cycles_b, bounds_b, show_accel=False, show_labels=not simple),
+            use_container_width=True)
+        st.caption("Click and drag to zoom. Double-click to reset.")
 
-    if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        system_prompt = _build_chat_system(session, cycles, simple=simple)
-        with st.chat_message("assistant"):
-            response = st.write_stream(
-                _coaching_stream_multi(system_prompt, st.session_state.messages)
-            )
-        st.session_state.messages.append({"role": "assistant", "content": response})
-
-    # ── Advanced sections ─────────────────────────────────────────────────────
-    if not simple:
+        st.divider()
+        _build_compare_metrics(session_a, session_b, newer_is_b)
         st.divider()
 
-        interior = cycles[1:-1] if len(cycles) > 2 else cycles
-        if interior:
-            med_dur     = np.median([c["duration_s"] for c in cycles])
-            labels      = [_abs_cycle_num(c.get("t_peak_s", float("nan")), full_boundaries)
-                           or str(i + 1) for i, c in enumerate(interior)]
-            is_outliers = [c["duration_s"] < 0.80 * med_dur for c in interior]
+        st.subheader("Coach Chat")
+        msgs       = st.session_state.messages_compare
+        used_turns = sum(1 for m in msgs if m["role"] == "user")
+        remaining  = 5 - used_turns
+        if remaining <= 0:
+            st.error("Question limit reached (0 / 5 remaining).")
+        elif remaining == 1:
+            st.warning("Last question! (1 / 5 remaining)")
+        else:
+            st.info(f"Questions remaining: {remaining} / 5")
 
-            with st.expander("Stroke-by-stroke breakdown", expanded=False):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.plotly_chart(_build_line_chart(
-                        labels, [c["arm_peak_vel"] for c in interior],
-                        is_outliers, "Arm-pull Power", "m/s",
-                    ), use_container_width=True)
-                    st.plotly_chart(_build_line_chart(
-                        labels, [c["coast_fraction"] * 100 for c in interior],
-                        is_outliers, "Glide Time", "%",
-                    ), use_container_width=True)
-                with col2:
-                    st.plotly_chart(_build_line_chart(
-                        labels, [c["dist_m"] for c in interior],
-                        is_outliers, "Dist per Stroke", "m",
-                    ), use_container_width=True)
-                    st.plotly_chart(_build_line_chart(
-                        labels, [c["duration_s"] for c in interior],
-                        is_outliers, "Stroke Duration", "s",
-                    ), use_container_width=True)
+        chip_cols = st.columns(len(SUGGESTED_COMPARE))
+        for col, q in zip(chip_cols, SUGGESTED_COMPARE):
+            with col:
+                if st.button(q, use_container_width=True, disabled=remaining <= 0,
+                             key=f"cmp_{q[:8]}"):
+                    st.session_state.pending_compare_q = q
+
+        for msg in msgs:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        user_input = None if remaining <= 0 else st.chat_input("Ask about both sessions...")
+        if not user_input and "pending_compare_q" in st.session_state:
+            user_input = st.session_state.pop("pending_compare_q")
+
+        if user_input:
+            msgs.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+            sys_prompt = _build_compare_chat_system(
+                session_a, cycles_a, session_b, cycles_b, newer_is_b, simple)
+            with st.chat_message("assistant"):
+                response = st.write_stream(_coaching_stream_multi(sys_prompt, msgs))
+            msgs.append({"role": "assistant", "content": response})
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SINGLE-SESSION MODE
+    # ═══════════════════════════════════════════════════════════════════════════
+    else:
+        st.session_state.compare_initialized = False
+
+        processed_dir = Path("processed")
+        csv_files = sorted(processed_dir.glob("*.csv"))
+        if not csv_files:
+            st.error("No CSV files found in processed/")
+            return
+
+        selected = st.sidebar.selectbox(
+            "Session", csv_files, format_func=lambda p: p.stem
+        )
+
+        file_changed = st.session_state.get("current_file") != str(selected)
+        slider_gone  = "time_range" not in st.session_state
+        if file_changed or slider_gone:
+            t_min, t_max, boundaries = load_full_cycles(str(selected))
+            n = len(boundaries)
+            st.session_state.update({
+                "current_file":     str(selected),
+                "cycle_boundaries": boundaries,
+                "t_min": t_min, "t_max": t_max, "n_cycles": n,
+                "time_range":  (t_min, t_max),
+                "cycle_range": (1, max(n, 1)),
+            })
+            if file_changed:
+                st.session_state.messages = []
+
+        t_min    = st.session_state.t_min
+        t_max    = st.session_state.t_max
+        n_cycles = st.session_state.n_cycles
+
+        def _on_time_change():
+            t_s, t_e = st.session_state.time_range
+            bounds   = st.session_state.cycle_boundaries
+            visible  = [i + 1 for i, (_, _, tp) in enumerate(bounds)
+                        if not np.isnan(tp) and t_s <= tp <= t_e]
+            if visible:
+                st.session_state.cycle_range = (min(visible), max(visible))
+
+        def _on_cycle_change():
+            c_s, c_e = st.session_state.cycle_range
+            bounds   = st.session_state.cycle_boundaries
+            t_s = bounds[c_s - 1][0]; t_e = bounds[c_e - 1][1]
+            if not (np.isnan(t_s) or np.isnan(t_e)):
+                st.session_state.time_range = (round(t_s, 1), round(t_e, 1))
+
+        t_start, t_end = st.session_state.time_range
+
+        t_full, vel_full, accel_full, t, vel, accel, result = load_and_compute(
+            str(selected), t_start, t_end)
+        cycles  = result["cycles"]
+        session = result["session"]
+        full_boundaries = st.session_state.cycle_boundaries
+
+        for c in cycles:
+            c["abs_num"] = _abs_cycle_num(c.get("t_peak_s", float("nan")),
+                                          full_boundaries) or None
+
+        st.title(f"Session: {selected.stem}")
+
+        if simple:
+            st.info(
+                "**How to use:** Select your session from the sidebar. "
+                "The chart shows your speed over time — each numbered peak is one stroke. "
+                "Use the analysis window below to zoom in on any section, "
+                "then ask your coach a question."
+            )
+
+        with st.expander("Adjust analysis window", expanded=False):
+            if simple:
+                st.caption(
+                    "Try: narrow to 11–19 s to focus on top-end speeds. Watch the metrics change."
+                )
+            st.slider("Analysis window (s)",
+                min_value=t_min, max_value=t_max, step=0.1,
+                key="time_range", on_change=_on_time_change)
+            st.slider("Stroke range",
+                min_value=1, max_value=max(n_cycles, 1), step=1,
+                key="cycle_range", on_change=_on_cycle_change)
+
+        st.plotly_chart(
+            _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end,
+                             cycles, full_boundaries,
+                             show_accel=not simple, show_labels=not simple),
+            use_container_width=True)
+        st.caption("Click and drag on the chart to zoom in. Double-click to reset.")
+
+        _build_stats_table(session, simple=simple)
+
+        st.divider()
+        st.subheader("Coach Chat")
+
+        used_turns = sum(1 for m in st.session_state.messages if m["role"] == "user")
+        remaining  = 5 - used_turns
+        if remaining <= 0:
+            st.error("Question limit reached (0 / 5 remaining). Load a new file to reset.")
+        elif remaining == 1:
+            st.warning("Last question! (1 / 5 remaining)")
+        else:
+            st.info(f"Questions remaining: {remaining} / 5")
+
+        chip_cols = st.columns(len(SUGGESTED))
+        for col, q in zip(chip_cols, SUGGESTED):
+            with col:
+                if st.button(q, use_container_width=True, disabled=remaining <= 0):
+                    st.session_state.pending_question = q
+
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        user_input = None if remaining <= 0 else st.chat_input("Ask your coach...")
+        if not user_input and "pending_question" in st.session_state:
+            user_input = st.session_state.pop("pending_question")
+
+        if user_input:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+            system_prompt = _build_chat_system(session, cycles, simple=simple)
+            with st.chat_message("assistant"):
+                response = st.write_stream(
+                    _coaching_stream_multi(system_prompt, st.session_state.messages))
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
+        if not simple:
+            st.divider()
+            interior = cycles[1:-1] if len(cycles) > 2 else cycles
+            if interior:
+                med_dur     = np.median([c["duration_s"] for c in cycles])
+                labels      = [_abs_cycle_num(c.get("t_peak_s", float("nan")),
+                               full_boundaries) or str(i + 1)
+                               for i, c in enumerate(interior)]
+                is_outliers = [c["duration_s"] < 0.80 * med_dur for c in interior]
+
+                with st.expander("Stroke-by-stroke breakdown", expanded=False):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.plotly_chart(_build_line_chart(
+                            labels, [c["arm_peak_vel"] for c in interior],
+                            is_outliers, "Arm-pull Power", "m/s",
+                        ), use_container_width=True)
+                        st.plotly_chart(_build_line_chart(
+                            labels, [c["coast_fraction"] * 100 for c in interior],
+                            is_outliers, "Glide Time", "%",
+                        ), use_container_width=True)
+                    with col2:
+                        st.plotly_chart(_build_line_chart(
+                            labels, [c["dist_m"] for c in interior],
+                            is_outliers, "Dist per Stroke", "m",
+                        ), use_container_width=True)
+                        st.plotly_chart(_build_line_chart(
+                            labels, [c["duration_s"] for c in interior],
+                            is_outliers, "Stroke Duration", "s",
+                        ), use_container_width=True)
 
     st.divider()
     st.markdown("💬 **[Share your feedback](https://forms.gle/fb2QoNBGFUjE6WvN6)** — takes 2 minutes, helps a lot.")
