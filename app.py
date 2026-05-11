@@ -31,7 +31,7 @@ if not _API_KEY:
     except Exception:
         pass
 
-st.set_page_config(layout="wide", page_title="SwimCoach")
+st.set_page_config(layout="centered", page_title="SwimCoach")
 
 # ── Phase color palette ───────────────────────────────────────────────────────
 _C_STEADY   = "#4c9be8"
@@ -108,31 +108,44 @@ def load_and_compute(csv_path: str, t_start: float, t_end: float):
     return t_full, vel_full, accel_full, t, vel, accel, result
 
 
-# ── Velocity + acceleration chart ─────────────────────────────────────────────
+# ── Velocity (+ optional acceleration) chart ─────────────────────────────────
 def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
-                     full_boundaries):
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        row_heights=[0.65, 0.35],
-        vertical_spacing=0.06,
-    )
+                     full_boundaries, show_accel=True, show_labels=True):
+    if show_accel:
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True,
+            row_heights=[0.65, 0.35],
+            vertical_spacing=0.06,
+        )
+    else:
+        fig = go.Figure()
+
+    vel_kw = dict(row=1, col=1) if show_accel else {}
 
     # Raw velocity trace
     fig.add_trace(go.Scatter(
         x=t_full, y=vel_full,
         mode="lines", line=dict(color="#aaaaaa", width=0.9),
         showlegend=False,
-    ), row=1, col=1)
+    ), **vel_kw)
 
-    fig.add_hline(y=0, line=dict(color="#999999", width=0.8, dash="dash"), row=1, col=1)
+    # Zero line
+    if show_accel:
+        fig.add_hline(y=0, line=dict(color="#999999", width=0.8, dash="dash"), row=1, col=1)
+    else:
+        fig.add_hline(y=0, line=dict(color="#999999", width=0.8, dash="dash"))
 
     # Excluded region shading
     t_lo, t_hi = t_full[0], t_full[-1]
     for x0, x1 in [(t_lo, t_start), (t_end, t_hi)]:
         if x0 < x1:
-            for row in (1, 2):
+            if show_accel:
+                for row in (1, 2):
+                    fig.add_vrect(x0=x0, x1=x1, fillcolor=_C_EXCL, opacity=0.35,
+                                  layer="below", line_width=0, row=row, col=1)
+            else:
                 fig.add_vrect(x0=x0, x1=x1, fillcolor=_C_EXCL, opacity=0.35,
-                              layer="below", line_width=0, row=row, col=1)
+                              layer="below", line_width=0)
 
     # Arm-pull peak markers with cycle number labels
     if cycles:
@@ -160,76 +173,94 @@ def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
                 "yes" if is_out else "no",
             ])
 
-        fig.add_trace(go.Scatter(
+        marker_colors = pc if show_labels else ["#999999"] * len(px)
+        scatter_kw = dict(
             x=px, y=py,
-            mode="markers+text",
-            marker=dict(symbol="triangle-up", size=10, color=pc,
+            mode="markers+text" if show_labels else "markers",
+            marker=dict(symbol="triangle-up", size=10, color=marker_colors,
                         line=dict(color="white", width=1)),
-            text=pt,
+            text=pt if show_labels else [""] * len(pt),
             textposition="top center",
-            textfont=dict(size=11, color=pc),
-            customdata=pcd,
+            textfont=dict(size=11, color=marker_colors),
             showlegend=False,
-            hovertemplate=(
+        )
+        if show_labels:
+            scatter_kw["customdata"] = pcd
+            scatter_kw["hovertemplate"] = (
                 "<b>Cycle %{customdata[0]}</b>  t=%{x:.2f}s<br>"
                 "arm peak: %{y:.3f} m/s<br>"
                 "trough: %{customdata[1]} m/s<br>"
-                "coast: %{customdata[2]}%<br>"
+                "glide: %{customdata[2]}%<br>"
                 "duration: %{customdata[3]}s<br>"
                 "dist/stroke: %{customdata[4]} m<br>"
                 "outlier: %{customdata[5]}"
                 "<extra></extra>"
-            ),
-        ), row=1, col=1)
+            )
+        else:
+            scatter_kw["customdata"] = pcd
+            scatter_kw["hovertemplate"] = "Cycle %{customdata[0]}<extra></extra>"
+        fig.add_trace(go.Scatter(**scatter_kw), **vel_kw)
 
-    # Acceleration trace
-    fig.add_trace(go.Scatter(
-        x=t_full, y=accel_full,
-        mode="lines", line=dict(color="#e8813a", width=0.9),
-        showlegend=False,
-    ), row=2, col=1)
+    if show_accel:
+        fig.add_trace(go.Scatter(
+            x=t_full, y=accel_full,
+            mode="lines", line=dict(color="#e8813a", width=0.9),
+            showlegend=False,
+        ), row=2, col=1)
+        fig.update_yaxes(title_text="vel (m/s)", row=1, col=1)
+        fig.update_yaxes(title_text="accel (m/s²)", row=2, col=1)
+        fig.update_xaxes(title_text="time (s)", row=2, col=1)
+        fig.update_layout(height=420, margin=dict(l=60, r=20, t=30, b=40),
+                          plot_bgcolor="white", paper_bgcolor="white")
+    else:
+        fig.update_yaxes(title_text="Speed (m/s)")
+        fig.update_xaxes(title_text="Time (s)")
+        fig.update_layout(height=280, margin=dict(l=60, r=20, t=30, b=40),
+                          plot_bgcolor="white", paper_bgcolor="white")
 
-    fig.update_yaxes(title_text="vel (m/s)", row=1, col=1)
-    fig.update_yaxes(title_text="accel (m/s²)", row=2, col=1)
-    fig.update_xaxes(title_text="time (s)", row=2, col=1)
-    fig.update_layout(height=420, margin=dict(l=60, r=20, t=30, b=40),
-                      plot_bgcolor="white", paper_bgcolor="white")
     fig.update_xaxes(showgrid=True, gridcolor="#eeeeee")
     fig.update_yaxes(showgrid=True, gridcolor="#eeeeee")
     return fig
 
 
 # ── Stats metric cards ────────────────────────────────────────────────────────
-def _build_stats_table(session: dict):
-    stats = [
-        ("Stroke Rate", f"{session.get('stroke_rate_spm', 0):.1f} spm",
-         "Strokes per minute — 60 ÷ mean cycle duration. "
-         "For breaststroke 50–65 spm is typical; higher tempo can sacrifice distance per stroke."),
+def _build_stats_table(session: dict, simple: bool = False):
+    all_stats = [
+        ("Stroke Rate",
+         f"{session.get('stroke_rate_spm', 0):.1f} spm",
+         "Strokes per minute. High = fast tempo, less time per stroke. "
+         "Low = slower, more deliberate. Typical breaststroke: 50–65 spm. "
+         "Higher tempo often trades distance per stroke."),
 
-        ("Mean Velocity", f"{session.get('mean_vel_ms', 0):.2f} m/s",
-         "Average forward speed during the analysis window (baseline excluded). Higher = faster."),
+        ("Average Speed",
+         f"{session.get('mean_vel_ms', 0):.2f} m/s",
+         "Mean forward speed over the session. Higher is faster, always."),
 
-        ("Dist per Stroke", f"{session.get('mean_dps_m', 0):.2f} m",
-         "Meters traveled each stroke cycle — the primary efficiency metric. "
-         "More distance per stroke means less energy wasted. "
-         "Calculated as total distance ÷ stroke count."),
+        ("Dist per Stroke",
+         f"{session.get('mean_dps_m', 0):.2f} m",
+         "Meters traveled per stroke. High = efficient, each pull takes you further. "
+         "Low = energy wasted — you're working hard but not going far."),
 
-        ("Coast Fraction", f"{session.get('mean_coast_fraction', 0) * 100:.0f}%",
-         "Fraction of each cycle where velocity is below 50% of that cycle's arm-pull peak. "
-         "In breaststroke a moderate glide is intentional and efficient. "
-         "Very high coast fraction with low DPS = passive coasting."),
+        ("Glide Time",
+         f"{session.get('mean_coast_fraction', 0) * 100:.0f}%",
+         "Fraction of each stroke spent gliding. "
+         "High with good speed = active, streamlined glide. "
+         "High with low dist per stroke = passive drift, dead weight. "
+         "Low = choppy rhythm, not using your momentum."),
 
-        ("Fatigue Index", f"{session.get('fatigue_index_pct', 0):.1f}%",
-         "Drop in arm-pull power from the first quarter to the last quarter of the session. "
-         "Positive = slowing down; negative = warming up (ramp-up artifact). "
-         "Above +10% signals significant fatigue. "
-         "Formula: (Q1_arm_peak − Q4_arm_peak) ÷ Q1 × 100."),
+        ("Fatigue Index",
+         f"{session.get('fatigue_index_pct', 0):.1f}%",
+         "Arm power drop from first quarter to last. "
+         "High (>10%) = significant fatigue by the end. "
+         "Low or negative = well-paced or still warming up."),
 
-        ("Arm-peak CV", f"{session.get('cv_arm_peak_vel', 0):.3f}",
-         "Stroke-to-stroke consistency of arm-pull power. "
-         "Coefficient of variation = std ÷ mean of arm-peak velocities. "
-         "Below 0.10 is excellent; above 0.20 means notable variation. Lower is better."),
+        ("Stroke Consistency",
+         f"{session.get('cv_arm_peak_vel', 0):.3f}",
+         "Variation in arm power stroke to stroke. "
+         "Low (<0.10) = consistent, repeatable technique. "
+         "High (>0.20) = big swings between strokes — technique breaking down."),
     ]
+    stats = all_stats[:3] if simple else all_stats
     cols = st.columns(3)
     for i, (label, value, tip) in enumerate(stats):
         with cols[i % 3]:
@@ -264,9 +295,19 @@ def _build_line_chart(labels, values, is_outlier_flags, title, y_label):
 
 
 # ── Chat helpers ──────────────────────────────────────────────────────────────
-def _build_chat_system(session: dict, cycles: list) -> str:
+def _build_chat_system(session: dict, cycles: list, simple: bool = False) -> str:
     metrics_block = _build_user_message("breaststroke", session, cycles)
-    return _build_system_prompt("breaststroke") + "\n\nSESSION DATA:\n" + metrics_block
+    if simple:
+        system = """\
+You are a friendly swim coach giving feedback to a swimmer who doesn't know technical terms.
+Use plain, encouraging language. Focus on 1-2 concrete things they can work on next.
+Avoid jargon: say 'stroke rate' not 'SPM', 'how far each stroke takes you' not 'DPS',
+'glide' not 'coast fraction', 'arm power' not 'arm-peak velocity or CV'.
+Keep your answer short — 3 to 5 sentences maximum.
+"""
+    else:
+        system = _build_system_prompt("breaststroke")
+    return system + "\n\nSESSION DATA:\n" + metrics_block
 
 
 def _coaching_stream_multi(system_prompt: str, messages: list):
@@ -313,7 +354,7 @@ def main():
     t_max    = st.session_state.t_max
     n_cycles = st.session_state.n_cycles
 
-    # Sync callbacks (read/write session_state directly — no closure needed)
+    # Sync callbacks
     def _on_time_change():
         t_s, t_e = st.session_state.time_range
         bounds   = st.session_state.cycle_boundaries
@@ -333,13 +374,10 @@ def main():
                 round(t_e, 1),
             )
 
-    st.sidebar.slider("Analysis window (s)",
-        min_value=t_min, max_value=t_max, step=0.1,
-        key="time_range", on_change=_on_time_change)
-
-    st.sidebar.slider("Cycle range",
-        min_value=1, max_value=max(n_cycles, 1), step=1,
-        key="cycle_range", on_change=_on_cycle_change)
+    # ── Mode toggle ───────────────────────────────────────────────────────────
+    mode   = st.radio("View", ["Simple", "Advanced"], horizontal=True,
+                      key="mode", label_visibility="collapsed")
+    simple = (mode == "Simple")
 
     t_start, t_end = st.session_state.time_range
 
@@ -359,50 +397,42 @@ def main():
 
     st.title(f"Session: {selected.stem}")
 
-    # Velocity + accel chart with cycle labels
+    # ── How-to-use (simple mode only) ────────────────────────────────────────
+    if simple:
+        st.info(
+            "**How to use:** Select your session from the sidebar. "
+            "The chart shows your speed over time — each numbered peak is one stroke. "
+            "Use the analysis window below to zoom in on any section, "
+            "then ask your coach a question."
+        )
+
+    # ── Analysis window sliders ───────────────────────────────────────────────
+    with st.expander("Adjust analysis window", expanded=False):
+        if simple:
+            st.caption(
+                "Try: narrow to 11–19 s to focus on top-end speeds. Watch the metrics change."
+            )
+        st.slider("Analysis window (s)",
+            min_value=t_min, max_value=t_max, step=0.1,
+            key="time_range", on_change=_on_time_change)
+        st.slider("Cycle range",
+            min_value=1, max_value=max(n_cycles, 1), step=1,
+            key="cycle_range", on_change=_on_cycle_change)
+
+    # ── Velocity chart ────────────────────────────────────────────────────────
     st.plotly_chart(
         _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end,
-                         cycles, full_boundaries),
+                         cycles, full_boundaries,
+                         show_accel=not simple, show_labels=not simple),
         use_container_width=True,
     )
 
-    # Stats cards
-    _build_stats_table(session)
+    # ── Metric cards ──────────────────────────────────────────────────────────
+    _build_stats_table(session, simple=simple)
 
     st.divider()
 
-    # Per-cycle line charts — interior cycles only
-    interior = cycles[1:-1] if len(cycles) > 2 else cycles
-    if interior:
-        med_dur     = np.median([c["duration_s"] for c in cycles])
-        # Use absolute cycle numbers as x-axis labels
-        labels = [_abs_cycle_num(c.get("t_peak_s", float("nan")), full_boundaries)
-                  or str(i + 1) for i, c in enumerate(interior)]
-        is_outliers = [c["duration_s"] < 0.80 * med_dur for c in interior]
-
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.plotly_chart(_build_line_chart(
-                labels, [c["arm_peak_vel"] for c in interior],
-                is_outliers, "Arm-peak velocity", "m/s",
-            ), use_container_width=True)
-        with col2:
-            st.plotly_chart(_build_line_chart(
-                labels, [c["dist_m"] for c in interior],
-                is_outliers, "Distance per stroke", "m",
-            ), use_container_width=True)
-        with col3:
-            st.plotly_chart(_build_line_chart(
-                labels, [c["coast_fraction"] * 100 for c in interior],
-                is_outliers, "Coast fraction", "%",
-            ), use_container_width=True)
-        with col4:
-            st.plotly_chart(_build_line_chart(
-                labels, [c["duration_s"] for c in interior],
-                is_outliers, "Cycle duration (ISI)", "s",
-            ), use_container_width=True)
-
-    st.divider()
+    # ── Coach Chat ────────────────────────────────────────────────────────────
     st.subheader("Coach Chat")
 
     MAX_TURNS = 5
@@ -437,12 +467,44 @@ def main():
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        system_prompt = _build_chat_system(session, cycles)
+        system_prompt = _build_chat_system(session, cycles, simple=simple)
         with st.chat_message("assistant"):
             response = st.write_stream(
                 _coaching_stream_multi(system_prompt, st.session_state.messages)
             )
         st.session_state.messages.append({"role": "assistant", "content": response})
+
+    # ── Advanced sections ─────────────────────────────────────────────────────
+    if not simple:
+        st.divider()
+
+        interior = cycles[1:-1] if len(cycles) > 2 else cycles
+        if interior:
+            med_dur     = np.median([c["duration_s"] for c in cycles])
+            labels      = [_abs_cycle_num(c.get("t_peak_s", float("nan")), full_boundaries)
+                           or str(i + 1) for i, c in enumerate(interior)]
+            is_outliers = [c["duration_s"] < 0.80 * med_dur for c in interior]
+
+            with st.expander("Stroke-by-stroke breakdown", expanded=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.plotly_chart(_build_line_chart(
+                        labels, [c["arm_peak_vel"] for c in interior],
+                        is_outliers, "Arm-pull Power", "m/s",
+                    ), use_container_width=True)
+                    st.plotly_chart(_build_line_chart(
+                        labels, [c["coast_fraction"] * 100 for c in interior],
+                        is_outliers, "Glide Time", "%",
+                    ), use_container_width=True)
+                with col2:
+                    st.plotly_chart(_build_line_chart(
+                        labels, [c["dist_m"] for c in interior],
+                        is_outliers, "Dist per Stroke", "m",
+                    ), use_container_width=True)
+                    st.plotly_chart(_build_line_chart(
+                        labels, [c["duration_s"] for c in interior],
+                        is_outliers, "Stroke Duration", "s",
+                    ), use_container_width=True)
 
     st.divider()
     st.markdown("💬 **[Share your feedback](https://forms.gle/fb2QoNBGFUjE6WvN6)** — takes 2 minutes, helps a lot.")
