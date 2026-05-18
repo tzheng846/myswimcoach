@@ -770,10 +770,6 @@ def main():
             str(selected), t_start, t_end)
         cycles  = result["cycles"]
         session = result["session"]
-        st.session_state["_debug_freq"] = {
-            "stroke_rate_spm": session.get("stroke_rate_spm", 0),
-            "n_cycles":        len(cycles),
-        }
         full_boundaries = st.session_state.cycle_boundaries
 
         for c in cycles:
@@ -781,9 +777,6 @@ def main():
                                           full_boundaries) or None
 
         st.title(f"Session: {selected.stem}")
-        if dbg := st.session_state.get("_debug_freq"):
-            st.caption(f"DEBUG — SPM: {dbg['stroke_rate_spm']:.1f}  |  "
-                       f"strokes detected: {dbg['n_cycles']}")
 
         with st.expander("Adjust analysis window", expanded=False):
             if simple:
