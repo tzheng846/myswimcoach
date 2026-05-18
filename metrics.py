@@ -11,7 +11,6 @@ import argparse
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from scipy.fft import rfft, rfftfreq
 from scipy.signal import find_peaks
 from scipy.integrate import trapezoid
 import matplotlib.pyplot as plt
@@ -24,17 +23,12 @@ _BASELINE_THRESH     = 0.05   # rolling-mean |vel| below this → baseline (m/s)
 _BASELINE_WIN_S      = 1.0    # window length for baseline detection (s)
 _PEAK_HEIGHT_FRAC    = 0.30   # arm-pull peak must exceed this × v95
 _PEAK_DIST_FRAC      = 0.75   # minimum gap between consecutive peaks (× T_cycle)
-# NOTE: the 2.5 Hz LP filter applied in vel_acc_extraction.py merges the arm-pull
-# and leg-kick contributions into one broad peak. Kick detection is therefore only
-# viable if the processed file used a higher LP cutoff. With the default 2.5 Hz
-# filter, pct_cycles_with_kick will typically be 0.
-_KICK_MIN_PROM_FRAC  = 0.10   # kick peak prominence must exceed this × v95
-_KICK_MIN_VEL_FRAC   = 0.30   # kick velocity must exceed this × arm-pull velocity
+_PEAK_MIN_PROM_FRAC  = 0.10   # min prominence for any peak (pull or kick) × v95
 _DEAD_SPOT_THRESH    = 0.10   # |vel| below this × v95 → dead spot
 _COAST_FRAC_THRESH   = 0.50   # |vel| below this × arm_peak_vel → coasting (per cycle)
 
 
-# ── public API ───────────────────────────────────────────────────────────────
+# ── SEGMENTATION ─────────────────────────────────────────────────────────────
 
 def detect_phases(t, vel):
     """
@@ -56,118 +50,115 @@ def detect_phases(t, vel):
             b_end = i
             break
 
-    return {"baseline_end": b_end, "steady_start": b_end}
+    # swim_end: last sample where rolling mean is above threshold + 0.5 s grace
+    # to include the final glide. Using single-sample check avoids cutting off
+    # the last stroke because the sustained-window check misses its glide phase.
+    swim_end = len(t)
+    for i in range(len(t) - 1, b_end, -1):
+        if rm[i] > _BASELINE_THRESH:
+            swim_end = min(i + hold + 1, len(t))
+            break
+
+    return {"baseline_end": b_end, "steady_start": b_end, "swim_end": swim_end}
 
 
-def estimate_cycle_frequency(t, vel):
+
+def segment_cycles_trough(t, vel):
     """
-    Estimate breaststroke cycle frequency from the FFT of vel.
+    Segment at deep velocity troughs (glide phase) — literature-recommended
+    approach for breaststroke.
 
-    Returns dict:
-        f_cycle_hz      – dominant cycle frequency (Hz)
-        stroke_rate_spm – strokes per minute
-        T_cycle_s       – stroke period (s)
+    The tethered-wheel velocity drops near zero during each glide; those deep
+    minima are unambiguous cycle boundaries and are immune to the arm+kick
+    double-peak problem.  The dominant peak within each trough-bounded segment
+    becomes the stroke anchor.
+
+    Requires no T_cycle estimate.  Returns same format as segment_cycles,
+    or None if fewer than 2 qualifying troughs are found.
     """
-    dt    = _compute_fs(t) ** -1
-    N     = len(vel)
-    freqs = rfftfreq(N, d=dt)
-    spec  = np.abs(rfft(vel - vel.mean())) / N
-    band  = (freqs >= 0.3) & (freqs <= 2.0)
-    f_cyc = float(freqs[band][np.argmax(spec[band])])
-    return {
-        "f_cycle_hz":      f_cyc,
-        "stroke_rate_spm": f_cyc * 60.0,
-        "T_cycle_s":       1.0 / f_cyc,
-    }
+    fs  = _compute_fs(t)
+    n   = len(vel)
+    v95 = float(np.percentile(np.abs(vel), 95))
 
+    # Glide troughs: velocity below 20 % of v95, at least 0.5 s apart.
+    # 0.5 s corresponds to 120 SPM — faster than any realistic breaststroke.
+    troughs, _ = find_peaks(
+        -vel,
+        height   = -0.20 * v95,          # vel must be < 0.20 × v95
+        distance = max(1, int(0.5 * fs)),
+    )
 
-def segment_cycles(t, vel, T_cycle):
-    """
-    Segment the velocity trace into individual stroke cycles.
+    if len(troughs) < 1:
+        return None
 
-    Strategy: find arm-pull peaks (the dominant positive velocity peak, one
-    per cycle) using height + distance guards, then place each cycle boundary
-    at the velocity minimum between consecutive peaks.
-
-    Returns list of dicts, one per cycle:
-        peak_idx    – index of the arm-pull peak
-        start_idx   – index of the cycle's left boundary (inclusive)
-        end_idx     – index of the cycle's right boundary (exclusive)
-    """
-    fs        = _compute_fs(t)
-    v95       = float(np.percentile(np.abs(vel), 95))
-    peak_dist = max(1, int(_PEAK_DIST_FRAC * T_cycle * fs))
-    peaks, _  = find_peaks(vel, height=_PEAK_HEIGHT_FRAC * v95, distance=peak_dist)
-
-    if len(peaks) < 2:
-        return []
-
-    # Cycle boundaries: argmin of vel between consecutive peaks
-    bounds = [0]
-    for i in range(len(peaks) - 1):
-        seg    = vel[peaks[i] : peaks[i + 1]]
-        offset = int(np.argmin(seg))
-        bounds.append(peaks[i] + offset)
-    bounds.append(len(vel))
+    # Prepend start + append end as virtual boundaries so both the first stroke
+    # (swim-start → first trough) and last stroke (last trough → swim-end)
+    # are captured, not skipped.
+    bounds = np.concatenate([[0], troughs, [len(vel)]])
 
     cycles = []
-    for i, pk in enumerate(peaks):
-        cycles.append({
-            "peak_idx":  int(pk),
-            "start_idx": int(bounds[i]),
-            "end_idx":   int(bounds[i + 1]),
-        })
-    return cycles
+    for i in range(len(bounds) - 1):
+        a, b = int(bounds[i]), int(bounds[i + 1])
+        seg  = vel[a:b]
+        if len(seg) < 2:
+            continue
+        pk = a + int(np.argmax(seg))
+        cycles.append({"cycle_num": len(cycles), "peak_idx": pk, "start_idx": a, "end_idx": b})
+
+    return cycles if len(cycles) >= 1 else None
+
 
 
 def extract_cycle_peaks(vel, cycles):
     """
-    For each cycle segment find the arm-pull peak and (optionally) the kick peak.
+    For each trough-bounded segment, find all prominent peaks in chronological order.
+    First peak = arm pull, second peak = kick.
 
     Mutates each cycle dict in-place, adding:
-        arm_peak_idx   – index of the arm-pull peak (same as cycle['peak_idx'])
-        arm_peak_vel   – velocity at arm-pull peak (m/s)
-        kick_peak_idx  – index of the kick peak, or None
+        arm_peak_idx   – index of the pull peak
+        arm_peak_vel   – velocity at pull peak (m/s)
+        kick_peak_idx  – index of the kick peak, or None if only one peak found
         kick_peak_vel  – velocity at kick peak, or None
-        arm_kick_delay – time between arm and kick peak (s), or None
+    Also updates peak_idx to match arm_peak_idx.
     Returns the same list for convenience.
     """
     v95 = float(np.percentile(np.abs(vel), 95))
-    min_kick_prom = _KICK_MIN_PROM_FRAC * v95
+    min_prom = _PEAK_MIN_PROM_FRAC * v95
 
     for cyc in cycles:
-        a, b      = cyc["start_idx"], cyc["end_idx"]
-        seg       = vel[a:b]
-        arm_idx   = cyc["peak_idx"]
-        arm_vel   = float(vel[arm_idx])
+        a, b = cyc["start_idx"], cyc["end_idx"]
+        seg  = vel[a:b]
 
-        cyc["arm_peak_idx"] = arm_idx
-        cyc["arm_peak_vel"] = arm_vel
+        peaks, _ = find_peaks(seg, prominence=min_prom)
 
-        # Search for kick peak: local max in seg, distinct from arm-pull
-        sub_peaks, props = find_peaks(seg, prominence=min_kick_prom)
-        # Exclude the arm-pull itself
-        arm_off   = arm_idx - a
-        # Kick always follows the arm pull; only search after arm_off
-        sub_peaks = sub_peaks[sub_peaks > arm_off]
-
-        if len(sub_peaks) > 0:
-            best     = sub_peaks[np.argmax(seg[sub_peaks])]
-            kick_vel = float(seg[best])
-            # Require kick to be at least 30% of arm-pull velocity
-            if kick_vel >= _KICK_MIN_VEL_FRAC * arm_vel:
-                kick_idx = a + int(best)
-                cyc["kick_peak_idx"] = kick_idx
-                cyc["kick_peak_vel"] = kick_vel
-            else:
-                cyc["kick_peak_idx"] = None
-                cyc["kick_peak_vel"] = None
-        else:
+        if len(peaks) == 0:
+            # No prominent peak — use argmax as fallback pull anchor
+            pull_off = int(np.argmax(seg))
+            cyc["arm_peak_idx"] = a + pull_off
+            cyc["arm_peak_vel"] = float(seg[pull_off])
             cyc["kick_peak_idx"] = None
             cyc["kick_peak_vel"] = None
+        elif len(peaks) == 1:
+            cyc["arm_peak_idx"] = a + int(peaks[0])
+            cyc["arm_peak_vel"] = float(seg[peaks[0]])
+            cyc["kick_peak_idx"] = None
+            cyc["kick_peak_vel"] = None
+        else:
+            # First chronologically = pull, second = kick
+            # If >2 peaks, kick is the highest among peaks[1:]
+            pull_off = int(peaks[0])
+            kick_off = int(peaks[1]) if len(peaks) == 2 else int(peaks[1:][np.argmax(seg[peaks[1:]])])
+            cyc["arm_peak_idx"] = a + pull_off
+            cyc["arm_peak_vel"] = float(seg[pull_off])
+            cyc["kick_peak_idx"] = a + kick_off
+            cyc["kick_peak_vel"] = float(seg[kick_off])
+
+        cyc["peak_idx"] = cyc["arm_peak_idx"]
 
     return cycles
 
+
+# ── METRICS ──────────────────────────────────────────────────────────────────
 
 def compute_session_metrics(t, vel, dist):
     """
@@ -181,19 +172,23 @@ def compute_session_metrics(t, vel, dist):
     v95 = float(np.percentile(np.abs(vel), 95))
 
     # ── phase detection ────────────────────────────────────────────────────
-    phases    = detect_phases(t, vel)
-    ss_start  = phases["steady_start"]
+    phases   = detect_phases(t, vel)
+    b_end    = phases["baseline_end"]
+    swim_end = phases["swim_end"]
 
-    t_ss   = t[ss_start:]
-    vel_ss = vel[ss_start:]
-    dist_ss = dist[ss_start:]
+    # ── segmentation (trimmed to swim window) ──────────────────────────────
+    t_swim   = t[b_end:swim_end]
+    vel_swim = vel[b_end:swim_end]
 
-    # ── cycle frequency ───────────────────────────────────────────────────
-    freq_info = estimate_cycle_frequency(t_ss, vel_ss)
-    T_cycle   = freq_info["T_cycle_s"]
+    cycles = segment_cycles_trough(t_swim, vel_swim)
+    if cycles is None:
+        cycles = []
 
-    # ── segmentation (full trace so indices are absolute) ─────────────────
-    cycles = segment_cycles(t, vel, T_cycle)
+    # Offset indices so they map back to the full-trace arrays
+    for c in cycles:
+        c["start_idx"] += b_end
+        c["end_idx"]   += b_end
+        c["peak_idx"]  += b_end
 
     # Tag cycles as ramp-up or steady based on arm-pull velocity.
     # steady_floor = 50% of the 75th-pct peak velocity across all cycles.
@@ -248,14 +243,20 @@ def compute_session_metrics(t, vel, dist):
     ss_cycles  = [c for c in cycles if c.get("phase") == "steady"]
     n_ss       = len(ss_cycles)
 
+    if ss_cycles:
+        mean_dur        = float(np.mean([c["duration_s"] for c in ss_cycles]))
+        stroke_rate_spm = 60.0 / mean_dur
+    else:
+        stroke_rate_spm = float("nan")
+
     session = {
         "lap_time_s":          float(t[-1]),
         "total_dist_m":        float(dist[-1]),
-        "baseline_end_s":      float(t[phases["baseline_end"]]),
-        "stroke_rate_spm":     freq_info["stroke_rate_spm"],
+        "baseline_end_s":      float(t[b_end]),
+        "stroke_rate_spm":     stroke_rate_spm,
         "stroke_count":        n_ss,
-        "mean_vel_ms":         float(np.mean(vel_ss[vel_ss > 0])) if vel_ss.size else float("nan"),
-        "max_vel_ms":          float(np.max(vel_ss)),
+        "mean_vel_ms":         float(np.mean(vel_swim[vel_swim > 0])) if vel_swim.size else float("nan"),
+        "max_vel_ms":          float(np.max(vel_swim)) if vel_swim.size else float("nan"),
     }
 
     if n_ss > 0:
@@ -301,6 +302,87 @@ def compute_session_metrics(t, vel, dist):
             session[k] = None
 
     return {"session": session, "cycles": cycles}
+
+
+# ── pose integration ─────────────────────────────────────────────────────
+
+def attach_pose_to_cycles(cycles, merged_df, t):
+    """
+    Attach pose-derived metrics to each cycle dict in-place.
+
+    merged_df comes from merge_streams.py: encoder columns + pose columns,
+    joined on time_s.  t is the same time array used for segmentation so
+    cycle indices map back to timestamps.
+
+    Adds to each cycle dict:
+        mean_elbow_angle_at_arm_peak  – mean(l, r) elbow angle at arm-pull peak frame
+        mean_knee_angle_at_kick       – mean(l, r) knee angle at kick peak frame (None if no kick)
+        elbow_symmetry                – mean |l_elbow - r_elbow| over the pull phase
+                                        (start_idx → arm_peak_idx)
+
+    Cycles with no matching pose rows get None for all three keys.
+    Returns cycles for convenience.
+    """
+    pose_cols = ["l_elbow_angle_deg", "r_elbow_angle_deg",
+                 "l_knee_angle_deg",  "r_knee_angle_deg"]
+
+    # Bail out gracefully if pose columns aren't in the merged file
+    if not all(c in merged_df.columns for c in pose_cols):
+        for cyc in cycles:
+            cyc["mean_elbow_angle_at_arm_peak"] = None
+            cyc["mean_knee_angle_at_kick"]       = None
+            cyc["elbow_symmetry"]                = None
+        return cycles
+
+    ts = merged_df["time_s"].values
+
+    def _nearest_row(target_t):
+        """Return the merged_df row closest to target_t, or None if all NaN."""
+        idx = int(np.argmin(np.abs(ts - target_t)))
+        row = merged_df.iloc[idx]
+        return row if pd.notna(row["l_elbow_angle_deg"]) else None
+
+    def _window_rows(t_lo, t_hi):
+        """Return merged_df rows where time_s is in [t_lo, t_hi]."""
+        mask = (ts >= t_lo) & (ts <= t_hi)
+        return merged_df[mask]
+
+    for cyc in cycles:
+        # ── elbow angle at arm-pull peak ──────────────────────────────────
+        arm_t = float(t[cyc["arm_peak_idx"]])
+        row   = _nearest_row(arm_t)
+        if row is not None:
+            l_el = row["l_elbow_angle_deg"]
+            r_el = row["r_elbow_angle_deg"]
+            vals = [v for v in (l_el, r_el) if pd.notna(v)]
+            cyc["mean_elbow_angle_at_arm_peak"] = float(np.mean(vals)) if vals else None
+        else:
+            cyc["mean_elbow_angle_at_arm_peak"] = None
+
+        # ── knee angle at kick peak ────────────────────────────────────────
+        if cyc.get("kick_peak_idx") is not None:
+            kick_t = float(t[cyc["kick_peak_idx"]])
+            row_k  = _nearest_row(kick_t)
+            if row_k is not None:
+                l_kn = row_k["l_knee_angle_deg"]
+                r_kn = row_k["r_knee_angle_deg"]
+                vals = [v for v in (l_kn, r_kn) if pd.notna(v)]
+                cyc["mean_knee_angle_at_kick"] = float(np.mean(vals)) if vals else None
+            else:
+                cyc["mean_knee_angle_at_kick"] = None
+        else:
+            cyc["mean_knee_angle_at_kick"] = None
+
+        # ── elbow symmetry over pull phase (start → arm peak) ─────────────
+        pull_rows = _window_rows(float(t[cyc["start_idx"]]), arm_t)
+        if len(pull_rows) > 0:
+            diff = (pull_rows["l_elbow_angle_deg"] - pull_rows["r_elbow_angle_deg"]).abs()
+            diff = diff.dropna()
+            cyc["elbow_symmetry"] = float(diff.mean()) if len(diff) > 0 else None
+        else:
+            cyc["elbow_symmetry"] = None
+
+    return cycles
 
 
 # ── helpers ───────────────────────────────────────────────────────────────

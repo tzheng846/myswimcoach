@@ -33,18 +33,66 @@ if not _API_KEY:
 
 st.set_page_config(layout="centered", page_title="SwimCoach")
 
-# ── Phase color palette ───────────────────────────────────────────────────────
-_C_STEADY   = "#4c9be8"
-_C_RAMP     = "#e8a24c"
-_C_OUTLIER  = "#e87070"
-_C_BOUNDARY = "#aaaaaa"
-_C_EXCL     = "#cccccc"
+# ── Color palette ────────────────────────────────────────────────────────────
+_C_STEADY  = "#4c9be8"   # used in per-cycle line charts
+_C_OUTLIER = "#e87070"   # used in per-cycle line charts
+
+# Stroke palette: cycles alternate through these colors
+_STROKE_PALETTE = ["#4c85d4", "#e8784a", "#4cb87a", "#a06cd5", "#d4b84c", "#4cb8c8"]
+
+# ── Metric rating ranges (breaststroke) ──────────────────────────────────────
+_METRIC_RANGES = {
+    "stroke_rate_spm": {
+        "good":   lambda v: 45 <= v <= 65,
+        "ok":     lambda v: 35 <= v <= 80,
+        "ranges": "Good: 45–65 spm · OK: 35–80 spm · Needs work: outside that range",
+    },
+    "mean_vel_ms": {
+        "good":   lambda v: v >= 1.2,
+        "ok":     lambda v: v >= 0.8,
+        "ranges": "Good: ≥ 1.2 m/s · OK: 0.8–1.2 m/s · Needs work: < 0.8 m/s",
+    },
+    "mean_dps_m": {
+        "good":   lambda v: v >= 1.5,
+        "ok":     lambda v: v >= 1.0,
+        "ranges": "Good: ≥ 1.5 m · OK: 1.0–1.5 m · Needs work: < 1.0 m",
+    },
+    "mean_coast_fraction": {
+        "good":   lambda v: 0.30 <= v <= 0.55,
+        "ok":     lambda v: 0.20 <= v <= 0.65,
+        "ranges": "Good: 30–55% · OK: 20–65% · Needs work: outside that range",
+    },
+    "fatigue_index_pct": {
+        "good":   lambda v: v < 8,
+        "ok":     lambda v: v < 20,
+        "ranges": "Good: < 8% · OK: 8–20% · Needs work: > 20%",
+    },
+    "cv_arm_peak_vel": {
+        "good":   lambda v: v < 0.10,
+        "ok":     lambda v: v < 0.20,
+        "ranges": "Good: < 0.10 · OK: 0.10–0.20 · Needs work: > 0.20",
+    },
+}
+
+
+def _rate_metric(key: str, value) -> tuple:
+    """Return (label, hex_color) rating for a metric value."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "", ""
+    r = _METRIC_RANGES.get(key)
+    if r is None:
+        return "", ""
+    if r["good"](value):
+        return "Good", "#2d9e5f"
+    if r["ok"](value):
+        return "OK", "#d4860a"
+    return "Needs work", "#c0392b"
 
 SUGGESTED = [
-    "How does my stroke rate look?",
-    "What's causing my velocity drops?",
-    "How consistent am I stroke-to-stroke?",
-    "How do my last strokes compare to the first?",
+    "What should I focus on next?",
+    "Why did my technique change mid-set?",
+    "How do I improve my pacing?",
+    "What's holding back my speed?",
 ]
 
 SUGGESTED_COMPARE = [
@@ -58,14 +106,6 @@ _CSV_A = "processed/sample_br_1.csv"
 _CSV_B = "processed/sample_br_2.csv"
 
 
-def _cycle_color(c: dict, is_outlier: bool, is_boundary: bool) -> str:
-    if is_boundary:
-        return _C_BOUNDARY
-    if is_outlier:
-        return _C_OUTLIER
-    return _C_STEADY if c.get("phase") == "steady" else _C_RAMP
-
-
 def _abs_cycle_num(t_peak: float, full_boundaries: list) -> str:
     """Return 1-indexed absolute cycle number by matching peak time."""
     for i, (_, _, tp) in enumerate(full_boundaries):
@@ -74,8 +114,7 @@ def _abs_cycle_num(t_peak: float, full_boundaries: list) -> str:
     return ""
 
 
-# ── Cached: full-range cycle boundaries for slider sync ──────────────────────
-@st.cache_data
+# ── full-range cycle boundaries for slider sync ──────────────────────────────
 def load_full_cycles(csv_path: str):
     """Compute cycle boundaries on the full recording (used for slider sync)."""
     df   = pd.read_csv(csv_path)
@@ -95,8 +134,7 @@ def load_full_cycles(csv_path: str):
     return float(t[0]), float(t[-1]), boundaries
 
 
-# ── Cached: trimmed data + metrics ───────────────────────────────────────────
-@st.cache_data
+# ── trimmed data + metrics ────────────────────────────────────────────────────
 def load_and_compute(csv_path: str, t_start: float, t_end: float):
     df         = pd.read_csv(csv_path)
     t_full     = df["time_s"].values
@@ -113,14 +151,18 @@ def load_and_compute(csv_path: str, t_start: float, t_end: float):
     result = compute_session_metrics(t, vel, dist)
     for c in result["cycles"]:
         idx = c.get("peak_idx")
-        c["t_peak_s"] = float(t[idx]) if idx is not None and idx < len(t) else float("nan")
+        si  = c.get("start_idx")
+        ei  = c.get("end_idx")
+        c["t_peak_s"]  = float(t[idx]) if idx is not None and idx < len(t) else float("nan")
+        c["t_start_s"] = float(t[si])  if si  is not None and si  < len(t) else float("nan")
+        c["t_end_s"]   = float(t[min(ei - 1, len(t) - 1)]) if ei is not None and ei > 0 else float("nan")
 
     return t_full, vel_full, accel_full, t, vel, accel, result
 
 
 # ── Velocity (+ optional acceleration) chart ─────────────────────────────────
 def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
-                     full_boundaries, show_accel=True, show_labels=True):
+                     full_boundaries, show_accel=True):
     if show_accel:
         fig = make_subplots(
             rows=2, cols=1, shared_xaxes=True,
@@ -137,6 +179,7 @@ def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
         x=t_full, y=vel_full,
         mode="lines", line=dict(color="#aaaaaa", width=0.9),
         showlegend=False,
+        hoverinfo="skip",
     ), **vel_kw)
 
     # Zero line
@@ -145,86 +188,68 @@ def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
     else:
         fig.add_hline(y=0, line=dict(color="rgba(150,150,150,0.6)", width=0.8, dash="dash"))
 
-    # Excluded region shading
-    t_lo, t_hi = t_full[0], t_full[-1]
-    for x0, x1 in [(t_lo, t_start), (t_end, t_hi)]:
-        if x0 < x1:
+    # Shaded stroke regions + arm-pull peak markers
+    if cycles:
+        med_dur = np.median([c["duration_s"] for c in cycles])
+
+        # Shaded region per stroke
+        for i, c in enumerate(cycles):
+            t_s = c.get("t_start_s", float("nan"))
+            t_e = c.get("t_end_s",   float("nan"))
+            if np.isnan(t_s) or np.isnan(t_e) or t_e <= t_s:
+                continue
+            color = _STROKE_PALETTE[i % len(_STROKE_PALETTE)]
+            vrect_kw = dict(x0=t_s, x1=t_e, fillcolor=color, opacity=0.18,
+                            layer="below", line_width=0)
             if show_accel:
                 for row in (1, 2):
-                    fig.add_vrect(x0=x0, x1=x1, fillcolor=_C_EXCL, opacity=0.35,
-                                  layer="below", line_width=0, row=row, col=1)
+                    fig.add_vrect(**vrect_kw, row=row, col=1)
             else:
-                fig.add_vrect(x0=x0, x1=x1, fillcolor=_C_EXCL, opacity=0.35,
-                              layer="below", line_width=0)
+                fig.add_vrect(**vrect_kw)
 
-    # Arm-pull peak markers with cycle number labels
-    if cycles:
-        med_dur    = np.median([c["duration_s"] for c in cycles])
-        bound_ids  = {id(cycles[0]), id(cycles[-1])} if len(cycles) > 1 else set()
-
-        px, py, pt, pc, pcd = [], [], [], [], []
-        for c in cycles:
-            t_pk = c.get("t_peak_s", float("nan"))
+        # One invisible hover point per stroke at the region midpoint.
+        # hovermode="x" (set below) matches by x-distance only, so the hover
+        # boundary aligns exactly with the visual vrect boundary regardless of y.
+        hx, hy, hcd = [], [], []
+        for i, c in enumerate(cycles):
+            t_s  = c.get("t_start_s", float("nan"))
+            t_e  = c.get("t_end_s",   float("nan"))
+            t_pk = c.get("t_peak_s",  float("nan"))
             v_pk = c.get("arm_peak_vel", float("nan"))
-            if np.isnan(t_pk) or np.isnan(v_pk):
+            if any(np.isnan(v) for v in [t_s, t_e, v_pk]):
                 continue
-            is_out = c["duration_s"] < 0.80 * med_dur
-            is_bnd = id(c) in bound_ids
-            color  = _cycle_color(c, is_out, is_bnd)
-            label  = _abs_cycle_num(t_pk, full_boundaries)
-            px.append(t_pk); py.append(v_pk)
-            pt.append(label); pc.append(color)
-            pcd.append([
-                label,
-                f"{c.get('trough_vel_ms', float('nan')):.3f}",
-                f"{c.get('coast_fraction', float('nan'))*100:.1f}",
-                f"{c.get('duration_s', float('nan')):.2f}",
-                f"{c.get('dist_m', float('nan')):.3f}",
-                "yes" if is_out else "no",
-            ])
+            num = _abs_cycle_num(t_pk, full_boundaries) or str(i + 1)
+            hx.append((t_s + t_e) / 2)
+            hy.append(v_pk)
+            hcd.append([num])
 
-        marker_colors = pc if show_labels else ["#999999"] * len(px)
-        scatter_kw = dict(
-            x=px, y=py,
-            mode="markers+text" if show_labels else "markers",
-            marker=dict(symbol="triangle-up", size=10, color=marker_colors,
-                        line=dict(color="white", width=1)),
-            text=pt if show_labels else [""] * len(pt),
-            textposition="top center",
-            textfont=dict(size=11, color=marker_colors),
-            showlegend=False,
-        )
-        if show_labels:
-            scatter_kw["customdata"] = pcd
-            scatter_kw["hovertemplate"] = (
-                "<b>Stroke %{customdata[0]}</b>  t=%{x:.2f}s<br>"
-                "arm peak: %{y:.3f} m/s<br>"
-                "trough: %{customdata[1]} m/s<br>"
-                "glide: %{customdata[2]}%<br>"
-                "duration: %{customdata[3]}s<br>"
-                "dist/stroke: %{customdata[4]} m<br>"
-                "outlier: %{customdata[5]}"
-                "<extra></extra>"
-            )
-        else:
-            scatter_kw["customdata"] = pcd
-            scatter_kw["hovertemplate"] = "Stroke %{customdata[0]}<extra></extra>"
-        fig.add_trace(go.Scatter(**scatter_kw), **vel_kw)
+        if hx:
+            fig.add_trace(go.Scatter(
+                x=hx, y=hy,
+                mode="markers",
+                marker=dict(size=1, opacity=0),
+                customdata=hcd,
+                hovertemplate="<b>Stroke %{customdata[0]}</b><extra></extra>",
+                showlegend=False,
+            ), **vel_kw)
 
     if show_accel:
         fig.add_trace(go.Scatter(
             x=t_full, y=accel_full,
             mode="lines", line=dict(color="#f97316", width=0.9),
             showlegend=False,
+            hoverinfo="skip",
         ), row=2, col=1)
         fig.update_yaxes(title_text="vel (m/s)", row=1, col=1)
         fig.update_yaxes(title_text="accel (m/s²)", row=2, col=1)
         fig.update_xaxes(title_text="time (s)", row=2, col=1)
-        fig.update_layout(height=420, margin=dict(l=60, r=20, t=30, b=40))
+        fig.update_layout(height=420, margin=dict(l=60, r=20, t=30, b=40),
+                          hovermode="x")
     else:
         fig.update_yaxes(title_text="Speed (m/s)")
         fig.update_xaxes(title_text="Time (s)")
-        fig.update_layout(height=280, margin=dict(l=60, r=20, t=30, b=40))
+        fig.update_layout(height=280, margin=dict(l=60, r=20, t=30, b=40),
+                          hovermode="x")
 
     fig.update_xaxes(showgrid=True, gridcolor="rgba(128,128,128,0.2)")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.2)")
@@ -233,46 +258,54 @@ def _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end, cycles,
 
 # ── Stats metric cards ────────────────────────────────────────────────────────
 def _build_stats_table(session: dict, simple: bool = False):
+    # (label, session_key, format_fn, explanation)
     all_stats = [
-        ("Stroke Rate",
-         f"{session.get('stroke_rate_spm', 0):.1f} spm",
+        ("Stroke Rate", "stroke_rate_spm",
+         lambda v: f"{v:.1f} spm",
          "Strokes per minute. High = fast tempo, less time per stroke. "
-         "Low = slower, more deliberate. Typical breaststroke: 50–65 spm. "
-         "Higher tempo often trades distance per stroke."),
+         "Low = slower, more deliberate. Elite breaststroke: 45–60 spm."),
 
-        ("Average Speed",
-         f"{session.get('mean_vel_ms', 0):.2f} m/s",
-         "Mean forward speed over the session. Higher is faster, always."),
+        ("Average Speed", "mean_vel_ms",
+         lambda v: f"{v:.2f} m/s",
+         "Mean forward speed. Higher is always faster. "
+         "Recreational: 0.8–1.1 m/s. Competitive: > 1.3 m/s."),
 
-        ("Dist per Stroke",
-         f"{session.get('mean_dps_m', 0):.2f} m",
-         "Meters traveled per stroke. High = efficient, each pull takes you further. "
-         "Low = energy wasted — you're working hard but not going far."),
+        ("Dist per Stroke", "mean_dps_m",
+         lambda v: f"{v:.2f} m",
+         "Meters traveled per stroke. Higher = more efficient — each pull takes you further. "
+         "Low DPS means effort that isn't converting to distance."),
 
-        ("Glide Time",
-         f"{session.get('mean_coast_fraction', 0) * 100:.0f}%",
-         "Fraction of each stroke spent gliding. "
-         "High with good speed = active, streamlined glide. "
-         "High with low dist per stroke = passive drift, dead weight. "
-         "Low = choppy rhythm, not using your momentum."),
+        ("Glide Time", "mean_coast_fraction",
+         lambda v: f"{v * 100:.0f}%",
+         "Fraction of each stroke spent gliding after the kick. "
+         "Too low = choppy, not using momentum. Too high = dead time, losing speed."),
 
-        ("Fatigue Index",
-         f"{session.get('fatigue_index_pct', 0):.1f}%",
-         "Arm power drop from first quarter to last. "
-         "High (>10%) = significant fatigue by the end. "
-         "Low or negative = well-paced or still warming up."),
+        ("Fatigue Index", "fatigue_index_pct",
+         lambda v: f"{v:.1f}%",
+         "Drop in arm power from first quarter to last quarter of the set. "
+         "Negative = still building. Near zero = well-paced. High positive = fatiguing fast."),
 
-        ("Stroke Consistency",
-         f"{session.get('cv_arm_peak_vel', 0):.3f}",
-         "Variation in arm power stroke to stroke. "
-         "Low (<0.10) = consistent, repeatable technique. "
-         "High (>0.20) = big swings between strokes — technique breaking down."),
+        ("Stroke Consistency", "cv_arm_peak_vel",
+         lambda v: f"{v:.3f}",
+         "Coefficient of variation in arm-pull peak velocity. "
+         "Lower = more repeatable technique stroke to stroke."),
     ]
     stats = all_stats[:3] if simple else all_stats
     cols = st.columns(3)
-    for i, (label, value, tip) in enumerate(stats):
+    for i, (label, key, fmt, explanation) in enumerate(stats):
+        raw = session.get(key)
+        formatted = fmt(raw) if raw is not None else "—"
+        ranges_text = _METRIC_RANGES.get(key, {}).get("ranges", "")
+        tip = explanation + (f"\n\n{ranges_text}" if ranges_text else "")
+        rating_label, rating_color = _rate_metric(key, raw)
         with cols[i % 3]:
-            st.metric(label=label, value=value, help=tip)
+            st.metric(label=label, value=formatted, help=tip)
+            if rating_label:
+                st.markdown(
+                    f"<span style='color:{rating_color};font-size:0.82em'>"
+                    f"● {rating_label}</span>",
+                    unsafe_allow_html=True,
+                )
 
 
 # ── Per-cycle line chart ──────────────────────────────────────────────────────
@@ -299,6 +332,143 @@ def _build_line_chart(labels, values, is_outlier_flags, title, y_label):
     fig.update_xaxes(showgrid=False, tickangle=-45)
     fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.2)")
     return fig
+
+
+# ── Question-card system ──────────────────────────────────────────────────────
+
+def _compute_q1_q4(cycles):
+    """First- and last-quarter mean arm-peak velocity from steady cycles."""
+    ss = [c for c in cycles if c.get("phase") == "steady"]
+    if len(ss) < 2:
+        return None, None
+    q = max(1, len(ss) // 4)
+    return (float(np.mean([c["arm_peak_vel"] for c in ss[:q]])),
+            float(np.mean([c["arm_peak_vel"] for c in ss[-q:]])))
+
+
+def _compute_verdicts(session: dict, cycles: list) -> dict:
+    fi       = session.get("fatigue_index_pct")
+    cv_isi   = session.get("cv_isi")    # keep None distinct from 0
+    pct_kick = session.get("pct_cycles_with_kick")
+
+    if fi is None:
+        tech = {"verdict": "unknown", "icon": "—", "label": "Not enough data", "text": ""}
+    elif fi < -10:
+        tech = {"verdict": "building", "icon": "📈", "label": "Building",
+                "text": "Stroke power built through the set — still warming up."}
+    elif fi < 8:
+        tech = {"verdict": "held", "icon": "✅", "label": "Held",
+                "text": "Stroke power stayed consistent throughout."}
+    elif fi < 20:
+        tech = {"verdict": "partial", "icon": "⚠️", "label": "Minor fade",
+                "text": f"Stroke power dropped {fi:.0f}% from first to last quarter."}
+    else:
+        tech = {"verdict": "broke_down", "icon": "🔴", "label": "Broke down",
+                "text": f"Significant fatigue — stroke power fell {fi:.0f}% by the end."}
+    if fi is not None:
+        tech["fi"] = fi
+
+    if cv_isi is None:
+        pacing = {"state": "no_data", "cv_isi": None}
+    elif cv_isi > 0.20:
+        pacing = {"state": "variable", "cv_isi": cv_isi}
+    else:
+        pacing = {"state": "consistent", "cv_isi": cv_isi}
+
+    if pct_kick is None:
+        kick = {"state": "no_data", "pct_kick": None, "ratio": None}
+    elif pct_kick > 30:
+        kick = {"state": "yes", "pct_kick": pct_kick,
+                "ratio": session.get("mean_arm_kick_ratio")}
+    else:
+        kick = {"state": "not_detected", "pct_kick": pct_kick, "ratio": None}
+
+    return {"technique": tech, "pacing": pacing, "kick": kick}
+
+
+def _render_speed_card(session: dict, q1, q4):
+    mean_vel = session.get("mean_vel_ms") or 0
+    with st.container(border=True):
+        st.markdown("**How fast was that?**")
+        if mean_vel > 0:
+            pace_s = 100 / mean_vel
+            st.markdown(f"### {int(pace_s // 60)}:{int(pace_s % 60):02d} / 100m")
+        else:
+            st.markdown("### —")
+        if q1 is not None and q4 is not None:
+            arrow = "↗" if q4 > q1 * 1.02 else "↘" if q4 < q1 * 0.98 else "→"
+            st.caption(f"Stroke power: {q1:.2f} {arrow} {q4:.2f} m/s (first → last quarter)")
+
+
+def _render_technique_card(session: dict, v: dict):
+    with st.container(border=True):
+        st.markdown("**Did technique hold up?**")
+        st.markdown(f"{v['icon']} **{v['label']}**")
+        if v["text"]:
+            st.caption(v["text"])
+        with st.expander("Details"):
+            fi = v.get("fi")
+            cv_isi = session.get("cv_isi")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Fatigue Index", f"{fi:.1f}%" if fi is not None else "—")
+            with c2:
+                st.metric("Stroke Timing CV", f"{cv_isi:.3f}" if cv_isi is not None else "—")
+
+
+def _render_pacing_card(v: dict):
+    with st.container(border=True):
+        st.markdown("**Were you pacing consistently?**")
+        if v["state"] == "no_data":
+            st.markdown("— **Not enough strokes**")
+            st.caption("Widen the analysis window to see pacing consistency.")
+        elif v["state"] == "variable":
+            st.markdown("⚠️ **Variable**")
+            st.caption("Stroke timing varied — some strokes were notably longer or shorter than average.")
+            with st.expander("Details"):
+                st.metric("Stroke Timing CV", f"{v['cv_isi']:.3f}")
+                st.caption("Below 0.10 = very consistent · 0.20+ = high variation")
+        else:
+            st.markdown("✅ **Consistent**")
+            st.caption("Stroke timing was steady throughout the window.")
+            with st.expander("Details"):
+                st.metric("Stroke Timing CV", f"{v['cv_isi']:.3f}")
+                st.caption("Below 0.10 = very consistent · 0.20+ = high variation")
+
+
+def _render_kick_card(v: dict):
+    with st.container(border=True):
+        st.markdown("**Is your kick contributing?**")
+        if v["state"] == "no_data":
+            st.markdown("— **Not enough data**")
+            st.caption("Widen the analysis window to detect kick contribution.")
+        elif v["state"] == "yes":
+            st.markdown("✅ **Yes**")
+            st.caption(f"Kick detected in {v['pct_kick']:.0f}% of strokes.")
+            with st.expander("Details"):
+                st.metric("Kick Presence", f"{v['pct_kick']:.0f}%")
+                if v["ratio"] is not None:
+                    st.metric("Kick / Arm Ratio", f"{v['ratio']:.2f}")
+        else:
+            st.markdown("— **Not detected**")
+            st.caption("No distinct kick peak found. May be filtered at the current LP cutoff.")
+
+
+def _render_question_cards(session: dict, cycles: list):
+    verdicts = _compute_verdicts(session, cycles)
+    q1, q4   = _compute_q1_q4(cycles)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        _render_speed_card(session, q1, q4)
+    with col2:
+        _render_technique_card(session, verdicts["technique"])
+
+    col3, col4 = st.columns(2)
+    with col3:
+        _render_pacing_card(verdicts["pacing"])
+    with col4:
+        _render_kick_card(verdicts["kick"])
 
 
 # ── Chat helpers ──────────────────────────────────────────────────────────────
@@ -407,11 +577,13 @@ def main():
             for suffix, csv in (("_a", _CSV_A), ("_b", _CSV_B)):
                 t_min, t_max, boundaries = load_full_cycles(csv)
                 n = len(boundaries)
-                st.session_state[f"t_min{suffix}"]            = t_min
-                st.session_state[f"t_max{suffix}"]            = t_max
+                t_min_s = float(np.floor(t_min * 10) / 10)
+                t_max_s = float(np.ceil(t_max * 10) / 10)
+                st.session_state[f"t_min{suffix}"]            = t_min_s
+                st.session_state[f"t_max{suffix}"]            = t_max_s
                 st.session_state[f"n_cycles{suffix}"]         = n
                 st.session_state[f"cycle_boundaries{suffix}"] = boundaries
-                st.session_state[f"time_range{suffix}"]       = (t_min, t_max)
+                st.session_state[f"time_range{suffix}"]       = (t_min_s, t_max_s)
                 st.session_state[f"cycle_range{suffix}"]      = (1, max(n, 1))
             st.session_state.messages_compare   = []
             st.session_state.compare_initialized = True
@@ -489,14 +661,14 @@ def main():
         st.markdown("**Session A — sample_br_1**")
         st.plotly_chart(
             _build_vel_chart(t_full_a, vel_full_a, accel_full_a, t_start_a, t_end_a,
-                             cycles_a, bounds_a, show_accel=False, show_labels=not simple),
+                             cycles_a, bounds_a, show_accel=False),
             use_container_width=True)
         st.caption("Click and drag to zoom. Double-click to reset.")
 
         st.markdown("**Session B — sample_br_2**")
         st.plotly_chart(
             _build_vel_chart(t_full_b, vel_full_b, accel_full_b, t_start_b, t_end_b,
-                             cycles_b, bounds_b, show_accel=False, show_labels=not simple),
+                             cycles_b, bounds_b, show_accel=False),
             use_container_width=True)
         st.caption("Click and drag to zoom. Double-click to reset.")
 
@@ -561,11 +733,13 @@ def main():
         if file_changed or slider_gone:
             t_min, t_max, boundaries = load_full_cycles(str(selected))
             n = len(boundaries)
+            t_min_s = float(np.floor(t_min * 10) / 10)
+            t_max_s = float(np.ceil(t_max * 10) / 10)
             st.session_state.update({
                 "current_file":     str(selected),
                 "cycle_boundaries": boundaries,
-                "t_min": t_min, "t_max": t_max, "n_cycles": n,
-                "time_range":  (t_min, t_max),
+                "t_min": t_min_s, "t_max": t_max_s, "n_cycles": n,
+                "time_range":  (t_min_s, t_max_s),
                 "cycle_range": (1, max(n, 1)),
             })
             if file_changed:
@@ -596,6 +770,10 @@ def main():
             str(selected), t_start, t_end)
         cycles  = result["cycles"]
         session = result["session"]
+        st.session_state["_debug_freq"] = {
+            "stroke_rate_spm": session.get("stroke_rate_spm", 0),
+            "n_cycles":        len(cycles),
+        }
         full_boundaries = st.session_state.cycle_boundaries
 
         for c in cycles:
@@ -603,14 +781,9 @@ def main():
                                           full_boundaries) or None
 
         st.title(f"Session: {selected.stem}")
-
-        if simple:
-            st.info(
-                "**How to use:** Select your session from the sidebar. "
-                "The chart shows your speed over time — each numbered peak is one stroke. "
-                "Use the analysis window below to zoom in on any section, "
-                "then ask your coach a question."
-            )
+        if dbg := st.session_state.get("_debug_freq"):
+            st.caption(f"DEBUG — SPM: {dbg['stroke_rate_spm']:.1f}  |  "
+                       f"strokes detected: {dbg['n_cycles']}")
 
         with st.expander("Adjust analysis window", expanded=False):
             if simple:
@@ -627,11 +800,13 @@ def main():
         st.plotly_chart(
             _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end,
                              cycles, full_boundaries,
-                             show_accel=not simple, show_labels=not simple),
+                             show_accel=not simple),
             use_container_width=True)
         st.caption("Click and drag on the chart to zoom in. Double-click to reset.")
 
-        _build_stats_table(session, simple=simple)
+        _render_question_cards(session, cycles)
+        if not simple:
+            _build_stats_table(session, simple=False)
 
         st.divider()
         st.subheader("Coach Chat")
