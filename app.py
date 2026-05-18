@@ -31,7 +31,7 @@ if not _API_KEY:
     except Exception:
         pass
 
-st.set_page_config(layout="centered", page_title="SwimCoach")
+st.set_page_config(layout="centered", page_title="Swimnetics")
 
 # ── Color palette ────────────────────────────────────────────────────────────
 _C_STEADY  = "#4c9be8"   # used in per-cycle line charts
@@ -556,7 +556,7 @@ def _coaching_stream_multi(system_prompt: str, messages: list):
 
 # ── Main app ──────────────────────────────────────────────────────────────────
 def main():
-    st.sidebar.title("SwimCoach")
+    st.sidebar.title("Swimnetics")
     compare_mode = st.sidebar.checkbox("Compare sessions", key="compare_mode")
 
     # ── Mode toggle (shared across both modes) ────────────────────────────────

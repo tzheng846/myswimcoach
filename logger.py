@@ -11,12 +11,15 @@ Usage:
     python logger.py --port /dev/tty.usbmodem14101  # Mac
 
 Press Ctrl+C to stop recording.
+Press 's' during recording to stamp a sync marker (for camera alignment).
+  → writes raw/sync_<label>_<datetime>.txt  (one line per marker: index,timestamp_us)
 """
 
 import serial
 import serial.tools.list_ports
 import csv
 import argparse
+import msvcrt
 from datetime import datetime
 from pathlib import Path
 
@@ -48,13 +51,14 @@ def main():
     if not session_label:
         session_label = "session"
 
-    filename = f"swim_{session_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    out_path = Path("raw") / filename
+    stem = f"{session_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    out_path = Path("raw") / f"swim_{stem}.csv"
+    sync_path = Path("raw") / f"sync_{stem}.txt"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Port:   {port} @ {args.baud} baud")
     print(f"Output: {out_path}")
-    print("Press Ctrl+C to stop.\n")
+    print("Press 's' to stamp a sync marker. Press Ctrl+C to stop.\n")
 
     with serial.Serial(port, args.baud, timeout=1) as ser, \
          open(out_path, "w", newline="") as f:
@@ -63,8 +67,26 @@ def main():
         writer.writerow(["timestamp_us", "angle_counts", "magnet_ok"])
 
         row_count = 0
+        sync_count = 0
+        last_timestamp_us = None
+        sync_file = None
+
         try:
             while True:
+                # Non-blocking sync keypress check
+                if msvcrt.kbhit():
+                    key = msvcrt.getch()
+                    if key == b's':
+                        if last_timestamp_us is not None:
+                            if sync_file is None:
+                                sync_file = open(sync_path, "w")
+                            sync_file.write(f"{sync_count},{last_timestamp_us}\n")
+                            sync_file.flush()
+                            print(f"\n[SYNC #{sync_count} @ {last_timestamp_us} us]")
+                            sync_count += 1
+                        else:
+                            print("\n[SYNC ignored — no data yet]")
+
                 line = ser.readline().decode("utf-8", errors="replace").strip()
                 if not line or line.startswith("#"):
                     print(line)          # pass comments through to terminal
@@ -73,12 +95,17 @@ def main():
                 parts = line.split(",")
                 if len(parts) == 3:
                     writer.writerow(parts)
+                    last_timestamp_us = parts[0]
                     row_count += 1
                     if row_count % 50 == 0:
                         print(f"  {row_count} samples logged...", end="\r")
 
         except KeyboardInterrupt:
+            if sync_file:
+                sync_file.close()
             print(f"\nStopped. {row_count} rows saved to {out_path}")
+            if sync_count:
+                print(f"Sync markers: {sync_count} → {sync_path}")
 
 
 if __name__ == "__main__":

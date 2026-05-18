@@ -1,4 +1,4 @@
-# myswimcoach
+# Swimnetics
 
 Biomechanical swim coaching from an AS5600 magnetic rotary encoder attached to a tethered swim wheel. Extracts stroke metrics and delivers AI coaching feedback via Claude.
 
