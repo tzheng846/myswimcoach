@@ -5,3 +5,6 @@ plotly
 matplotlib
 anthropic
 streamlit
+fastapi
+uvicorn[standard]
+python-multipart
