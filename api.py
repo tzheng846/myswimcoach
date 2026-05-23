@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 import numpy as np
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import Client, create_client
 
@@ -90,8 +90,8 @@ def health():
 async def process_session(
     request: Request,
     file: UploadFile = File(...),
-    athlete_id: Optional[str] = Form(None),
-    head_waist_m: float = Form(0.0),
+    athlete_id: Optional[str] = Query(None),
+    head_waist_m: float = Query(0.0),
     _auth=Depends(require_auth),
 ):
     raw_path = None
