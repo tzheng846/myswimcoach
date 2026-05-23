@@ -109,6 +109,105 @@ def segment_cycles_trough(t, vel):
 
 
 
+def detect_initial_phase(t, vel, baseline_end_idx):
+    """
+    Identify dive surge and underwater pulldown before cyclic breaststroke begins.
+
+    Looks for the first deep velocity trough after baseline_end — that trough
+    marks the end of the initial phase.  Prominent peaks before that trough
+    are classified as dive surge (first peak) and pulldown (last peak).
+
+    Returns dict:
+        initial_phase_end_idx  – index where cyclic stroke segmentation starts
+        dive_detected          – True if a dive surge peak was found
+        dive_duration_s        – time from baseline_end to dive peak, or None
+        pulldown_detected      – True if an underwater pulldown peak was found
+        pulldown_peak_vel_ms   – velocity at pulldown peak, or None
+        pulldown_duration_s    – time from pulldown peak to initial_phase_end, or None
+    """
+    _default = {
+        "initial_phase_end_idx": baseline_end_idx,
+        "dive_detected":         False,
+        "dive_duration_s":       None,
+        "pulldown_detected":     False,
+        "pulldown_peak_vel_ms":  None,
+        "pulldown_duration_s":   None,
+    }
+    try:
+        fs = _compute_fs(t)
+        search_samples = min(len(vel) - baseline_end_idx, int(15 * fs))
+        if search_samples < 5:
+            return _default
+
+        vel_search = vel[baseline_end_idx : baseline_end_idx + search_samples]
+        v95 = float(np.percentile(np.abs(vel_search), 95))
+        if v95 < 0.01:
+            return _default
+
+        # First deep trough = end of initial phase
+        min_dist = max(1, int(0.5 * fs))
+        troughs, _ = find_peaks(-vel_search, height=-0.20 * v95, distance=min_dist)
+        if len(troughs) == 0:
+            return _default
+
+        ip_end_off = int(troughs[0])
+        ip_end_idx = baseline_end_idx + ip_end_off
+
+        # Prominent peaks in the initial window
+        win = vel[baseline_end_idx:ip_end_idx]
+        if len(win) < 2:
+            return {**_default, "initial_phase_end_idx": ip_end_idx}
+
+        peaks, _ = find_peaks(win, prominence=0.15 * v95)
+        out = {**_default, "initial_phase_end_idx": ip_end_idx}
+
+        if len(peaks) == 0:
+            pass  # no detectable peaks in initial window
+        elif len(peaks) == 1:
+            pk_off = int(peaks[0])
+            out["pulldown_detected"]    = True
+            out["pulldown_peak_vel_ms"] = float(win[pk_off])
+            out["pulldown_duration_s"]  = float(t[ip_end_idx] - t[baseline_end_idx + pk_off])
+        else:
+            # First peak = dive surge, last peak = pulldown
+            dive_off = int(peaks[0])
+            pull_off = int(peaks[-1])
+            out["dive_detected"]        = True
+            out["dive_duration_s"]      = float(t[baseline_end_idx + dive_off] - t[baseline_end_idx])
+            out["pulldown_detected"]    = True
+            out["pulldown_peak_vel_ms"] = float(win[pull_off])
+            out["pulldown_duration_s"]  = float(t[ip_end_idx] - t[baseline_end_idx + pull_off])
+
+        return out
+
+    except Exception:
+        return _default
+
+
+def time_to_distance(t, dist, target_m, baseline_end_idx, head_waist_m=0.0):
+    """
+    Elapsed time from baseline_end until the swimmer's head reaches target_m.
+
+    The wheel measures waist position.  Head is head_waist_m ahead of the waist,
+    so the wheel reads (target_m - head_waist_m) when the head crosses target_m.
+
+    Returns float seconds, or None if target is unreachable.
+    """
+    waist_target = target_m - head_waist_m
+    if waist_target <= 0:
+        return None
+
+    dist_from_start = dist[baseline_end_idx:] - dist[baseline_end_idx]
+    if len(dist_from_start) == 0 or dist_from_start[-1] < waist_target:
+        return None
+
+    idx = int(np.searchsorted(dist_from_start, waist_target))
+    if idx >= len(dist_from_start):
+        return None
+
+    return float(t[baseline_end_idx + idx] - t[baseline_end_idx])
+
+
 def extract_cycle_peaks(vel, cycles):
     """
     For each trough-bounded segment, find all prominent peaks in chronological order.
@@ -160,7 +259,7 @@ def extract_cycle_peaks(vel, cycles):
 
 # ── METRICS ──────────────────────────────────────────────────────────────────
 
-def compute_session_metrics(t, vel, dist):
+def compute_session_metrics(t, vel, dist, head_waist_m=0.0):
     """
     Top-level function: run the full breaststroke analysis pipeline.
 
@@ -176,19 +275,24 @@ def compute_session_metrics(t, vel, dist):
     b_end    = phases["baseline_end"]
     swim_end = phases["swim_end"]
 
-    # ── segmentation (trimmed to swim window) ──────────────────────────────
-    t_swim   = t[b_end:swim_end]
-    vel_swim = vel[b_end:swim_end]
+    # ── initial phase detection (dive + pulldown) ──────────────────────────
+    initial_phase = detect_initial_phase(t, vel, b_end)
+    ip_end = initial_phase["initial_phase_end_idx"]
 
-    cycles = segment_cycles_trough(t_swim, vel_swim)
+    # ── segmentation (from initial-phase end to swim_end) ──────────────────
+    t_seg    = t[ip_end:swim_end]
+    vel_seg  = vel[ip_end:swim_end]
+    vel_swim = vel[b_end:swim_end]   # full window for session velocity stats
+
+    cycles = segment_cycles_trough(t_seg, vel_seg)
     if cycles is None:
         cycles = []
 
     # Offset indices so they map back to the full-trace arrays
     for c in cycles:
-        c["start_idx"] += b_end
-        c["end_idx"]   += b_end
-        c["peak_idx"]  += b_end
+        c["start_idx"] += ip_end
+        c["end_idx"]   += ip_end
+        c["peak_idx"]  += ip_end
 
     # Tag cycles as ramp-up or steady based on arm-pull velocity.
     # steady_floor = 50% of the 75th-pct peak velocity across all cycles.
@@ -301,7 +405,7 @@ def compute_session_metrics(t, vel, dist):
                   "pct_cycles_with_kick", "mean_arm_kick_ratio", "mean_arm_kick_delay_s"):
             session[k] = None
 
-    return {"session": session, "cycles": cycles}
+    return {"session": session, "cycles": cycles, "initial_phase": initial_phase}
 
 
 # ── pose integration ─────────────────────────────────────────────────────
