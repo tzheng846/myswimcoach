@@ -163,6 +163,7 @@ async def process_session(
                 pass
 
             # Insert full session row
+            session_save_error = None
             try:
                 session_row = {
                     "athlete_id":       athlete_id,
@@ -173,18 +174,22 @@ async def process_session(
                     "raw_csv_path":     storage_path,
                     "upload_status":    "complete",
                 }
-                sb_admin.table("sessions").insert(session_row).execute()
-            except Exception:
-                pass  # non-fatal — results still returned to client
+                resp = sb_admin.table("sessions").insert(session_row).execute()
+                if not resp.data:
+                    session_save_error = "insert returned no data"
+            except Exception as e:
+                session_save_error = str(e)
 
         return {
-            "session":       _clean(result["session"]),
-            "cycles":        _clean(result["cycles"]),
-            "initial_phase": _clean(result.get("initial_phase", {})),
-            "time":          _clean(t_dec.tolist()),
-            "velocity":      _clean(vel.tolist()),
-            "distance":      _clean(dist_dec.tolist()),
-            "raw_csv_path":  storage_path,
+            "session":            _clean(result["session"]),
+            "cycles":             _clean(result["cycles"]),
+            "initial_phase":      _clean(result.get("initial_phase", {})),
+            "time":               _clean(t_dec.tolist()),
+            "velocity":           _clean(vel.tolist()),
+            "distance":           _clean(dist_dec.tolist()),
+            "raw_csv_path":       storage_path,
+            "athlete_id_received": athlete_id,
+            "session_save_error": session_save_error if (sb_admin and athlete_id) else None,
         }
 
     except Exception as e:
