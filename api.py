@@ -131,54 +131,55 @@ async def process_session(
         result = m.compute_session_metrics(t_dec, vel, dist_dec, head_waist_m=head_waist_m)
 
         # ── Supabase storage + session save ───────────────────────────────
+        session_save_error = None
         storage_path = None
         sb_admin = _get_supabase_admin()
 
-        if sb_admin and athlete_id:
-            timestamp = int(time.time())
-            storage_path = f"{athlete_id}/{timestamp}.csv"
+        if athlete_id:
+            if not sb_admin:
+                session_save_error = "Cloud storage not configured on server"
+            else:
+                timestamp = int(time.time())
+                storage_path = f"{athlete_id}/{timestamp}.csv"
 
-            # Upload raw CSV to Supabase Storage
-            try:
-                sb_admin.storage.from_("raw-csvs").upload(
-                    path=storage_path,
-                    file=raw_bytes,
-                    file_options={"content-type": "text/csv"},
-                )
-            except Exception:
-                storage_path = None  # non-fatal — proceed without storage
+                try:
+                    sb_admin.storage.from_("raw-csvs").upload(
+                        path=storage_path,
+                        file=raw_bytes,
+                        file_options={"content-type": "text/csv"},
+                    )
+                except Exception as upload_exc:
+                    storage_path = None  # non-fatal — session row still saved
+                    session_save_error = f"Storage upload failed: {upload_exc}"
 
-            # Look up coaches.id from auth.users.id
-            coach_row_id = None
-            try:
-                coach_resp = (
-                    sb_admin.table("coaches")
-                    .select("id")
-                    .eq("user_id", request.state.user_id)
-                    .single()
-                    .execute()
-                )
-                coach_row_id = coach_resp.data["id"] if coach_resp.data else None
-            except Exception:
-                pass
+                coach_row_id = None
+                try:
+                    coach_resp = (
+                        sb_admin.table("coaches")
+                        .select("id")
+                        .eq("user_id", request.state.user_id)
+                        .single()
+                        .execute()
+                    )
+                    coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+                except Exception:
+                    pass
 
-            # Insert full session row
-            session_save_error = None
-            try:
-                session_row = {
-                    "athlete_id":       athlete_id,
-                    "coach_id":         coach_row_id,
-                    "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {})}),
-                    "velocity_profile": _clean(vel.tolist()),
-                    "distance_profile": _clean(dist_dec.tolist()),
-                    "raw_csv_path":     storage_path,
-                    "upload_status":    "complete",
-                }
-                resp = sb_admin.table("sessions").insert(session_row).execute()
-                if not resp.data:
-                    session_save_error = "insert returned no data"
-            except Exception as e:
-                session_save_error = str(e)
+                try:
+                    session_row = {
+                        "athlete_id":       athlete_id,
+                        "coach_id":         coach_row_id,
+                        "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {})}),
+                        "velocity_profile": _clean(vel.tolist()),
+                        "distance_profile": _clean(dist_dec.tolist()),
+                        "raw_csv_path":     storage_path,
+                        "upload_status":    "complete",
+                    }
+                    sb_admin.table("sessions").insert(session_row).execute()
+                    if not (session_save_error and "Storage upload" in session_save_error):
+                        session_save_error = None  # insert succeeded; clear any storage error
+                except Exception as e:
+                    session_save_error = str(e)
 
         return {
             "session":            _clean(result["session"]),
@@ -189,7 +190,7 @@ async def process_session(
             "distance":           _clean(dist_dec.tolist()),
             "raw_csv_path":       storage_path,
             "athlete_id_received": athlete_id,
-            "session_save_error": session_save_error if (sb_admin and athlete_id) else None,
+            "session_save_error": session_save_error,
         }
 
     except Exception as e:
