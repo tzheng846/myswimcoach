@@ -24,3 +24,9 @@
 /as5600_logger_ble
 /Aerial
 /.paul
+
+# landing/ is a web project — un-ignore the file types the rules above
+# would otherwise swallow repo-wide (*.html, *.txt, *.md)
+!/landing/**/*.html
+!/landing/**/*.txt
+!/landing/**/*.md

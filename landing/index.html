@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Biomechanical swim coaching from a tethered AS5600 magnetic encoder wheel. Stroke-level metrics delivered poolside in seconds — no laptop required.">
+  <title>Swimnetics — Biomechanical Swim Coaching</title>
+  <!--
+    Placeholder landing page — meant to go live on swimnetics.com while the
+    real, AI-designed page is being built. Two things to change before launch:
+      1. Replace the mailto address below with a real, monitored inbox
+         (hello@swimnetics.com won't receive mail until email hosting is set up
+         for the domain — that's a separate step from web hosting).
+      2. Swap this whole file out once the polished design is ready; no DNS
+         changes are needed to do that.
+  -->
+  <style>
+    :root {
+      --ink: #0b1d2a;
+      --teal: #1f7a8c;
+      --aqua: #bfdbf7;
+      --paper: #f7fbfd;
+      --muted: #5b7184;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 6rem 1.5rem 4rem;
+    }
+    .brand {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: 2.5rem;
+    }
+    h1 {
+      font-size: clamp(2rem, 5vw, 3rem);
+      font-weight: 700;
+      line-height: 1.15;
+      margin-bottom: 1.25rem;
+      max-width: 18ch;
+    }
+    .lede {
+      font-size: 1.15rem;
+      color: var(--muted);
+      max-width: 56ch;
+      margin-bottom: 2.5rem;
+    }
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.25rem;
+      margin-bottom: 2.5rem;
+    }
+    .step {
+      background: white;
+      border: 1px solid #dbe7ee;
+      border-radius: 12px;
+      padding: 1.25rem;
+    }
+    .step .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.75rem;
+      height: 1.75rem;
+      border-radius: 50%;
+      background: var(--aqua);
+      color: var(--ink);
+      font-weight: 700;
+      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+    }
+    .step h3 { font-size: 1rem; margin-bottom: 0.35rem; }
+    .step p { font-size: 0.9rem; color: var(--muted); }
+    .cta {
+      display: inline-block;
+      background: var(--teal);
+      color: white;
+      text-decoration: none;
+      font-weight: 600;
+      padding: 0.85rem 1.75rem;
+      border-radius: 8px;
+      transition: background 0.15s ease;
+    }
+    .cta:hover { background: #18606e; }
+    .note { margin-top: 1rem; font-size: 0.85rem; color: #7991a3; }
+    .footer { margin-top: 5rem; font-size: 0.85rem; color: #8198a8; }
+    @media (max-width: 640px) {
+      .steps { grid-template-columns: 1fr; }
+      .wrap { padding: 4rem 1.25rem 3rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">Swimnetics</div>
+
+    <h1>Stroke-level feedback, delivered poolside — in seconds.</h1>
+
+    <p class="lede">
+      A tethered AS5600 encoder wheel clips to the diving block and rides alongside the swimmer.
+      Record a set from an iPhone, and the pipeline turns raw motion into stroke-level metrics —
+      no laptop, no manual review, no waiting until practice is over.
+    </p>
+
+    <div class="steps">
+      <div class="step">
+        <span class="num">1</span>
+        <h3>Clip it on</h3>
+        <p>Attach the encoder to the block, tether to the swimmer.</p>
+      </div>
+      <div class="step">
+        <span class="num">2</span>
+        <h3>Swim the set</h3>
+        <p>Record from the app — the device handles the rest at ~270 Hz.</p>
+      </div>
+      <div class="step">
+        <span class="num">3</span>
+        <h3>See it instantly</h3>
+        <p>Velocity, stroke rate, fatigue, consistency — back on the phone in seconds.</p>
+      </div>
+    </div>
+
+    <a class="cta" href="mailto:hello@swimnetics.com?subject=Early%20access%20to%20Swimnetics">Get early access</a>
+    <p class="note">We're onboarding a small number of programs first — reach out and we'll be in touch.</p>
+
+    <div class="footer">Swimnetics · Built for swim academies and competitive programs</div>
+  </div>
+</body>
+</html>
