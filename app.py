@@ -17,6 +17,19 @@ import anthropic
 from metrics import compute_session_metrics
 from coach import _build_system_prompt, _build_user_message, MODEL
 
+import threading
+import time
+import struct
+import csv
+import webbrowser
+import unittest.mock
+from datetime import datetime
+
+import vel_acc_extraction
+
+# Thread → UI communication (module-level for thread safety)
+_rec_status: dict = {"samples": 0, "done": False, "error": None}
+
 # Read API key: .env for local dev, st.secrets for Streamlit Cloud
 _API_KEY: str | None = os.environ.get("ANTHROPIC_API_KEY")
 _env_file = Path(__file__).parent / ".env"
@@ -543,20 +556,323 @@ Avoid jargon. Keep your answer to 3-5 sentences.
 
 def _coaching_stream_multi(system_prompt: str, messages: list):
     client = anthropic.Anthropic(api_key=_API_KEY)
-    with client.messages.stream(
-        model=MODEL,
-        max_tokens=2048,
-        system=[{"type": "text", "text": system_prompt,
-                 "cache_control": {"type": "ephemeral"}}],
-        messages=messages,
-    ) as stream:
-        for text in stream.text_stream:
-            yield text
+    try:
+        with client.messages.stream(
+            model=MODEL,
+            max_tokens=2048,
+            system=[{"type": "text", "text": system_prompt,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
+    except anthropic.APIStatusError as e:
+        if e.status_code == 529 or "overloaded" in str(e).lower():
+            yield "The coaching service is busy right now — please try again in a few seconds."
+        else:
+            yield f"Something went wrong ({e.status_code}). Please try again."
+    except anthropic.APIConnectionError:
+        yield "Connection error — check your internet connection and try again."
+
+
+# ── BLE recording helpers ─────────────────────────────────────────────────────
+
+def _ble_scan(timeout_s: float = 5.0) -> list:
+    import asyncio
+    from bleak import BleakScanner
+
+    async def _scan():
+        devices = await BleakScanner.discover(timeout=timeout_s)
+        return [{"name": d.name, "address": d.address} for d in devices if d.name]
+
+    return asyncio.run(_scan())
+
+
+def _recording_thread(address: str, raw_path: str, stop_event: threading.Event) -> None:
+    import asyncio
+    from bleak import BleakClient
+
+    TX_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+    RX_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def _run():
+        try:
+            async with BleakClient(address) as client:
+                with open(raw_path, "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["timestamp_us", "angle_counts", "magnet_ok"])
+
+                    def on_data(_, data: bytearray) -> None:
+                        if len(data) != 14:
+                            return
+                        for i in range(2):
+                            ts, angle, mag = struct.unpack_from("<IHB", bytes(data), i * 7)
+                            writer.writerow([ts, angle, mag])
+                        _rec_status["samples"] += 2
+
+                    await client.start_notify(TX_UUID, on_data)
+                    await client.write_gatt_char(RX_UUID, b"START\n")
+                    while not stop_event.is_set():
+                        if not client.is_connected:
+                            _rec_status["error"] = "BLE device disconnected unexpectedly."
+                            break
+                        await asyncio.sleep(0.2)
+                    try:
+                        await client.write_gatt_char(RX_UUID, b"STOP\n")
+                    except Exception:
+                        pass
+                    try:
+                        await client.stop_notify(TX_UUID)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            _rec_status["error"] = f"BLE error: {exc}"
+        finally:
+            _rec_status["done"] = True
+
+    try:
+        loop.run_until_complete(_run())
+    finally:
+        loop.close()
+
+
+def _run_pipeline(raw_path: str, processed_path: str) -> None:
+    vel_acc_extraction.EXCLUDED_SEGMENTS = []
+    with unittest.mock.patch.object(webbrowser, "open", lambda *a, **kw: None):
+        vel_acc_extraction.process_file(raw_path, processed_path, target_fs_hz=100.0)
+
+
+def _record_view() -> None:
+    if "ble_state" not in st.session_state:
+        st.session_state.ble_state      = "idle"
+        st.session_state.ble_discovered = []
+        st.session_state.ble_selected   = None
+        st.session_state.ble_stop_event = None
+        st.session_state.ble_raw_path   = None
+        st.session_state.ble_label      = ""
+        st.session_state.ble_start_time = None
+
+    st.title("Record Session")
+    state = st.session_state.ble_state
+
+    # ── idle ──────────────────────────────────────────────────────────────────
+    if state == "idle":
+        st.info("Power on the SwimLogger device, then scan to connect.")
+        if st.button("Scan for devices", type="primary"):
+            st.session_state.ble_state = "scanning"
+            st.rerun()
+
+    # ── scanning ──────────────────────────────────────────────────────────────
+    elif state == "scanning":
+        with st.spinner("Scanning for BLE devices (5 s)..."):
+            results = _ble_scan(timeout_s=5.0)
+        st.session_state.ble_discovered = results
+        st.session_state.ble_state = "scan_done"
+        st.rerun()
+
+    # ── scan_done ─────────────────────────────────────────────────────────────
+    elif state == "scan_done":
+        devices = st.session_state.ble_discovered
+        if not devices:
+            st.warning("No BLE devices found. Make sure the device is powered and advertising.")
+            if st.button("Scan again"):
+                st.session_state.ble_state = "scanning"
+                st.rerun()
+        else:
+            st.success(f"Found {len(devices)} device(s).")
+            options = {f"{d['name']} ({d['address']})": d["address"] for d in devices}
+            chosen_label = st.selectbox("Select device", list(options.keys()), key="ble_device_select")
+            st.session_state.ble_selected = options[chosen_label]
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                if st.button("Connect", type="primary"):
+                    st.session_state.ble_state = "connecting"
+                    st.rerun()
+            with col2:
+                if st.button("Scan again"):
+                    st.session_state.ble_state = "scanning"
+                    st.rerun()
+
+    # ── connecting ────────────────────────────────────────────────────────────
+    elif state == "connecting":
+        import asyncio
+        from bleak import BleakClient
+
+        address = st.session_state.ble_selected
+        with st.spinner(f"Connecting to {address}..."):
+            async def _test():
+                async with BleakClient(address) as client:
+                    return client.is_connected
+            try:
+                asyncio.run(_test())
+                _rec_status["samples"] = 0
+                _rec_status["done"]    = False
+                _rec_status["error"]   = None
+                st.session_state.ble_state = "connected"
+            except Exception as exc:
+                st.error(f"Connection failed: {exc}")
+                st.session_state.ble_state = "scan_done"
+        st.rerun()
+
+    # ── connected ─────────────────────────────────────────────────────────────
+    elif state == "connected":
+        address = st.session_state.ble_selected
+        if err := st.session_state.pop("ble_last_error", None):
+            st.error(err)
+        st.success(f"Connected — {address}")
+        label = st.text_input(
+            "Session label (required)",
+            value=st.session_state.ble_label,
+            placeholder="e.g. tony_warmup",
+            key="ble_label_input",
+        )
+        st.session_state.ble_label = label
+        label_ok = bool(label.strip())
+        if not label_ok:
+            st.caption("Enter a label to enable recording.")
+        if st.button("Start Recording", type="primary", disabled=not label_ok):
+            ts_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
+            raw_path = f"raw/swim_{label.strip()}_{ts_str}.csv"
+            Path("raw").mkdir(parents=True, exist_ok=True)
+            _rec_status["samples"] = 0
+            _rec_status["done"]    = False
+            _rec_status["error"]   = None
+            stop_event = threading.Event()
+            st.session_state.ble_stop_event = stop_event
+            st.session_state.ble_raw_path   = raw_path
+            st.session_state.ble_start_time = time.monotonic()
+            threading.Thread(
+                target=_recording_thread,
+                args=(address, raw_path, stop_event),
+                daemon=True,
+            ).start()
+            st.session_state.ble_state = "recording"
+            st.rerun()
+        if st.button("Disconnect"):
+            st.session_state.ble_state = "idle"
+            st.rerun()
+
+    # ── recording ─────────────────────────────────────────────────────────────
+    elif state == "recording":
+        if _rec_status["error"]:
+            st.error(f"Recording stopped: {_rec_status['error']}")
+            st.session_state.ble_state = "connected"
+            st.rerun()
+        if _rec_status["done"]:
+            st.session_state.ble_state = "processing"
+            st.rerun()
+
+        elapsed = time.monotonic() - (st.session_state.ble_start_time or time.monotonic())
+        samples = _rec_status["samples"]
+
+        st.warning("Recording in progress — do not close this tab.")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Samples", f"{samples:,}")
+        with col2:
+            mins, secs = divmod(int(elapsed), 60)
+            st.metric("Elapsed", f"{mins}:{secs:02d}")
+        with col3:
+            st.metric("Rate", f"{samples / elapsed:.0f} Hz" if elapsed > 0 else "— Hz")
+
+        if st.button("Stop Recording", type="primary"):
+            stop_event = st.session_state.ble_stop_event
+            if stop_event:
+                stop_event.set()
+            deadline = time.monotonic() + 2.0
+            while not _rec_status["done"] and time.monotonic() < deadline:
+                time.sleep(0.05)
+            st.session_state.ble_state = "processing"
+            st.rerun()
+
+        time.sleep(1)
+        st.rerun()
+
+    # ── processing ────────────────────────────────────────────────────────────
+    elif state == "processing":
+        raw_path  = st.session_state.ble_raw_path or ""
+        proc_path = f"processed/{Path(raw_path).stem}.csv"
+        Path("processed").mkdir(parents=True, exist_ok=True)
+
+        def _abort(msg: str) -> None:
+            # Delete files and surface error on the "connected" screen
+            for p in (raw_path, proc_path):
+                try:
+                    if p and Path(p).exists():
+                        Path(p).unlink()
+                except OSError:
+                    pass
+            st.session_state.ble_state = "connected"
+            st.session_state.ble_last_error = msg
+            st.rerun()
+
+        # Guard: raw file must exist and contain more than just the header
+        raw_ok = raw_path and Path(raw_path).exists()
+        if raw_ok:
+            with open(raw_path, encoding="utf-8") as _f:
+                raw_ok = sum(1 for _ in _f) > 1
+        if not raw_ok:
+            _abort("No samples recorded — the device sent no data. "
+                   "Check the sensor connection and try again.")
+
+        with st.spinner("Processing recording..."):
+            try:
+                _run_pipeline(raw_path, proc_path)
+            except Exception as exc:
+                _abort(f"Processing failed: {exc}")
+
+        # Validate: must have at least one detected stroke
+        try:
+            _df = pd.read_csv(proc_path)
+            _result = compute_session_metrics(
+                _df["time_s"].values, _df["vel_ms"].values, _df["dist_m"].values)
+            if len(_result["cycles"]) == 0:
+                _abort("Recording processed but no strokes detected. "
+                       "The data may be noise or too short. Files deleted.")
+        except Exception as exc:
+            _abort(f"Validation failed after processing: {exc}")
+
+        st.session_state.current_file = proc_path
+        # Defer mode switch — session_state key bound to a widget can't be
+        # mutated after the widget renders.  We pick it up at the top of
+        # main() on the next run, before st.radio() is instantiated.
+        st.session_state._switch_to_mode = "Simple"
+        st.session_state.ble_active = False
+        for k in ("time_range", "cycle_range", "t_min", "t_max", "n_cycles", "cycle_boundaries"):
+            st.session_state.pop(k, None)
+        st.session_state.ble_state = "idle"
+        st.rerun()
+
+    # ── done (transient — kept for safety) ───────────────────────────────────
+    elif state == "done":
+        st.session_state.ble_state = "idle"
+        st.rerun()
 
 
 # ── Main app ──────────────────────────────────────────────────────────────────
 def main():
     st.sidebar.title("Swimnetics")
+
+    # Apply pending mode switch *before* st.radio renders with key="mode"
+    if "_switch_to_mode" in st.session_state:
+        st.session_state.mode = st.session_state.pop("_switch_to_mode")
+
+    # ── Record view (sidebar entry point) ─────────────────────────────────────
+    if st.session_state.get("ble_active"):
+        if st.sidebar.button("← Back to analysis", use_container_width=True):
+            st.session_state.ble_active = False
+            st.session_state.ble_state  = "idle"
+            st.rerun()
+        _record_view()
+        return
+
+    if st.sidebar.button("● Record new session", use_container_width=True):
+        st.session_state.ble_active = True
+        st.rerun()
+
     compare_mode = st.sidebar.checkbox("Compare sessions", key="compare_mode")
 
     # ── Mode toggle (shared across both modes) ────────────────────────────────
@@ -786,9 +1102,10 @@ def main():
             st.slider("Analysis window (s)",
                 min_value=t_min, max_value=t_max, step=0.1,
                 key="time_range", on_change=_on_time_change)
-            st.slider("Stroke range",
-                min_value=1, max_value=max(n_cycles, 1), step=1,
-                key="cycle_range", on_change=_on_cycle_change)
+            if n_cycles > 1:
+                st.slider("Stroke range",
+                    min_value=1, max_value=n_cycles, step=1,
+                    key="cycle_range", on_change=_on_cycle_change)
 
         st.plotly_chart(
             _build_vel_chart(t_full, vel_full, accel_full, t_start, t_end,

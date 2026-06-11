@@ -1,3 +1,6 @@
+import csv as _csv
+import datetime
+import io as _io
 import math
 import os
 import tempfile
@@ -7,11 +10,17 @@ from typing import Optional
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from supabase import Client, create_client
+import stripe as _stripe
 
-SUPABASE_URL             = os.getenv("SUPABASE_URL", "")
-SUPABASE_ANON_KEY        = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_URL              = os.getenv("SUPABASE_URL", "")
+SUPABASE_ANON_KEY         = os.getenv("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+STRIPE_SECRET_KEY          = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET      = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_STARTER_PRICE_ID    = os.getenv("STRIPE_STARTER_PRICE_ID", "")
+STRIPE_ENTERPRISE_PRICE_ID = os.getenv("STRIPE_ENTERPRISE_PRICE_ID", "")
 
 _supabase: Client | None = None
 _supabase_admin: Client | None = None
@@ -92,53 +101,145 @@ async def process_session(
     file: UploadFile = File(...),
     athlete_id: Optional[str] = Form(None),
     head_waist_m: float = Form(0.0),
+    name: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    stroke_type: Optional[str] = Form(None),
+    device_id: Optional[str] = Form(None),
+    firmware_version: Optional[str] = Form(None),
     _auth=Depends(require_auth),
 ):
     raw_path = None
     raw_bytes = None
     try:
+        raw_bytes = await file.read()
+
+        # ── Magnet dropout fraction ───────────────────────────────────────────
+        _total_rows = 0
+        _dropout_rows = 0
+        try:
+            _reader = _csv.DictReader(_io.StringIO(raw_bytes.decode("utf-8", errors="replace")))
+            for _row in _reader:
+                _total_rows += 1
+                if _row.get("magnet_ok", "1") == "0":
+                    _dropout_rows += 1
+        except Exception:
+            pass
+        magnet_dropout_pct = round(100.0 * _dropout_rows / _total_rows, 1) if _total_rows > 0 else 0.0
+
         # Save upload to temp file
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-            raw_bytes = await file.read()
             tmp.write(raw_bytes)
             raw_path = tmp.name
 
         # ── Signal processing ─────────────────────────────────────────────
         df = vae.load_data(raw_path)
-        _, angle_unwrapped = vae.unwrap_angle(df)
-        dist_m = vae.counts_to_distance(angle_unwrapped, vae.METERS_PER_COUNT)
-        t = df["time_s"].values
-
-        pos_diffs = np.diff(t)
-        pos_diffs = pos_diffs[pos_diffs > 0]
-        if len(pos_diffs) == 0:
-            raise ValueError("No valid timestamps — file may be corrupt")
-        native_fs = 1.0 / np.median(pos_diffs)
-
-        dist_native, _ = vae.interpolate_to_uniform(dist_m, t, native_fs)
-        dist_dec, t_dec, actual_fs = vae.decimate_signal(dist_native, native_fs, 100.0)
-        t_dec = t_dec + t[0]
-
-        vel = np.gradient(dist_dec, 1.0 / actual_fs)
-
-        # Coarse acceleration (5 Hz), interpolated back to full rate
-        vel_coarse, t_coarse, fs_coarse = vae.decimate_signal(vel, actual_fs, 5.0)
-        t_coarse = t_coarse + t[0]
-        accel_coarse = np.gradient(vel_coarse, 1.0 / fs_coarse)
-        accel = np.interp(t_dec, t_coarse, accel_coarse)  # noqa: F841
+        t_dec, dist_dec, vel, _accel, _actual_fs = vae.run_pipeline(df, 100.0)
 
         # ── Metrics ──────────────────────────────────────────────────────
         result = m.compute_session_metrics(t_dec, vel, dist_dec, head_waist_m=head_waist_m)
 
+        # ── Data quality summary ──────────────────────────────────────────────
+        _dq_warnings = []
+        _dq_warnings.append(
+            "Kick metrics (pct_cycles_with_kick, mean_arm_kick_ratio, mean_arm_kick_delay_s) "
+            "are unreliable — LP filter at default cutoff merges arm-pull and kick peaks"
+        )
+        if result["session"].get("implausible_cycle_count", 0) > 0:
+            _dq_warnings.append(
+                f"{result['session']['implausible_cycle_count']} cycle(s) have implausible duration "
+                f"(< 0.5 s or > 4.0 s) — possible segmentation artifact"
+            )
+        if magnet_dropout_pct > 5.0:
+            _dq_warnings.append(
+                f"Magnet signal lost for {magnet_dropout_pct:.1f}% of samples — encoder reliability reduced"
+            )
+
+        data_quality = {
+            "magnet_dropout_pct":      magnet_dropout_pct,
+            "outlier_cycle_count":     result["session"].get("outlier_cycle_count", 0),
+            "implausible_cycle_count": result["session"].get("implausible_cycle_count", 0),
+            "total_cycles_raw":        result["session"].get("total_cycles_raw", 0),
+            "warnings":                _dq_warnings,
+        }
+
         # ── Supabase storage + session save ───────────────────────────────
         session_save_error = None
         storage_path = None
+        session_id_saved = None
         sb_admin = _get_supabase_admin()
 
         if athlete_id:
             if not sb_admin:
                 session_save_error = "Cloud storage not configured on server"
             else:
+                # ── Coach row + limit checks ──────────────────────────────
+                coach = _get_coach_row(
+                    sb_admin, request.state.user_id,
+                    "id, device_limit, monthly_session_limit"
+                )
+                coach_row_id = coach["id"] if coach else None
+
+                if coach:
+                    # Monthly session limit
+                    if coach.get("monthly_session_limit") is not None:
+                        _now = datetime.datetime.utcnow()
+                        _month_start = _now.replace(
+                            day=1, hour=0, minute=0, second=0, microsecond=0
+                        ).isoformat()
+                        try:
+                            _sr = (
+                                sb_admin.table("sessions")
+                                .select("id", count="exact")
+                                .eq("coach_id", coach_row_id)
+                                .gte("created_at", _month_start)
+                                .execute()
+                            )
+                            _session_count = _sr.count or 0
+                        except Exception:
+                            _session_count = 0
+                        if _session_count >= coach["monthly_session_limit"]:
+                            raise HTTPException(
+                                status_code=402,
+                                detail=(
+                                    f"Monthly session limit reached "
+                                    f"({coach['monthly_session_limit']} sessions). "
+                                    "Upgrade your plan to record more."
+                                ),
+                            )
+
+                    # Device limit (only when a new device is presented)
+                    if device_id and coach.get("device_limit") is not None:
+                        try:
+                            _ex = (
+                                sb_admin.table("devices")
+                                .select("chip_id")
+                                .eq("chip_id", device_id)
+                                .eq("coach_id", coach_row_id)
+                                .execute()
+                            )
+                            _is_new_device = not (_ex.data and len(_ex.data) > 0)
+                        except Exception:
+                            _is_new_device = False
+                        if _is_new_device:
+                            try:
+                                _dr = (
+                                    sb_admin.table("devices")
+                                    .select("chip_id", count="exact")
+                                    .eq("coach_id", coach_row_id)
+                                    .execute()
+                                )
+                                _device_count = _dr.count or 0
+                            except Exception:
+                                _device_count = 0
+                            if _device_count >= coach["device_limit"]:
+                                raise HTTPException(
+                                    status_code=402,
+                                    detail=(
+                                        f"Device limit reached ({coach['device_limit']} device(s)). "
+                                        "Upgrade your plan to register more devices."
+                                    ),
+                                )
+
                 timestamp = int(time.time())
                 storage_path = f"{athlete_id}/{timestamp}.csv"
 
@@ -152,36 +253,40 @@ async def process_session(
                     storage_path = None  # non-fatal — session row still saved
                     session_save_error = f"Storage upload failed: {upload_exc}"
 
-                coach_row_id = None
-                try:
-                    coach_resp = (
-                        sb_admin.table("coaches")
-                        .select("id")
-                        .eq("user_id", request.state.user_id)
-                        .single()
-                        .execute()
-                    )
-                    coach_row_id = coach_resp.data["id"] if coach_resp.data else None
-                except Exception:
-                    pass
+                if device_id:
+                    try:
+                        sb_admin.table("devices").upsert({
+                            "chip_id":          device_id,
+                            "coach_id":         coach_row_id,
+                            "firmware_version": firmware_version,
+                            "last_seen_at":     "now()",
+                        }, on_conflict="chip_id").execute()
+                    except Exception:
+                        pass  # non-fatal
 
                 try:
                     session_row = {
                         "athlete_id":       athlete_id,
                         "coach_id":         coach_row_id,
-                        "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {})}),
+                        "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {}), "data_quality": data_quality}),
                         "velocity_profile": _clean(vel.tolist()),
                         "distance_profile": _clean(dist_dec.tolist()),
                         "raw_csv_path":     storage_path,
                         "upload_status":    "complete",
+                        "name":             name,
+                        "notes":            notes,
+                        "stroke_type":      stroke_type,
+                        "device_id":        device_id,
                     }
-                    sb_admin.table("sessions").insert(session_row).execute()
+                    insert_resp = sb_admin.table("sessions").insert(session_row).select("id").execute()
+                    session_id_saved = insert_resp.data[0]["id"] if insert_resp.data else None
                     if not (session_save_error and "Storage upload" in session_save_error):
                         session_save_error = None  # insert succeeded; clear any storage error
                 except Exception as e:
                     session_save_error = str(e)
 
         return {
+            "session_id":         session_id_saved,
             "session":            _clean(result["session"]),
             "cycles":             _clean(result["cycles"]),
             "initial_phase":      _clean(result.get("initial_phase", {})),
@@ -191,11 +296,628 @@ async def process_session(
             "raw_csv_path":       storage_path,
             "athlete_id_received": athlete_id,
             "session_save_error": session_save_error,
+            "data_quality":       _clean(data_quality),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
         if raw_path and os.path.exists(raw_path):
             os.unlink(raw_path)
+
+
+@app.get("/sessions/{session_id}/export")
+async def export_session_csv(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Return a session's 100 Hz signal data as a downloadable CSV.
+
+    Columns: time_s, velocity_ms, distance_m, cycle_id
+    cycle_id is 1-based (0 = not inside a detected stroke cycle).
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    # Resolve coach row so we can enforce ownership
+    coach_row_id = None
+    try:
+        coach_resp = (
+            sb_admin.table("coaches")
+            .select("id")
+            .eq("user_id", request.state.user_id)
+            .single()
+            .execute()
+        )
+        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+    except Exception:
+        pass
+
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    # Fetch session — coach_id filter enforces ownership
+    try:
+        resp = (
+            sb_admin.table("sessions")
+            .select("velocity_profile, distance_profile, metrics_json, created_at")
+            .eq("id", session_id)
+            .eq("coach_id", coach_row_id)
+            .single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    data      = resp.data
+    vel       = data.get("velocity_profile") or []
+    dist      = data.get("distance_profile") or []
+    mj        = data.get("metrics_json") or {}
+    n         = len(vel)
+
+    if n == 0:
+        raise HTTPException(status_code=422, detail="Session has no signal data")
+
+    # Build cycle_id array: index → 1-based cycle number (0 = not in any cycle)
+    cycles    = mj.get("cycles") or []
+    cycle_ids = [0] * n
+    for cycle_num, cycle in enumerate(cycles, start=1):
+        s = cycle.get("start_idx", 0)
+        e = cycle.get("end_idx", 0)
+        for i in range(max(0, s), min(e + 1, n)):
+            cycle_ids[i] = cycle_num
+
+    # Write CSV into memory
+    buf = _io.StringIO()
+    w   = _csv.writer(buf)
+    w.writerow(["time_s", "velocity_ms", "distance_m", "cycle_id"])
+    for i in range(n):
+        v = vel[i]
+        d = dist[i]
+        w.writerow([
+            round(i / 100.0, 4),
+            round(float(v), 6) if v is not None else "",
+            round(float(d), 6) if d is not None else "",
+            cycle_ids[i],
+        ])
+
+    csv_bytes = buf.getvalue().encode("utf-8")
+    date_str  = (data.get("created_at") or "")[:10].replace("-", "")
+    filename  = f"session_{date_str}_{session_id[:8]}.csv"
+
+    return StreamingResponse(
+        _io.BytesIO(csv_bytes),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.patch("/sessions/{session_id}")
+async def update_session(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Update mutable session metadata: name, notes, is_starred.
+    Only fields present in the request body are updated.
+    Coach ownership is enforced via coach_id on the sessions row.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    allowed = {"name", "notes", "is_starred"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    coach_row_id = None
+    try:
+        coach_resp = (
+            sb_admin.table("coaches")
+            .select("id")
+            .eq("user_id", request.state.user_id)
+            .single()
+            .execute()
+        )
+        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+    except Exception:
+        pass
+
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    try:
+        sb_admin.table("sessions").update(updates).eq("id", session_id).eq("coach_id", coach_row_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"ok": True}
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Hard-delete a session. Coach ownership enforced via coach_id.
+    Sessions with null coach_id (legacy) cannot be deleted via this endpoint.
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    coach_row_id = None
+    try:
+        coach_resp = (
+            sb_admin.table("coaches")
+            .select("id")
+            .eq("user_id", request.state.user_id)
+            .single()
+            .execute()
+        )
+        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+    except Exception:
+        pass
+
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    try:
+        sb_admin.table("sessions").delete().eq("id", session_id).eq("coach_id", coach_row_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"ok": True}
+
+
+@app.get("/reports/{token}")
+def get_report(token: str):
+    """Public (no-auth) parent report payload, looked up by shareable token.
+
+    Parents have no accounts — the token is the only credential, and RLS blocks
+    anon reads, so this endpoint assembles the payload with the service role.
+    Returns per-session scalar metrics only (no velocity/distance profiles).
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    try:
+        report_resp = (
+            sb_admin.table("reports")
+            .select("athlete_id, config_json, created_at")
+            .eq("token", token)
+            .single()
+            .execute()
+        )
+        report = report_resp.data
+    except Exception:
+        report = None
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    config       = report.get("config_json") or {}
+    metric_keys  = config.get("metrics") or []
+    range_start  = config.get("start")
+    range_end    = config.get("end")
+
+    try:
+        athlete_resp = (
+            sb_admin.table("athletes")
+            .select("name, parent_name")
+            .eq("id", report["athlete_id"])
+            .single()
+            .execute()
+        )
+        athlete = athlete_resp.data or {}
+    except Exception:
+        athlete = {}
+
+    try:
+        q = (
+            sb_admin.table("sessions")
+            .select("created_at, metrics_json")
+            .eq("athlete_id", report["athlete_id"])
+        )
+        if range_start:
+            q = q.gte("created_at", range_start)
+        if range_end:
+            q = q.lte("created_at", range_end)
+        sessions_resp = q.order("created_at", desc=False).execute()
+        session_rows = sessions_resp.data or []
+    except Exception:
+        session_rows = []
+
+    sessions = []
+    for row in session_rows:
+        session_metrics = (row.get("metrics_json") or {}).get("session")
+        if not session_metrics:
+            continue
+        sessions.append({
+            "date":   row.get("created_at"),
+            "values": {k: session_metrics.get(k) for k in metric_keys if k in session_metrics},
+        })
+
+    return _clean({
+        "athlete":  {"name": athlete.get("name"), "parent_name": athlete.get("parent_name")},
+        "period":   {"start": range_start, "end": range_end},
+        "message":  config.get("message"),
+        "metrics":  metric_keys,
+        "sessions": sessions,
+        "generated_at": report.get("created_at"),
+    })
+
+
+@app.patch("/devices/{chip_id}")
+async def rename_device(chip_id: str, request: Request, _auth=Depends(require_auth)):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    coach_row_id = None
+    try:
+        coach_resp = (
+            sb_admin.table("coaches")
+            .select("id")
+            .eq("user_id", request.state.user_id)
+            .single()
+            .execute()
+        )
+        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+    except Exception:
+        pass
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+    try:
+        sb_admin.table("devices").update({"name": name}).eq("chip_id", chip_id).eq("coach_id", coach_row_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"ok": True}
+
+
+@app.delete("/devices/{chip_id}")
+async def delete_device(chip_id: str, request: Request, _auth=Depends(require_auth)):
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    coach_row_id = None
+    try:
+        coach_resp = (
+            sb_admin.table("coaches")
+            .select("id")
+            .eq("user_id", request.state.user_id)
+            .single()
+            .execute()
+        )
+        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+    except Exception:
+        pass
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+    try:
+        sb_admin.table("devices").delete().eq("chip_id", chip_id).eq("coach_id", coach_row_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"ok": True}
+
+
+@app.get("/devices")
+async def list_devices(request: Request, _auth=Depends(require_auth)):
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    coach_row_id = None
+    try:
+        coach_resp = (
+            sb_admin.table("coaches")
+            .select("id")
+            .eq("user_id", request.state.user_id)
+            .single()
+            .execute()
+        )
+        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+    except Exception:
+        pass
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+    try:
+        resp = (
+            sb_admin.table("devices")
+            .select("chip_id, name, firmware_version, last_seen_at")
+            .eq("coach_id", coach_row_id)
+            .order("last_seen_at", desc=True)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    # Enrich with session counts — non-fatal if this query fails
+    count_map = {}
+    try:
+        counts_resp = (
+            sb_admin.table("sessions")
+            .select("device_id")
+            .eq("coach_id", coach_row_id)
+            .execute()
+        )
+        for row in counts_resp.data or []:
+            did = row.get("device_id")
+            if did:
+                count_map[did] = count_map.get(did, 0) + 1
+    except Exception:
+        pass  # session_count defaults to 0 per device
+    devices_with_counts = [
+        {**d, "session_count": count_map.get(d["chip_id"], 0)}
+        for d in (resp.data or [])
+    ]
+    return {"devices": devices_with_counts}
+
+
+@app.post("/athletes")
+async def create_athlete(request: Request, _auth=Depends(require_auth)):
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    coach = _get_coach_row(sb_admin, request.state.user_id, "id, team_id, athlete_limit")
+    if not coach:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    coach_id   = coach["id"]
+    team_id    = coach["team_id"]
+    limit      = coach.get("athlete_limit")
+    if limit is not None:
+        try:
+            r = (
+                sb_admin.table("athletes")
+                .select("id", count="exact")
+                .eq("coach_id", coach_id)
+                .execute()
+            )
+            count = r.count or 0
+        except Exception:
+            count = 0
+        if count >= limit:
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    f"Athlete limit reached ({limit} athletes). "
+                    "Upgrade your plan to add more."
+                ),
+            )
+
+    hw          = body.get("head_waist_m")
+    stroke_type = (body.get("stroke_type") or "breaststroke")
+    try:
+        resp = (
+            sb_admin.table("athletes")
+            .insert({
+                "team_id":      team_id,
+                "coach_id":     coach_id,
+                "name":         name,
+                "stroke_type":  stroke_type,
+                "head_waist_m": hw,
+            })
+            .select("id, name, stroke_type, head_waist_m")
+            .single()
+            .execute()
+        )
+        return resp.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Billing ───────────────────────────────────────────────────────────────────
+
+_TIER_LIMITS = {
+    "free":       {"athlete_limit": 3,   "device_limit": 1,  "monthly_session_limit": 20},
+    "starter":    {"athlete_limit": 20,  "device_limit": 1,  "monthly_session_limit": None},
+    "enterprise": {"athlete_limit": 500, "device_limit": 10, "monthly_session_limit": None},
+}
+
+
+def _get_coach_row(sb_admin, user_id: str, fields: str = "id"):
+    try:
+        resp = (
+            sb_admin.table("coaches")
+            .select(fields)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        return resp.data
+    except Exception:
+        return None
+
+
+@app.post("/billing/checkout-session")
+async def create_checkout_session(request: Request, _auth=Depends(require_auth)):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Billing not configured")
+    _stripe.api_key = STRIPE_SECRET_KEY
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    tier = body.get("tier", "")
+    if tier == "starter":
+        price_id = STRIPE_STARTER_PRICE_ID
+    elif tier == "enterprise":
+        price_id = STRIPE_ENTERPRISE_PRICE_ID
+    else:
+        raise HTTPException(status_code=400, detail="tier must be 'starter' or 'enterprise'")
+    if not price_id:
+        raise HTTPException(status_code=503, detail="Price not configured for that tier")
+
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    coach = _get_coach_row(sb_admin, request.state.user_id, "id, stripe_customer_id")
+    if not coach:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    stripe_customer_id = coach.get("stripe_customer_id")
+    if not stripe_customer_id:
+        customer = _stripe.Customer.create(metadata={"coach_id": str(coach["id"])})
+        stripe_customer_id = customer.id
+        sb_admin.table("coaches").update({"stripe_customer_id": stripe_customer_id}).eq("id", coach["id"]).execute()
+
+    session = _stripe.checkout.Session.create(
+        customer=stripe_customer_id,
+        line_items=[{"price": price_id, "quantity": 1}],
+        mode="subscription",
+        success_url="https://swimnetics-api-production.up.railway.app/billing/complete",
+        cancel_url="https://swimnetics-api-production.up.railway.app/billing/complete",
+    )
+    return {"url": session.url}
+
+
+@app.post("/billing/portal-session")
+async def create_portal_session(request: Request, _auth=Depends(require_auth)):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Billing not configured")
+    _stripe.api_key = STRIPE_SECRET_KEY
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    coach = _get_coach_row(sb_admin, request.state.user_id, "stripe_customer_id")
+    if not coach or not coach.get("stripe_customer_id"):
+        raise HTTPException(status_code=400, detail="No billing account found. Subscribe first.")
+    session = _stripe.billing_portal.Session.create(
+        customer=coach["stripe_customer_id"],
+        return_url="https://swimnetics-api-production.up.railway.app/billing/complete",
+    )
+    return {"url": session.url}
+
+
+@app.get("/billing/complete")
+def billing_complete():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("<h2>Payment processed. Return to the Swimnetics app.</h2>")
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request):
+    if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Billing not configured")
+    _stripe.api_key = STRIPE_SECRET_KEY
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    try:
+        event = _stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+    except _stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        return {"received": True}
+
+    event_type = event["type"]
+    if event_type in ("customer.subscription.created", "customer.subscription.updated"):
+        sub = event["data"]["object"]
+        customer_id = sub["customer"]
+        status = sub["status"]
+        price_id = sub["items"]["data"][0]["price"]["id"] if sub["items"]["data"] else ""
+        if price_id == STRIPE_STARTER_PRICE_ID:
+            tier = "starter"
+        elif price_id == STRIPE_ENTERPRISE_PRICE_ID:
+            tier = "enterprise"
+        else:
+            tier = "free"
+        limits = _TIER_LIMITS[tier]
+        try:
+            sb_admin.table("coaches").update({
+                "subscription_tier": tier,
+                "subscription_status": status,
+                **limits,
+            }).eq("stripe_customer_id", customer_id).execute()
+        except Exception:
+            pass
+
+    elif event_type == "customer.subscription.deleted":
+        sub = event["data"]["object"]
+        customer_id = sub["customer"]
+        limits = _TIER_LIMITS["free"]
+        try:
+            sb_admin.table("coaches").update({
+                "subscription_tier": "free",
+                "subscription_status": "active",
+                **limits,
+            }).eq("stripe_customer_id", customer_id).execute()
+        except Exception:
+            pass
+
+    return {"received": True}
+
+
+@app.get("/billing/status")
+async def billing_status(request: Request, _auth=Depends(require_auth)):
+    import datetime
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    coach = _get_coach_row(
+        sb_admin, request.state.user_id,
+        "id, subscription_tier, subscription_status, athlete_limit, device_limit, monthly_session_limit"
+    )
+    if not coach:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    coach_id = coach["id"]
+    now = datetime.datetime.utcnow()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    athlete_count, device_count, session_count = 0, 0, 0
+    try:
+        r = sb_admin.table("athletes").select("id", count="exact").eq("coach_id", coach_id).execute()
+        athlete_count = r.count or 0
+    except Exception:
+        pass
+    try:
+        r = sb_admin.table("devices").select("chip_id", count="exact").eq("coach_id", coach_id).execute()
+        device_count = r.count or 0
+    except Exception:
+        pass
+    try:
+        r = sb_admin.table("sessions").select("id", count="exact").eq("coach_id", coach_id).gte("created_at", month_start).execute()
+        session_count = r.count or 0
+    except Exception:
+        pass
+
+    return {
+        "tier":                    coach["subscription_tier"],
+        "subscription_status":     coach["subscription_status"],
+        "athlete_limit":           coach["athlete_limit"],
+        "device_limit":            coach["device_limit"],
+        "monthly_session_limit":   coach["monthly_session_limit"],
+        "athlete_count":           athlete_count,
+        "device_count":            device_count,
+        "session_count_this_month": session_count,
+    }

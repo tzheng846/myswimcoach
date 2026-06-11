@@ -40,6 +40,13 @@ def load_data(input_file):
     df = pd.read_csv(input_file)
     print(f"Loaded {len(df)} rows")
     print(df.head())
+    required = {"timestamp_us", "angle_counts", "magnet_ok"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"{input_file} is missing columns {missing}. "
+            f"Expected a raw encoder CSV — did you point at the processed/ folder by mistake?"
+        )
     n_bad = (df["magnet_ok"] == 0).sum()
     if n_bad > 0:
         print(f"Dropping {n_bad} rows with magnet_ok=0")
@@ -90,6 +97,47 @@ def decimate_signal(dist_native, native_fs, target_fs):
     actual_fs = native_fs / factor
     t_dec = np.arange(len(dist_dec)) / actual_fs
     return dist_dec, t_dec, actual_fs
+
+
+def run_pipeline(df, target_fs_hz=100.0):
+    """
+    Core signal processing: loaded DataFrame → arrays at ~target_fs_hz.
+
+    No I/O, no plots, no excluded-segment masking (caller's responsibility).
+    Any change to the signal processing pipeline belongs here so that both
+    the CLI (process_file) and the API (api.py) stay in sync automatically.
+
+    Returns (t_dec, dist_dec, vel, accel, actual_fs).
+    """
+    _, angle_unwrapped_counts = unwrap_angle(df)
+    dist_m = counts_to_distance(angle_unwrapped_counts, METERS_PER_COUNT)
+    t = df["time_s"].values
+
+    pos_diffs = np.diff(t)
+    pos_diffs = pos_diffs[pos_diffs > 0]
+    if len(pos_diffs) == 0:
+        raise ValueError("No positive timestamp diffs — file may be corrupt")
+    native_fs = 1.0 / np.median(pos_diffs)
+
+    duration_s = float(t[-1] - t[0])
+    if duration_s < 2.0:
+        raise ValueError(
+            f"Recording too short ({duration_s:.2f} s) — need at least 2 s to decimate"
+        )
+
+    dist_native, _ = interpolate_to_uniform(dist_m, t, native_fs)
+    dist_dec, t_dec, actual_fs = decimate_signal(dist_native, native_fs, target_fs_hz)
+    t_dec = t_dec + t[0]
+
+    vel = np.gradient(dist_dec, 1.0 / actual_fs)
+    vel = np.maximum(vel, 0.0)   # swimmer always moves forward; negatives are filter/encoder artefacts
+
+    vel_for_accel, t_for_accel, fs_for_accel = decimate_signal(vel, actual_fs, 5.0)
+    t_for_accel = t_for_accel + t[0]
+    accel_coarse = np.gradient(vel_for_accel, 1.0 / fs_for_accel)
+    accel = np.interp(t_dec, t_for_accel, accel_coarse)
+
+    return t_dec, dist_dec, vel, accel, actual_fs
 
 
 def export_results(t_uniform, dist_filt, vel, accel, output_file, raw_total_dist):
@@ -169,30 +217,10 @@ def plot_wavelet(t_dec, vel, actual_fs):
 
 def process_file(csv_file, output_file, target_fs_hz):
     df = load_data(str(csv_file))
-    _, angle_unwrapped_counts = unwrap_angle(df)
-    dist_m = counts_to_distance(angle_unwrapped_counts, METERS_PER_COUNT)
-    t = df["time_s"].values
+    t_dec, dist_dec, vel, accel, actual_fs = run_pipeline(df, target_fs_hz)
+    raw_total_dist = float(dist_dec[-1])   # capture before exclusion masking
 
-    pos_diffs = np.diff(t)
-    pos_diffs = pos_diffs[pos_diffs > 0]
-    if len(pos_diffs) == 0:
-        raise ValueError(f"No positive timestamp diffs in {csv_file} — file may be corrupt")
-    native_fs = 1.0 / np.median(pos_diffs)
-    print(f"Inferred native rate: {native_fs:.1f} Hz")
-
-    dist_native, t_native = interpolate_to_uniform(dist_m, t, native_fs)
-    dist_dec, t_dec, actual_fs = decimate_signal(dist_native, native_fs, target_fs_hz)
-    t_dec = t_dec + t[0]   # re-anchor to session start
-
-    dt = 1.0 / actual_fs
-    vel = np.gradient(dist_dec, dt)
-
-    vel_for_accel, t_for_accel, fs_for_accel = decimate_signal(vel, actual_fs, 5.0)
-    t_for_accel = t_for_accel + t[0]
-    accel_coarse = np.gradient(vel_for_accel, 1.0 / fs_for_accel)
-    accel = np.interp(t_dec, t_for_accel, accel_coarse)
-
-    slack_mask_dec = np.zeros(len(t_dec), dtype=bool)  # all data valid by default
+    slack_mask_dec = np.zeros(len(t_dec), dtype=bool)
     for start_s, end_s in EXCLUDED_SEGMENTS:
         slack_mask_dec[(t_dec >= start_s) & (t_dec <= end_s)] = True
     if EXCLUDED_SEGMENTS:
@@ -201,11 +229,11 @@ def process_file(csv_file, output_file, target_fs_hz):
     vel[slack_mask_dec]      = np.nan
     accel[slack_mask_dec]    = np.nan
 
-    print(f"Decimated to: {actual_fs:.1f} Hz  (factor {round(native_fs / actual_fs)})")
-    print(f"Vel range:   {vel.min():.3f} to {vel.max():.3f} m/s")
-    print(f"Accel range: {accel.min():.3f} to {accel.max():.3f} m/s²")
+    print(f"Decimated to: {actual_fs:.1f} Hz")
+    print(f"Vel range:   {np.nanmin(vel):.3f} to {np.nanmax(vel):.3f} m/s")
+    print(f"Accel range: {np.nanmin(accel):.3f} to {np.nanmax(accel):.3f} m/s²")
 
-    out = export_results(t_dec, dist_dec, vel, accel, str(output_file), dist_m[-1])
+    out = export_results(t_dec, dist_dec, vel, accel, str(output_file), raw_total_dist)
     html_path = Path(str(output_file).replace(".csv", ".html"))
     plot_results(out, html_path)
 
@@ -233,12 +261,22 @@ def main():
 
     Path("processed").mkdir(parents=True, exist_ok=True)
 
+    errors = []
     for csv_file in csv_files:
         output_file = Path("processed") / f"{csv_file.stem}.csv"
         print(f"\n{'=' * 50}")
         print(f"Processing: {csv_file}  ->  {output_file}")
         print(f"{'=' * 50}")
-        process_file(csv_file, output_file, args.fs)
+        try:
+            process_file(csv_file, output_file, args.fs)
+        except Exception as e:
+            print(f"  SKIPPED — {e}")
+            errors.append((csv_file, e))
+
+    if errors:
+        print(f"\n{len(errors)} file(s) skipped:")
+        for path, err in errors:
+            print(f"  {path.name}: {err}")
 
 
 if __name__ == "__main__":

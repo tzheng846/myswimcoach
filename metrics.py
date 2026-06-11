@@ -63,7 +63,7 @@ def detect_phases(t, vel):
 
 
 
-def segment_cycles_trough(t, vel):
+def segment_cycles_trough(t, vel, T_est=None):
     """
     Segment at deep velocity troughs (glide phase) — literature-recommended
     approach for breaststroke.
@@ -73,19 +73,25 @@ def segment_cycles_trough(t, vel):
     double-peak problem.  The dominant peak within each trough-bounded segment
     becomes the stroke anchor.
 
-    Requires no T_cycle estimate.  Returns same format as segment_cycles,
-    or None if fewer than 2 qualifying troughs are found.
+    T_est: autocorrelation-estimated stroke period (s). When provided, the
+    minimum trough separation becomes 0.5 × T_est (adaptive to the swimmer's
+    own tempo). Falls back to 0.5 s (120 SPM hard cap) if T_est is None.
+
+    Returns same format as segment_cycles, or None if fewer than 2 qualifying
+    troughs are found.
     """
     fs  = _compute_fs(t)
     n   = len(vel)
     v95 = float(np.percentile(np.abs(vel), 95))
 
-    # Glide troughs: velocity below 20 % of v95, at least 0.5 s apart.
-    # 0.5 s corresponds to 120 SPM — faster than any realistic breaststroke.
+    # Minimum trough separation: adaptive when T_est is available, otherwise
+    # use 0.5 s (120 SPM — faster than any realistic breaststroke).
+    min_sep_s = max(0.3, 0.5 * T_est) if T_est is not None else 0.5
+
     troughs, _ = find_peaks(
         -vel,
-        height   = -0.20 * v95,          # vel must be < 0.20 × v95
-        distance = max(1, int(0.5 * fs)),
+        height   = -0.20 * v95,                    # vel must be < 0.20 × v95
+        distance = max(1, int(min_sep_s * fs)),
     )
 
     if len(troughs) < 1:
@@ -210,47 +216,54 @@ def time_to_distance(t, dist, target_m, baseline_end_idx, head_waist_m=0.0):
 
 def extract_cycle_peaks(vel, cycles):
     """
-    For each trough-bounded segment, find all prominent peaks in chronological order.
-    First peak = arm pull, second peak = kick.
+    For each trough-bounded segment, classify peaks as arm-pull and kick.
+
+    Arm-pull = highest-amplitude prominent peak in the cycle.  This is more
+    robust than "first chronological" because filter-ringing bumps at the
+    trough boundary are always low-amplitude (~0.3–0.5 m/s) while the real
+    arm-pull is the dominant velocity event in the cycle (~1–2+ m/s).
+
+    Kick = highest prominent peak that occurs after the arm-pull in time.
 
     Mutates each cycle dict in-place, adding:
         arm_peak_idx   – index of the pull peak
         arm_peak_vel   – velocity at pull peak (m/s)
-        kick_peak_idx  – index of the kick peak, or None if only one peak found
+        kick_peak_idx  – index of the kick peak, or None if not found
         kick_peak_vel  – velocity at kick peak, or None
     Also updates peak_idx to match arm_peak_idx.
     Returns the same list for convenience.
     """
-    v95 = float(np.percentile(np.abs(vel), 95))
+    v95      = float(np.percentile(np.abs(vel), 95))
     min_prom = _PEAK_MIN_PROM_FRAC * v95
 
     for cyc in cycles:
         a, b = cyc["start_idx"], cyc["end_idx"]
         seg  = vel[a:b]
 
-        peaks, _ = find_peaks(seg, prominence=min_prom)
+        pks, _ = find_peaks(seg, prominence=min_prom)
 
-        if len(peaks) == 0:
-            # No prominent peak — use argmax as fallback pull anchor
-            pull_off = int(np.argmax(seg))
-            cyc["arm_peak_idx"] = a + pull_off
-            cyc["arm_peak_vel"] = float(seg[pull_off])
-            cyc["kick_peak_idx"] = None
-            cyc["kick_peak_vel"] = None
-        elif len(peaks) == 1:
-            cyc["arm_peak_idx"] = a + int(peaks[0])
-            cyc["arm_peak_vel"] = float(seg[peaks[0]])
-            cyc["kick_peak_idx"] = None
-            cyc["kick_peak_vel"] = None
+        if len(pks) == 0:
+            pull_off = int(np.argmax(seg))   # fallback: argmax
         else:
-            # First chronologically = pull, second = kick
-            # If >2 peaks, kick is the highest among peaks[1:]
-            pull_off = int(peaks[0])
-            kick_off = int(peaks[1]) if len(peaks) == 2 else int(peaks[1:][np.argmax(seg[peaks[1:]])])
-            cyc["arm_peak_idx"] = a + pull_off
-            cyc["arm_peak_vel"] = float(seg[pull_off])
-            cyc["kick_peak_idx"] = a + kick_off
-            cyc["kick_peak_vel"] = float(seg[kick_off])
+            # Highest-amplitude peak = arm-pull
+            pull_off = int(pks[np.argmax(seg[pks])])
+
+        cyc["arm_peak_idx"] = a + pull_off
+        cyc["arm_peak_vel"] = float(seg[pull_off])
+
+        # Kick: highest prominent peak after the arm-pull in time
+        rest = seg[pull_off + 1:]
+        if len(rest) >= 2:
+            kick_pks, _ = find_peaks(rest, prominence=min_prom)
+        else:
+            kick_pks = []
+        if len(kick_pks) > 0:
+            best_kick = int(kick_pks[np.argmax(rest[kick_pks])])
+            cyc["kick_peak_idx"] = a + pull_off + 1 + best_kick
+            cyc["kick_peak_vel"] = float(rest[best_kick])
+        else:
+            cyc["kick_peak_idx"] = None
+            cyc["kick_peak_vel"] = None
 
         cyc["peak_idx"] = cyc["arm_peak_idx"]
 
@@ -284,7 +297,10 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0):
     vel_seg  = vel[ip_end:swim_end]
     vel_swim = vel[b_end:swim_end]   # full window for session velocity stats
 
-    cycles = segment_cycles_trough(t_seg, vel_seg)
+    # Autocorrelation period estimate on the full swim window (more cycles = better ACF)
+    T_est = _estimate_period(t[b_end:swim_end], vel[b_end:swim_end])
+
+    cycles = segment_cycles_trough(t_seg, vel_seg, T_est=T_est)
     if cycles is None:
         cycles = []
 
@@ -405,6 +421,26 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0):
                   "pct_cycles_with_kick", "mean_arm_kick_ratio", "mean_arm_kick_delay_s"):
             session[k] = None
 
+    # ── cycle quality ─────────────────────────────────────────────────────────
+    total_cycles_raw = len(cycles)
+
+    # Outlier: steady-state cycle with duration < 80% of median (matches _plot_results)
+    outlier_cycle_count = 0
+    if ss_cycles:
+        med_dur = float(np.median([c["duration_s"] for c in ss_cycles]))
+        outlier_cycle_count = sum(1 for c in ss_cycles if c["duration_s"] < 0.80 * med_dur)
+
+    # Implausible: any cycle outside physically reasonable breaststroke range
+    implausible_cycle_count = sum(
+        1 for c in cycles
+        if c["duration_s"] < 0.5 or c["duration_s"] > 4.0
+    )
+
+    session["total_cycles_raw"]        = total_cycles_raw
+    session["outlier_cycle_count"]     = outlier_cycle_count
+    session["implausible_cycle_count"] = implausible_cycle_count
+    session["kick_metrics_reliable"]   = False  # LP filter merges arm/kick; see CLAUDE.md
+
     return {"session": session, "cycles": cycles, "initial_phase": initial_phase}
 
 
@@ -493,6 +529,40 @@ def attach_pose_to_cycles(cycles, merged_df, t):
 
 def _compute_fs(t):
     return 1.0 / float(np.diff(t).mean())
+
+
+def _estimate_period(t, vel):
+    """
+    Estimate stroke period (seconds) from the autocorrelation of velocity.
+
+    Removes DC (mean) before computing ACF so slow drift doesn't bias the
+    result.  Searches for the first ACF peak between 0.5 s and 4.0 s —
+    the physically possible range for breaststroke (15–120 SPM).
+
+    Returns the estimated period in seconds, or None if the ACF has no
+    clear peak (e.g. too few cycles, very noisy signal).
+    """
+    fs = _compute_fs(t)
+    v  = np.nan_to_num(vel - np.nanmean(vel))   # remove DC, replace NaN with 0
+
+    acf = np.correlate(v, v, mode="full")
+    acf = acf[len(acf) // 2:]                   # keep positive lags only
+    if acf[0] == 0:
+        return None
+    acf /= acf[0]                               # normalise to [−1, 1]
+
+    # Search window: 0.5 s → 4.0 s
+    lo = max(1, int(0.5 * fs))
+    hi = min(len(acf) - 1, int(4.0 * fs))
+    if lo >= hi:
+        return None
+
+    peaks, _ = find_peaks(acf[lo:hi])
+    if len(peaks) == 0:
+        return None
+
+    # First peak in the search window = fundamental stroke period
+    return float((peaks[0] + lo) / fs)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────
