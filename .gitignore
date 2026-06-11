@@ -30,3 +30,12 @@
 !/landing/**/*.html
 !/landing/**/*.txt
 !/landing/**/*.md
+
+/as5600_logger_ble_esp32
+/ESP_32_V5
+/logger_esp32
+/motor_logger_esp32
+/as5600_logger_esp32
+/supabase
+/tests
+/web
