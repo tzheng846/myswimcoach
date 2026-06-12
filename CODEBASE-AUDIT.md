@@ -202,11 +202,14 @@ surfaces. Verified via `git ls-files` + `git check-ignore` (2026-06-12):
 `commands.txt` — i.e. most of the app's source. The GitHub remote (if pushed) does not
 contain a buildable app.
 
-A disk failure loses the firmware, the tests, the latest schema migration, all project
-docs, and most of the iOS app. Suggested fix: add un-ignore exceptions
-(`!CLAUDE.md`, `!CODEBASE-AUDIT.md`, `!/ESP_32_V5`, `!/tests`, `!/supabase`) or
-force-add (`git add -f`), then commit in both repos. Not changed in this audit
-(documentation-only pass).
+~~A disk failure loses the firmware, the tests, the latest schema migration, all project
+docs, and most of the iOS app.~~ **RESOLVED 2026-06-12 (post-audit, user-requested):**
+myswimcoach commits `0b45ce9` + `4f152f7` track firmware/tests/docs/patch_03/web agent
+docs and fix the ignore rules; swimnetics-mobile commit `6abcbaa` tracks all of src/.
+Still open: (a) **swimnetics-mobile has NO git remote** — commits are local-only until a
+(private) remote is added and pushed; (b) `.paul/`, `STRATEGY.md`, `COACHING_PHILOSOPHY.md`
+remain deliberately untracked because the GitHub repo is **public** — they exist only on
+this machine, so back them up by other means.
 
 ### 5.4 Orphan / unreachable endpoints ⚠️
 - `GET /sessions/{id}/export` (api.py:312): no iOS or web caller; iOS re-implements the
