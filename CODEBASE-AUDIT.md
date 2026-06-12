@@ -273,7 +273,7 @@ pass through RecordScreen upload params) completes it.
 |------|------------|---------------|
 | All on-device behavior from Phases 12–21 (BleContext persistence, pairing UX, retrieval flow on real hardware) | EAS build credits exhausted — no TestFlight build since the rewrite | STATE.md deferred issues; run 21-02-PLAN Task 3 checkpoint when credits renew |
 | Phase 22-02 video-overlay demo | Same EAS blocker (Task 1/ffmpeg done) | 22-02-PLAN parked checkpoint |
-| Vercel deployment of `web/` | Not deployed; runbook exists from Phase 23-03 | STATE.md user follow-ups (deploy + DNS cutover) |
+| Vercel deployment of `web/` | A Vercel project exists but serves the legacy `landing/` placeholder (probed 2026-06-12) — `web/` not deployed; runbook exists from Phase 23-03 | STATE.md user follow-ups (deploy + DNS cutover) |
 | Email dispatch of parent reports | Deliberately deferred (mailto/copy-link shipped) | Phase 24 decision — Resend slots into ReportSendList |
 | Freestyle segmentation | Research ongoing — wavelet/CWT spike (16-04) is the only standing candidate | .paul/phases/16-*, wavelet_spike.py |
 | Git state | Phases 21–24 work uncommitted in both repos (user runs git) | STATE.md user follow-ups |
@@ -283,7 +283,7 @@ pass through RecordScreen upload params) completes it.
 | Surface | State |
 |---------|-------|
 | Railway (`swimnetics-api-production.up.railway.app`) | Live, healthy, **pre-Phase-24 code** — push api.py (§5.1) |
-| Vercel (`web/`) | Not deployed |
+| Vercel | **Serving the legacy `landing/index.html` placeholder** at myswimcoach.vercel.app (probed 2026-06-12: `/` = old static page, `/report/x` = NOT_FOUND). The Next.js `web/` app is NOT what's deployed — portal + parent pages unreachable until the Vercel project is repointed at `web/` |
 | Supabase (`ujrotuijxrbscjhzekjk`) | Live; schema = committed SQL **+ uncommitted SQL-editor migrations** (§5.2); patch_03 applied by user 2026-06-11 |
 | TestFlight | Stale build — predates Phases 12+ on-device features; EAS credits exhausted |
 | Firmware on device | 1.1.0 buffer-and-dump (ESP_32_V5) |

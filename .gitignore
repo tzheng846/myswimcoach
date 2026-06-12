@@ -39,8 +39,16 @@
 /supabase
 /tests
 
+# Track production-critical files the rules above would swallow (CODEBASE-AUDIT.md §5.3).
+# Note: !supabase/*.sql alone would NOT work — git can't re-include files under an
+# excluded directory, so the directory itself must be un-ignored.
 !CLAUDE.md
+!AGENTS.md
 !CODEBASE-AUDIT.md
 !/tests
 !/ESP_32_V5
-!supabase/*.sql
+!/supabase
+
+# Cache dirs at any depth (the /__pycache__/ rule above only matches the repo root)
+__pycache__/
+.pytest_cache/
