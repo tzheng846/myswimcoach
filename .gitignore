@@ -38,3 +38,9 @@
 /as5600_logger_esp32
 /supabase
 /tests
+
+!CLAUDE.md
+!CODEBASE-AUDIT.md
+!/tests
+!/ESP_32_V5
+!supabase/*.sql
