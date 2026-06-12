@@ -454,8 +454,9 @@ async def delete_session(
     request: Request,
     _auth=Depends(require_auth),
 ):
-    """Hard-delete a session. Coach ownership enforced via coach_id.
-    Sessions with null coach_id (legacy) cannot be deleted via this endpoint.
+    """Hard-delete a session and its raw CSV in storage. Coach ownership
+    enforced via coach_id. Sessions with null coach_id (legacy) cannot be
+    deleted via this endpoint.
     """
     sb_admin = _get_supabase_admin()
     if not sb_admin:
@@ -477,10 +478,31 @@ async def delete_session(
     if not coach_row_id:
         raise HTTPException(status_code=403, detail="Coach profile not found")
 
+    # Capture the storage path before the row disappears
+    raw_csv_path = None
+    try:
+        path_resp = (
+            sb_admin.table("sessions")
+            .select("raw_csv_path")
+            .eq("id", session_id)
+            .eq("coach_id", coach_row_id)
+            .single()
+            .execute()
+        )
+        raw_csv_path = path_resp.data.get("raw_csv_path") if path_resp.data else None
+    except Exception:
+        pass
+
     try:
         sb_admin.table("sessions").delete().eq("id", session_id).eq("coach_id", coach_row_id).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    if raw_csv_path:
+        try:
+            sb_admin.storage.from_("raw-csvs").remove([raw_csv_path])
+        except Exception:
+            pass  # non-fatal — row is gone; orphaned file is the pre-fix status quo
 
     return {"ok": True}
 

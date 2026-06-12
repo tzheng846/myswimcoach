@@ -178,9 +178,11 @@ Columns/tables referenced by working code but absent from `supabase/schema.sql` 
 
 The Phase 12-01, 14-01, and 15-01 migrations exist only in the live DB (and possibly in
 old PLAN files under `.paul/phases/`). **Risk:** a new environment, a disaster recovery,
-or RLS reasoning from the committed files will all be wrong. Suggested fix: dump the live
-schema (`supabase db dump` or the dashboard) into `supabase/schema_live.sql`, or
-backfill `patch_04`+ files reconstructing the missing migrations.
+or RLS reasoning from the committed files will all be wrong.
+**MITIGATED 2026-06-12 (post-audit):** `supabase/patch_04_backfill.sql` reconstructs the
+missing migrations from code evidence (guarded/idempotent, documentation-first). It is
+inference, not a dump — verify column types/defaults against the dashboard, or replace
+with `supabase db dump` output for ground truth.
 
 ### 5.3 Version control excludes production-critical files ❌ (single-machine loss risk)
 `git status` looks deceptively clean because `.gitignore` swallows whole production
@@ -238,9 +240,10 @@ pass through RecordScreen upload params) completes it.
   BleContext.js and DevicesScreen.js entirely.
 
 ### 5.7 Minor
-- `DELETE /sessions/{id}` (api.py:451-485) deletes only the DB row — the raw CSV in the
-  `raw-csvs` bucket is **orphaned forever** (root CLAUDE.md claimed it was deleted; doc
-  fixed in this audit). Storage cost grows with every deleted session.
+- ~~`DELETE /sessions/{id}` deletes only the DB row — raw CSV orphaned forever.~~
+  **FIXED 2026-06-12 (post-audit):** delete_session now captures `raw_csv_path` before
+  the row delete and removes the storage object (non-fatal). Pre-fix orphans from
+  earlier deletions remain in the bucket — clean manually if storage cost matters.
 - `requirements.txt` ships Streamlit-only deps (streamlit, plotly, matplotlib, stumpy,
   anthropic) to Railway — slow builds/bigger image, no breakage. `python-dotenv` is used
   by fetch_sessions.py:23 and pipeline_view.py:28 but isn't listed (works locally only

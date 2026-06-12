@@ -115,7 +115,7 @@ All functions are pure (no I/O, no plots).
 - `GET /health` — Railway health check (no auth)
 - `POST /process` — upload CSV, run pipeline, save to Supabase, return metrics JSON; enforces tier limits (402)
 - `PATCH /sessions/{session_id}` — update name, notes, is_starred (only — stroke_type is NOT patchable)
-- `DELETE /sessions/{session_id}` — deletes the DB row only; raw CSV stays orphaned in storage
+- `DELETE /sessions/{session_id}` — deletes the DB row + raw CSV from storage (storage removal non-fatal)
 - `GET /sessions/{session_id}/export` — 100 Hz CSV download; ⚠ no caller anywhere (iOS builds its CSV client-side)
 - `GET /reports/{token}` — public parent report payload (no auth, service role)
 - `GET /devices`, `PATCH/DELETE /devices/{chip_id}` — device list (+session counts), rename, deregister
