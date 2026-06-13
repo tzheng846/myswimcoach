@@ -37,8 +37,23 @@ function GLBDevice() {
     return wrapper;
   }, [scene]);
 
+  // Ease the model in once the GLB finishes loading (scale 0.85 → 1 over ~0.5s),
+  // so it appears smoothly into the empty slot instead of popping. Respects
+  // reduced-motion by starting at full scale. (window exists — Canvas is ssr:false.)
+  const reduce =
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const appearRef = useRef(null);
+  const t = useRef(reduce ? 1 : 0);
+  useFrame((_, delta) => {
+    if (!appearRef.current || t.current >= 1) return;
+    t.current = Math.min(1, t.current + delta / 0.5);
+    const e = 1 - Math.pow(1 - t.current, 3); // easeOutCubic
+    appearRef.current.scale.setScalar(0.85 + 0.15 * e);
+  });
+
   return (
-    <group rotation={ORIENTATION}>
+    <group ref={appearRef} scale={reduce ? 1 : 0.85} rotation={ORIENTATION}>
       <primitive object={fitted} />
     </group>
   );
@@ -109,7 +124,10 @@ export default function DeviceScene() {
       <pointLight position={[0, 0, 4]} intensity={6} color="#5b8def" />
       <Rig>
         <ModelBoundary>
-          <Suspense fallback={<PlaceholderDevice />}>
+          {/* fallback=null: render nothing while the GLB loads (no placeholder
+              flash). The placeholder now only appears via ModelBoundary if the
+              model genuinely fails to load. */}
+          <Suspense fallback={null}>
             <GLBDevice />
           </Suspense>
         </ModelBoundary>
