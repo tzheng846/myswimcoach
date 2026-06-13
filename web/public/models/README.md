@@ -1,28 +1,26 @@
-# 3D device model drop-in
+# 3D device model
 
-The marketing hero renders `device.glb` from this folder. Until that file
-exists, a stylized placeholder (built from primitives in
-`components/three/PlaceholderDevice.js`) renders instead — no code change is
-needed when the real model arrives.
+The marketing hero renders `device.glb` from this folder (present as of
+Phase 27 — the real Fusion 360 export). If the file is removed, a stylized
+placeholder (`components/three/PlaceholderDevice.js`) renders instead — the
+loader falls back automatically, no code change needed.
 
-## Exporting from Fusion 360
+`DeviceScene.js` **auto-fits** whatever GLB it finds: it computes the bounding
+box, recenters to the origin, and uniformly scales the largest dimension to
+`TARGET_SIZE` (≈2.6 scene units). So a replacement export does **not** need a
+specific scale or origin — only the up-axis may need attention (see below).
+
+## Replacing the model (export from Fusion 360)
 
 1. Export as **glTF binary (.glb)** — a mesh format, not STEP/F3D.
-   (Fusion 360: File → Export → choose GLB, or use the "Share → GLB" option;
-   if unavailable, export OBJ and convert with any glTF converter.)
-2. Orientation: **+Y up**, encoder wheel axis along **Z** (wheel face toward
-   the camera).
-3. Scale: the scene expects the wheel to be roughly **1 unit in radius**
-   (~2 units across). Scale in Fusion before export, or note the factor and
-   adjust the `<primitive>` scale in `components/three/DeviceScene.js`.
-4. Keep it light: < 5 MB, merged bodies, no embedded textures over 2048px.
+2. **Up-axis:** Fusion commonly exports **+Z-up**; Three.js is **+Y-up**, which
+   renders the device lying on its side. If that happens, set `ORIENTATION` in
+   `components/three/DeviceScene.js` to `[-Math.PI / 2, 0, 0]` (or the axis that
+   stands it upright). Scale and centering are handled automatically.
+3. Keep it reasonable: the current file is ~8 MB and ships uncompressed (a
+   deliberate call). If load time matters later, compress with `gltf-transform`
+   (Draco/meshopt) — out of scope for now.
 
 ## Install
 
-Drop the file here as:
-
-```
-web/public/models/device.glb
-```
-
-Reload the page — the GLB loads in place of the placeholder.
+Drop the file here as `web/public/models/device.glb` and reload.

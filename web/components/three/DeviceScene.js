@@ -1,16 +1,50 @@
 "use client";
 
-import { Component, Suspense, useEffect, useRef, useState } from "react";
+import { Component, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
+import * as THREE from "three";
 import PlaceholderDevice from "./PlaceholderDevice";
 
 const GLB_PATH = "/models/device.glb";
 
+// Largest dimension the fitted model spans in scene units. Slightly under the
+// placeholder's footprint so the tilted, rotating model stays fully in frame.
+const TARGET_SIZE = 2.2;
+
+// Stand the model's long axis (native +Z, ~2:1 the longest dimension) upright
+// so it becomes the vertical spin axis — a clean turntable with no precession.
+const ORIENTATION = [-Math.PI / 2, 0, 0];
+
 function GLBDevice() {
   const { scene } = useGLTF(GLB_PATH);
-  return <primitive object={scene} />;
+
+  // Clone so we never mutate the cached gltf (HMR/StrictMode re-renders would
+  // otherwise compound the recenter/scale and drift the model each reload).
+  const fitted = useMemo(() => {
+    const root = scene.clone(true);
+    const box = new THREE.Box3().setFromObject(root);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const scale = TARGET_SIZE / maxDim;
+
+    // Recenter to origin, then uniformly scale to the target footprint.
+    root.position.sub(center);
+    const wrapper = new THREE.Group();
+    wrapper.add(root);
+    wrapper.scale.setScalar(scale);
+    return wrapper;
+  }, [scene]);
+
+  return (
+    <group rotation={ORIENTATION}>
+      <primitive object={fitted} />
+    </group>
+  );
 }
+
+useGLTF.preload(GLB_PATH);
 
 // useGLTF throws (via suspense) when /models/device.glb is absent —
 // catch it and show the placeholder instead.
@@ -50,8 +84,12 @@ function Rig({ children }) {
     group.current.rotation.z += (targetZ - group.current.rotation.z) * 0.05;
   });
 
+  // Outer static group tilts the whole turntable ~17° back + a slight roll for
+  // an angled 3/4 hero view; the inner group spins (about the now-vertical long
+  // axis) and adds pointer parallax. Tilting here keeps the spin axis leaning
+  // with the model — a stable 3/4 rotation, not a wobble.
   return (
-    <group position={[0, -0.25, 0]} scale={1.05}>
+    <group position={[0, -0.1, 0]} scale={1} rotation={[0.3, 0, 0.12]}>
       <group ref={group}>{children}</group>
     </group>
   );
