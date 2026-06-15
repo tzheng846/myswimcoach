@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import WaveMark from "@/components/WaveMark";
 import { supabase } from "@/lib/supabase";
 
 const navLinks = [
@@ -46,9 +45,8 @@ export default function PortalLayout({ children }) {
       <header className="sticky top-0 z-50 border-b border-navy/40 bg-bg/80 backdrop-blur-md">
         <nav className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5">
           <div className="flex items-center gap-8">
-            <Link href="/app" className="flex items-center gap-2.5">
-              <WaveMark width={56} height={15} strokeWidth={4} />
-              <span className="hidden text-xs font-bold tracking-[0.3em] text-ink sm:inline">
+            <Link href="/app" className="flex items-center">
+              <span className="text-xs font-bold tracking-[0.3em] text-ink">
                 SWIMNETICS
               </span>
             </Link>

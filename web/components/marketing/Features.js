@@ -45,31 +45,37 @@ const metrics = [
   {
     icon: icon.pulse,
     name: "Stroke rate",
+    value: "34 spm",
     body: "Strokes per minute from real cycle boundaries — not tap counting.",
   },
   {
     icon: icon.ruler,
     name: "Distance per stroke",
-    body: "How far each cycle actually carries the swimmer down the lane.",
+    value: "1.6 m",
+    body: "How far each stroke carries the swimmer down the lane.",
   },
   {
     icon: icon.trend,
     name: "Fatigue index",
-    body: "Velocity decay across the swim — see exactly where technique breaks down.",
+    value: "8%",
+    body: "How much speed fades across the swim — see where technique breaks down.",
   },
   {
     icon: icon.target,
     name: "Consistency",
-    body: "Cycle-to-cycle variation in peak velocity and stroke timing.",
+    value: "±5%",
+    body: "Stroke-to-stroke variation in speed and timing.",
   },
   {
     icon: icon.glide,
     name: "Coast fraction",
-    body: "Time spent gliding versus producing propulsion, every cycle.",
+    value: "22%",
+    body: "Share of each stroke spent gliding versus driving forward.",
   },
   {
     icon: icon.timer,
     name: "Time to distance",
+    value: "6.4 s @ 15 m",
     body: "Splits to any mark from 1–25 m, adjusted per swimmer.",
   },
 ];
@@ -83,7 +89,7 @@ const platform = [
   {
     icon: icon.bolt,
     name: "Processed in ~30 seconds",
-    body: "Sessions upload and process server-side the moment the swim ends.",
+    body: "Each swim uploads and turns into metrics the moment it ends.",
   },
   {
     icon: icon.history,
@@ -110,6 +116,9 @@ function Card({ f }) {
         {f.icon}
       </svg>
       <h3 className="mt-3 text-sm font-semibold">{f.name}</h3>
+      {f.value && (
+        <p className="mt-1 text-2xl font-bold text-primary">{f.value}</p>
+      )}
       <p className="mt-1.5 text-sm leading-relaxed text-muted">{f.body}</p>
     </div>
   );

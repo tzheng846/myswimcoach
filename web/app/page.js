@@ -12,9 +12,9 @@ export default function Home() {
       <Nav />
       <main className="flex-1">
         <Hero />
-        <HowItWorks />
-        <Features />
         <SampleChart />
+        <Features />
+        <HowItWorks />
         <Pricing />
       </main>
       <Footer />

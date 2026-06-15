@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import WaveMark from "@/components/WaveMark";
 import { supabase } from "@/lib/supabase";
 
 export default function LoginPage() {
@@ -31,10 +30,9 @@ export default function LoginPage() {
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center px-6 py-16">
-      <Link href="/" className="mb-4">
-        <WaveMark width={180} height={48} />
+      <Link href="/" className="text-2xl font-bold tracking-[0.35em]">
+        SWIMNETICS
       </Link>
-      <h1 className="text-2xl font-bold tracking-[0.35em]">SWIMNETICS</h1>
       <p className="mt-1.5 text-[11px] tracking-[0.3em] text-amber">
         VELOCITY INTELLIGENCE
       </p>

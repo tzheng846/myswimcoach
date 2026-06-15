@@ -2,7 +2,7 @@ const deviceIncluded = [
   "One-time purchase — no subscription required",
   "All core stroke-level metrics and data-quality reporting",
   "iOS recording app + web coach portal",
-  "Shared encoder hardware — one device covers the lane",
+  "Shared hardware — one device covers the whole lane",
 ];
 
 const cloudIncluded = [
@@ -47,7 +47,7 @@ export default function Pricing() {
               <span className="text-muted">one-time</span>
             </div>
             <p className="mt-2 text-sm text-muted">
-              The encoder and core metrics. Yours to keep.
+              The device and all core metrics. Yours to keep.
             </p>
             <ul className="mt-8 space-y-3">
               {deviceIncluded.map((item) => (
@@ -83,7 +83,7 @@ export default function Pricing() {
 
         <div className="mx-auto mt-10 max-w-md text-center">
           <a
-            href="mailto:hello@swimnetics.com?subject=Early%20access%20to%20Swimnetics"
+            href="mailto:info@swimnetics.com?subject=Early%20access%20to%20Swimnetics"
             className="block rounded-lg bg-primary px-6 py-3 font-semibold text-white transition-colors hover:bg-accent"
           >
             Get early access

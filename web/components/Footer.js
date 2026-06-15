@@ -1,13 +1,11 @@
 import Link from "next/link";
-import WaveMark from "./WaveMark";
 
 export default function Footer() {
   return (
     <footer className="border-t border-navy/40">
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-12 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div className="flex items-center gap-3">
-            <WaveMark width={56} height={15} strokeWidth={4} />
+          <div className="flex items-center">
             <span className="text-xs font-bold tracking-[0.3em] text-ink">
               SWIMNETICS
             </span>
@@ -18,10 +16,10 @@ export default function Footer() {
         </div>
         <div className="text-sm text-muted">
           <a
-            href="mailto:hello@swimnetics.com"
+            href="mailto:info@swimnetics.com"
             className="text-subtle transition-colors hover:text-primary"
           >
-            hello@swimnetics.com
+            info@swimnetics.com
           </a>
           <p className="mt-2">
             <Link

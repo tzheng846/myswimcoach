@@ -2,7 +2,6 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import WaveMark from "@/components/WaveMark";
 import ImprovementHero from "@/components/report/ImprovementHero";
 import MetricTrend from "@/components/report/MetricTrend";
 
@@ -13,8 +12,7 @@ const API_BASE =
 function Shell({ children }) {
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-5 pb-16 pt-8">
-      <div className="flex items-center gap-3">
-        <WaveMark width={64} height={17} strokeWidth={4} />
+      <div className="flex items-center">
         <span className="text-xs font-bold tracking-[0.3em] text-ink">
           SWIMNETICS
         </span>

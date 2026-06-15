@@ -1,5 +1,4 @@
 import Link from "next/link";
-import WaveMark from "./WaveMark";
 
 const links = [
   { href: "/#how-it-works", label: "How it works" },
@@ -12,8 +11,7 @@ export default function Nav() {
   return (
     <header className="sticky top-0 z-50 border-b border-navy/40 bg-bg/80 backdrop-blur-md">
       <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
-        <Link href="/" className="flex items-center gap-3">
-          <WaveMark width={68} height={18} strokeWidth={4} />
+        <Link href="/" className="flex items-center">
           <span className="text-sm font-bold tracking-[0.3em] text-ink">
             SWIMNETICS
           </span>

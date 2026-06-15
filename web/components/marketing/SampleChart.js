@@ -8,18 +8,13 @@ import {
   YAxis,
   CartesianGrid,
   ReferenceDot,
+  Tooltip,
 } from "recharts";
 import data from "@/src/data/sample-session.json";
 
-// Annotate one representative cycle: the global arm-pull peak and the
-// glide trough that follows it.
+// Annotate one representative cycle: the global arm-pull peak.
 const peakIdx = data.reduce((m, p, i) => (p.v > data[m].v ? i : m), 0);
-let troughIdx = peakIdx;
-for (let i = peakIdx; i < data.length && data[i].t < data[peakIdx].t + 2; i++) {
-  if (data[i].v < data[troughIdx].v) troughIdx = i;
-}
 const peak = data[peakIdx];
-const trough = data[troughIdx];
 
 export default function SampleChart() {
   return (
@@ -29,12 +24,12 @@ export default function SampleChart() {
           REAL DATA
         </p>
         <h2 className="mt-3 text-3xl font-bold">
-          One breaststroke lap, as the encoder sees it
+          One real breaststroke lap, stroke by stroke
         </h2>
         <p className="mt-4 max-w-[60ch] text-subtle">
-          An actual session from the pipeline — every arm pull, every glide.
-          The peaks are propulsion; the troughs between them are where the
-          coaching conversation starts.
+          A swimmer&apos;s actual speed through the lap. Each peak is a stroke
+          driving forward; the dips between them are where the coaching
+          conversation starts.
         </p>
 
         <div className="mt-10 h-72 w-full rounded-xl border border-navy/50 bg-surface p-4 sm:h-80">
@@ -69,6 +64,18 @@ export default function SampleChart() {
                   fontSize: 12,
                 }}
               />
+              <Tooltip
+                cursor={{ stroke: "#1e3a5f", strokeWidth: 1 }}
+                contentStyle={{
+                  background: "#0f1b2d",
+                  border: "1px solid #1e3a5f",
+                  borderRadius: 8,
+                  color: "#e6edf3",
+                  fontSize: 12,
+                }}
+                labelFormatter={(t) => `${Number(t).toFixed(2)} s`}
+                formatter={(v) => [`${Number(v).toFixed(2)} m/s`, "Speed"]}
+              />
               <Line
                 type="monotone"
                 dataKey="v"
@@ -87,19 +94,6 @@ export default function SampleChart() {
                   value: "arm pull",
                   position: "top",
                   fill: "#f59e0b",
-                  fontSize: 12,
-                }}
-              />
-              <ReferenceDot
-                x={trough.t}
-                y={trough.v}
-                r={4}
-                fill="#7f8c8d"
-                stroke="none"
-                label={{
-                  value: "glide",
-                  position: "bottom",
-                  fill: "#7f8c8d",
                   fontSize: 12,
                 }}
               />

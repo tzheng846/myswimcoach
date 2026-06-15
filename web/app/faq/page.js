@@ -8,7 +8,7 @@ export const metadata = {
     "Answers for coaches: what Swimnetics measures, how it fits into practice, durability, supported strokes, pricing, and how swimmer data is protected.",
 };
 
-const CONTACT_EMAIL = "hello@swimnetics.com";
+const CONTACT_EMAIL = "info@swimnetics.com";
 
 function Faq({ q, children }) {
   return (

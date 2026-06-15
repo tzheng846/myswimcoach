@@ -10,18 +10,15 @@ export default function Hero() {
             VELOCITY INTELLIGENCE
           </p>
           <h1 className="max-w-[18ch] text-4xl font-bold leading-tight sm:text-5xl">
-            Stroke-level feedback, delivered poolside —{" "}
-            <span className="text-primary">in seconds.</span>
+            Stroke-level <span className="text-primary">analysis.</span>
           </h1>
           <p className="mt-6 max-w-[52ch] text-lg text-subtle">
-            A tethered encoder wheel clips to the diving block and rides
-            alongside the swimmer. Record a set from an iPhone, and the
-            pipeline turns raw motion into stroke-level metrics — no laptop,
-            no manual review, no waiting until practice is over.
+            Turn your lane into a research-grade lab. Record, review, and
+            analyze every swimmer — right from your iPhone, no laptop on deck.
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-4">
             <a
-              href="mailto:hello@swimnetics.com?subject=Early%20access%20to%20Swimnetics"
+              href="mailto:info@swimnetics.com?subject=Early%20access%20to%20Swimnetics"
               className="rounded-lg bg-primary px-6 py-3 font-semibold text-white transition-colors hover:bg-accent"
             >
               Get early access

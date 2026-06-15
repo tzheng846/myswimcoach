@@ -9,7 +9,7 @@ export const metadata = {
 };
 
 const LAST_UPDATED = "June 14, 2026";
-const CONTACT_EMAIL = "hello@swimnetics.com";
+const CONTACT_EMAIL = "info@swimnetics.com";
 
 function Section({ id, title, children }) {
   return (

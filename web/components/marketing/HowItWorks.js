@@ -2,17 +2,17 @@ const steps = [
   {
     n: "1",
     title: "Clip it on",
-    body: "Attach the encoder to the block, tether to the swimmer. No pool modification, nothing worn in the water.",
+    body: "It clips to the starting block and tethers to the swimmer. Nothing to install, nothing worn in the water.",
   },
   {
     n: "2",
     title: "Swim the set",
-    body: "Record from the app — the device samples swim velocity at ~270 Hz while the swimmer just swims.",
+    body: "Tap record in the app. The swimmer just swims — no wearables, no change to the set.",
   },
   {
     n: "3",
     title: "See it instantly",
-    body: "Velocity, stroke rate, fatigue, consistency — processed server-side and back on the phone in seconds.",
+    body: "Speed, stroke rate, fatigue, and consistency — back on your phone seconds after the swim.",
   },
 ];
 
