@@ -48,7 +48,7 @@ instructions in [public/models/README.md](public/models/README.md).
 ```
 app/
   page.js              marketing landing (hero/3D, how-it-works, features,
-                       sample chart, pricing — $15/swimmer/month)
+                       sample chart, pricing — $300 device + $20/swimmer/mo cloud)
   login/               coach login (Supabase email/password)
   app/                 auth-guarded portal
     page.js            dashboard (latest metrics per athlete)

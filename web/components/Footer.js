@@ -1,3 +1,4 @@
+import Link from "next/link";
 import WaveMark from "./WaveMark";
 
 export default function Footer() {
@@ -22,6 +23,22 @@ export default function Footer() {
           >
             hello@swimnetics.com
           </a>
+          <p className="mt-2">
+            <Link
+              href="/faq"
+              className="text-subtle transition-colors hover:text-primary"
+            >
+              FAQ
+            </Link>
+          </p>
+          <p className="mt-2">
+            <Link
+              href="/privacy"
+              className="text-subtle transition-colors hover:text-primary"
+            >
+              Privacy Policy
+            </Link>
+          </p>
           <p className="mt-2">© {new Date().getFullYear()} Swimnetics</p>
         </div>
       </div>
