@@ -19,6 +19,7 @@ EXPECTED_SESSION_KEYS = [
     "outlier_cycle_count",
     "implausible_cycle_count",
     "kick_metrics_reliable",
+    "segmentation_reliable",
 ]
 
 EXPECTED_TOP_KEYS = ["session", "cycles", "initial_phase"]
@@ -70,6 +71,13 @@ class TestComputeSessionMetricsShape:
         t, vel, dist = _sine_wave_inputs()
         s = m.compute_session_metrics(t, vel, dist)["session"]
         assert s["kick_metrics_reliable"] is False
+
+    def test_segmentation_reliable_always_false(self):
+        """Wavelet ridge shipped as placeholder (Phase 16-05) — always False
+        until the rate-accuracy/boundary tuning pass; see 16-04-SUMMARY."""
+        t, vel, dist = _sine_wave_inputs()
+        s = m.compute_session_metrics(t, vel, dist)["session"]
+        assert s["segmentation_reliable"] is False
 
     def test_quality_counts_non_negative(self):
         t, vel, dist = _sine_wave_inputs()

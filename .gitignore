@@ -52,3 +52,6 @@
 # Cache dirs at any depth (the /__pycache__/ rule above only matches the repo root)
 __pycache__/
 .pytest_cache/
+
+# Local render/dry-run artifacts (video_sync output: .mp4 already ignored, but .png isn't)
+/output/

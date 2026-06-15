@@ -153,12 +153,17 @@ async def process_session(
             _dq_warnings.append(
                 f"Magnet signal lost for {magnet_dropout_pct:.1f}% of samples — encoder reliability reduced"
             )
+        if not result["session"].get("segmentation_reliable", False):
+            _dq_warnings.append(
+                "Cycle segmentation is experimental (wavelet ridge, all strokes) — metrics are provisional"
+            )
 
         data_quality = {
             "magnet_dropout_pct":      magnet_dropout_pct,
             "outlier_cycle_count":     result["session"].get("outlier_cycle_count", 0),
             "implausible_cycle_count": result["session"].get("implausible_cycle_count", 0),
             "total_cycles_raw":        result["session"].get("total_cycles_raw", 0),
+            "segmentation_reliable":   result["session"].get("segmentation_reliable", False),
             "warnings":                _dq_warnings,
         }
 

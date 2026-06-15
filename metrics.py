@@ -10,6 +10,7 @@ All functions are pure (no I/O, no plots).
 import argparse
 import numpy as np
 import pandas as pd
+import pywt
 from pathlib import Path
 from scipy.signal import find_peaks
 from scipy.integrate import trapezoid
@@ -113,6 +114,142 @@ def segment_cycles_trough(t, vel, T_est=None):
 
     return cycles if len(cycles) >= 1 else None
 
+
+# ── WAVELET SEGMENTATION (production engine, all strokes — Phase 16-05) ────────
+# Ported from wavelet_spike.py (16-04 GO). Morlet CWT ridge → instantaneous
+# stroke rate → integer-phase-crossing cycle boundaries. Shipped at PLACEHOLDER
+# quality (session["segmentation_reliable"] = False): the 16-04 breaststroke
+# cross-check was weak (3/8 within ±5 SPM). segment_cycles_trough above is kept
+# as a never-called reference/backup — user decision: wavelet only, no fallback.
+
+_WAVELET          = "cmor1.5-1.0"
+_DETREND_WINDOW_S = 3.0
+_PERIOD_MIN_S     = 0.5
+_PERIOD_MAX_S     = 4.0
+_N_SCALES         = 80
+
+# DP ridge-tracker penalties (empirical derivation documented in wavelet_spike.py):
+# jump penalty stops a single harmonic-spike frame from winning a jump-and-back;
+# low-band bias tips a close two-band call toward the slower (outer stroke) cycle.
+_RIDGE_JUMP_PENALTY  = 4.0
+_RIDGE_LOW_BAND_BIAS = 0.5
+
+
+def _detrend_for_cwt(vel, fs):
+    """Subtract a centered 3-second rolling mean — the documented fix for the
+    near-zero dark-node artifact a raw-velocity CWT produces (velocity genuinely
+    touches near-zero between strokes; detrending removes that so the transform
+    sees oscillation shape, not absolute level)."""
+    window = max(3, int(round(_DETREND_WINDOW_S * fs)))
+    rolling_mean = pd.Series(vel).rolling(window, center=True, min_periods=1).mean().values
+    return vel - rolling_mean
+
+
+def _track_ridge(power, freqs_hz):
+    """
+    Continuity- and low-band-biased ridge extraction via dynamic programming —
+    replaces a per-instant argmax(power) that can snap onto a harmonic for a few
+    frames and has no way to prefer one of two simultaneously-loud bands.
+
+    node_cost[f,t] = -log(col-normalized power) + BIAS*log_freq[f]
+    cost[f,t]      = min_f'{ cost[f',t-1] + LAMBDA*(logfreq[f]-logfreq[f'])^2 } + node_cost[f,t]
+
+    Frequencies compared in log-space (pywt scales are geometric). Returns the
+    optimal scale-index path — same shape/role as argmax(power, axis=0).
+    """
+    n_scales, n_times = power.shape
+    log_freqs = np.log(freqs_hz)
+    jump_cost = _RIDGE_JUMP_PENALTY * (log_freqs[:, None] - log_freqs[None, :]) ** 2  # [from, to]
+
+    col_max   = np.maximum(power.max(axis=0, keepdims=True), 1e-12)  # floor guards all-zero columns
+    log_pow   = np.log(power / col_max + 1e-12)
+    node_cost = -log_pow + (_RIDGE_LOW_BAND_BIAS * log_freqs)[:, None]
+
+    cost    = np.empty((n_scales, n_times))
+    backptr = np.empty((n_scales, n_times), dtype=np.int64)
+    cost[:, 0] = node_cost[:, 0]
+
+    for ti in range(1, n_times):
+        totals = cost[:, ti - 1][:, None] + jump_cost
+        backptr[:, ti] = np.argmin(totals, axis=0)
+        cost[:, ti] = totals[backptr[:, ti], np.arange(n_scales)] + node_cost[:, ti]
+
+    path = np.empty(n_times, dtype=np.int64)
+    path[-1] = np.argmin(cost[:, -1])
+    for ti in range(n_times - 1, 0, -1):
+        path[ti - 1] = backptr[path[ti], ti]
+    return path
+
+
+def _anchors_from_marks(vel, marks):
+    """Boundary-mark indices → {cycle_num, peak_idx, start_idx, end_idx} anchors
+    (dominant peak per span) — the same cycle shape segment_cycles_trough returns,
+    so extract_cycle_peaks and the downstream metrics run unchanged."""
+    bounds  = np.concatenate([[0], marks, [len(vel)]])
+    anchors = []
+    for i in range(len(bounds) - 1):
+        a, b = int(bounds[i]), int(bounds[i + 1])
+        seg  = vel[a:b]
+        if len(seg) < 2:
+            continue
+        pk = a + int(np.argmax(seg))
+        anchors.append({"cycle_num": len(anchors), "peak_idx": pk, "start_idx": a, "end_idx": b})
+    return anchors
+
+
+def segment_cycles_wavelet(t, vel):
+    """
+    PRODUCTION cycle segmentation for ALL strokes (Phase 16-05).
+
+    Morlet CWT on the 3-second-detrended velocity → per-instant dominant
+    frequency (instantaneous stroke rate) via a DP-tracked ridge → cumulative
+    phase Φ(t)=∫rate dt' → a cycle boundary at each integer crossing.
+
+    Operates on the already-masked slice the caller passes (NO internal
+    detect_phases re-masking — compute_session_metrics hands in
+    vel[ip_end:swim_end]). Returns slice-relative indices in the same format as
+    segment_cycles_trough — list[{cycle_num, peak_idx, start_idx, end_idx}] — or
+    None when the input is too short or has no oscillation (mirrors the trough
+    None-path so the caller's `if cycles is None: cycles = []` still applies).
+    """
+    n = len(vel)
+    if n < 50:
+        return None
+    fs = _compute_fs(t)
+    dt = 1.0 / fs
+
+    # Guard: need at least one longest-period window, and an actual oscillation.
+    # A flat signal detrends to ~0 → the CWT has no ridge and _track_ridge would
+    # divide by an all-zero column. Returning None here is the flat/short path.
+    if n < max(50, int(_PERIOD_MAX_S * fs)):
+        return None
+    active = _detrend_for_cwt(vel, fs)
+    if not np.any(np.isfinite(active)) or float(np.max(np.abs(active))) < 1e-6:
+        return None
+
+    f_min, f_max = 1.0 / _PERIOD_MAX_S, 1.0 / _PERIOD_MIN_S
+    target_freqs = np.geomspace(f_min, f_max, _N_SCALES)
+    central_freq = pywt.central_frequency(_WAVELET)
+    scales       = central_freq / (target_freqs * dt)
+
+    coeffs, freqs_hz = pywt.cwt(active, scales, _WAVELET, sampling_period=dt)
+    power = np.abs(coeffs) ** 2
+
+    ridge_idx  = _track_ridge(power, freqs_hz)
+    ridge_freq = freqs_hz[ridge_idx]                      # Hz = instantaneous stroke rate
+
+    # Cumulative phase; a boundary at each integer crossing (slice-relative index).
+    phase    = np.concatenate(([0.0], np.cumsum(ridge_freq[:-1] * np.diff(t))))
+    marks    = []
+    n_target = 1
+    for i in range(1, len(phase)):
+        if phase[i - 1] < n_target <= phase[i]:
+            marks.append(i)
+            n_target += 1
+    marks = np.array(marks, dtype=np.int64)
+
+    anchors = _anchors_from_marks(vel, marks)
+    return anchors if len(anchors) >= 1 else None
 
 
 def detect_initial_phase(t, vel, baseline_end_idx):
@@ -297,10 +434,11 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0):
     vel_seg  = vel[ip_end:swim_end]
     vel_swim = vel[b_end:swim_end]   # full window for session velocity stats
 
-    # Autocorrelation period estimate on the full swim window (more cycles = better ACF)
-    T_est = _estimate_period(t[b_end:swim_end], vel[b_end:swim_end])
-
-    cycles = segment_cycles_trough(t_seg, vel_seg, T_est=T_est)
+    # Production segmenter = wavelet/CWT ridge for ALL strokes (Phase 16-05).
+    # segment_cycles_trough is kept above as a never-called backup (user decision:
+    # wavelet only, no fallback). Shipped at placeholder quality — see
+    # session["segmentation_reliable"] below and 16-04-SUMMARY.
+    cycles = segment_cycles_wavelet(t_seg, vel_seg)
     if cycles is None:
         cycles = []
 
@@ -440,6 +578,7 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0):
     session["outlier_cycle_count"]     = outlier_cycle_count
     session["implausible_cycle_count"] = implausible_cycle_count
     session["kick_metrics_reliable"]   = False  # LP filter merges arm/kick; see CLAUDE.md
+    session["segmentation_reliable"]   = False  # wavelet ridge shipped as placeholder (16-05); see 16-04-SUMMARY
 
     return {"session": session, "cycles": cycles, "initial_phase": initial_phase}
 

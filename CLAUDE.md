@@ -98,17 +98,18 @@ All functions are pure (no I/O, no plots).
 
 **Public API:**
 - `detect_phases(t, vel)` — returns `{baseline_end, steady_start}` indices
-- `segment_cycles(t, vel, T_cycle)` — trough-based segmentation (glide-phase minima)
+- `segment_cycles_wavelet(t, vel)` — **production segmenter for ALL strokes** (Phase 16-05): Morlet CWT ridge → instantaneous stroke rate → integer-phase-crossing boundaries. Same cycle-dict shape as the trough segmenter. Shipped at placeholder quality (`segmentation_reliable=False`).
+- `segment_cycles_trough(t, vel, T_cycle)` — trough-based segmentation (glide-phase minima); **kept as a never-called backup** (user decision: wavelet only, no fallback)
 - `extract_cycle_peaks(vel, cycles)` — mutates in-place; adds arm/kick peak data
 - `compute_session_metrics(t, vel, dist)` → `{session, cycles, data_quality, initial_phase}`
 
 **Session metric keys:** `lap_time_s`, `total_dist_m`, `baseline_end_s`, `stroke_rate_spm`, `stroke_count`, `mean_vel_ms`, `max_vel_ms`, `mean_arm_peak_vel_ms`, `cv_arm_peak_vel`, `mean_isi_s`, `cv_isi`, `mean_dps_m`, `mean_impulse_m`, `mean_coast_fraction`, `mean_trough_vel_ms`, `fatigue_index_pct`, `pct_cycles_with_kick`, `mean_arm_kick_ratio`, `mean_arm_kick_delay_s`
 
-**Data quality keys:** `magnet_dropout_pct`, `cycle_count`, `outlier_cycle_count`, `plausible_fraction`, `kick_metrics_reliable`
+**Data quality keys:** `magnet_dropout_pct`, `cycle_count`, `outlier_cycle_count`, `plausible_fraction`, `kick_metrics_reliable`, `segmentation_reliable`
 
 **Known limitation:** kick-related metrics are unreliable — `kick_metrics_reliable = False` is always set. Difficulty resolving arm-pull and kick as two distinct velocity peaks when biomechanically close in time.
 
-**Planned: multi-stroke segmentation.** `segment_cycles_trough` anchors on breaststroke's glide-phase trough — freestyle and butterfly have no such dead spot (continuous/near-simultaneous propulsion, no near-zero velocity). Direction: matrix-profile motif-matching (`stumpy`: self-join → consensus-stroke template → `match()`) — a shape-based, stroke-agnostic criterion ("does this window's trajectory resemble a stroke") rather than a threshold on velocity depth. HMM-based sub-phase labeling (arm-pull vs. kick, left-arm vs. right-arm) is a separate, later effort — the pose pipeline (`merge_streams.py`) would supply its training labels.
+**Segmentation: wavelet ridge, placeholder quality (Phase 16-05).** `segment_cycles_wavelet` is the live segmenter for all four strokes — `segmentation_reliable = False` is always set, because the 16-04 breaststroke cross-check was weak (3/8 sessions within ±5 SPM of the trusted trough rate; some ridges rail the 120-SPM ceiling). It is shipped deliberately as a placeholder per user decision ("not enough data; ship as placeholder; wavelet only, no fallback") — the trough segmenter is the breaststroke-validated method but is retained only as never-called backup. The open tuning work (rate accuracy, boundary placement, ceiling-railing) is a future plan; see `.paul/phases/16-freestyle-support/16-04-SUMMARY.md`. HMM-based sub-phase labeling (arm-pull vs. kick, left-arm vs. right-arm) is a separate, later effort — the pose pipeline (`merge_streams.py`) would supply its training labels.
 
 ## api.py — FastAPI endpoints
 
