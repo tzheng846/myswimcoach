@@ -10,6 +10,7 @@ import VelocityChart from "@/components/portal/VelocityChart";
 import TimeToX from "@/components/portal/TimeToX";
 import CycleTable from "@/components/portal/CycleTable";
 import CycleCharts from "@/components/portal/CycleCharts";
+import CoachChat from "@/components/portal/CoachChat";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
 
 export default function ReportCardPage({ params }) {
@@ -254,6 +255,11 @@ export default function ReportCardPage({ params }) {
             <CycleCharts cycles={metrics.cycles} session={metrics.session} />
             <CycleTable cycles={metrics.cycles} />
           </>
+        )}
+
+        {/* AI Coach Chat — grounded in this session's metrics (backend rebuilds the prompt) */}
+        {isAnalyticsReady && (
+          <CoachChat sessionId={sessionId} simple={view === "simple"} />
         )}
 
         {/* Notes */}

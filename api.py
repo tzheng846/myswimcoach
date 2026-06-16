@@ -39,6 +39,8 @@ def _get_supabase_admin() -> Client | None:
 
 import metrics as m
 import vel_acc_extraction as vae
+import coach
+import anthropic
 
 app = FastAPI()
 
@@ -782,6 +784,118 @@ def _get_coach_row(sb_admin, user_id: str, fields: str = "id"):
         return resp.data
     except Exception:
         return None
+
+
+_SIMPLE_PREAMBLE = """\
+You are a friendly swim coach giving feedback to a swimmer who doesn't know technical terms.
+Use plain, encouraging language. Focus on 1-2 concrete things they can work on next.
+Avoid jargon: say 'stroke rate' not 'SPM', 'how far each stroke takes you' not 'DPS',
+'glide' not 'coast fraction', 'arm power' not 'arm-peak velocity or CV'.
+Keep your answer short — 3 to 5 sentences maximum.
+"""
+
+
+@app.post("/coach/chat")
+async def coach_chat(request: Request, _auth=Depends(require_auth)):
+    """AI coaching chat for one saved session.
+
+    Body: {session_id, messages:[{role,content}...], simple?}
+    The Anthropic key is server-side only. The prompt is rebuilt here from the stored
+    session's metrics_json — the client never supplies the metrics, and no athlete PII
+    enters the prompt. Coach ownership is enforced BEFORE any model call.
+    """
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        raise HTTPException(status_code=503, detail="Coaching not configured")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    session_id = body.get("session_id")
+    messages   = body.get("messages")
+    simple     = bool(body.get("simple"))
+
+    if not session_id or not isinstance(session_id, str):
+        raise HTTPException(status_code=400, detail="session_id is required")
+    if not isinstance(messages, list) or not messages:
+        raise HTTPException(status_code=400, detail="messages must be a non-empty list")
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") not in ("user", "assistant") \
+                or not isinstance(msg.get("content"), str):
+            raise HTTPException(status_code=400, detail="Each message needs role (user|assistant) and string content")
+    if messages[-1]["role"] != "user":
+        raise HTTPException(status_code=400, detail="Last message must be from the user")
+
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    coach_row_id = None
+    try:
+        coach_resp = (
+            sb_admin.table("coaches")
+            .select("id")
+            .eq("user_id", request.state.user_id)
+            .single()
+            .execute()
+        )
+        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+    except Exception:
+        pass
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="No coach profile found")
+
+    try:
+        session_resp = (
+            sb_admin.table("sessions")
+            .select("metrics_json, stroke_type, coach_id")
+            .eq("id", session_id)
+            .single()
+            .execute()
+        )
+        row = session_resp.data
+    except Exception:
+        row = None
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if row.get("coach_id") != coach_row_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this session")
+
+    stroke   = row.get("stroke_type") or "breaststroke"
+    metrics  = row.get("metrics_json") or {}
+    session  = metrics.get("session", {}) or {}
+    cycles   = metrics.get("cycles", []) or []
+
+    # Attach t_peak_s (peak_idx is an index into the 100 Hz grid) so the per-cycle table renders.
+    for c in cycles:
+        idx = c.get("peak_idx")
+        if isinstance(idx, (int, float)) and idx is not None:
+            c["t_peak_s"] = float(idx) / 100.0
+
+    data_block = coach._build_user_message(stroke, session, cycles)
+    if simple:
+        system = _SIMPLE_PREAMBLE + "\n" + coach._GUARDRAILS + "\n\nSESSION DATA:\n" + data_block
+    else:
+        system = coach._build_system_prompt(stroke) + "\n\nSESSION DATA:\n" + data_block
+
+    try:
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model=coach.MODEL,
+            max_tokens=2048,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            messages=messages,
+        )
+        reply = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+    except anthropic.APIStatusError as e:
+        if e.status_code == 529 or "overloaded" in str(e).lower():
+            raise HTTPException(status_code=503, detail="The coaching service is busy — try again in a few seconds.")
+        raise HTTPException(status_code=502, detail=f"Coaching service error ({e.status_code}).")
+    except anthropic.APIConnectionError:
+        raise HTTPException(status_code=503, detail="Connection error reaching the coaching service — try again.")
+
+    return {"reply": reply}
 
 
 @app.post("/billing/checkout-session")

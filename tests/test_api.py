@@ -208,3 +208,166 @@ class TestPublicReport:
         client = TestClient(api.app, raise_server_exceptions=True)
         data = client.get("/reports/tok-123").json()
         assert data["sessions"] == []
+
+
+# ── POST /coach/chat (AI coaching proxy) ───────────────────────────────────────
+
+COACH_SESSION_ROW = {
+    "coach_id": "coach-1",
+    "stroke_type": "breaststroke",
+    "metrics_json": {
+        "session": {"mean_dps_m": 1.4, "stroke_rate_spm": 32.0, "cv_isi": 0.12},
+        "cycles": [
+            {"duration_s": 2.0, "peak_idx": 200, "arm_peak_vel": 1.3,
+             "trough_vel_ms": 0.10, "coast_fraction": 0.3, "dist_m": 1.5, "phase": "steady"},
+            {"duration_s": 2.1, "peak_idx": 410, "arm_peak_vel": 1.1,
+             "trough_vel_ms": 0.05, "coast_fraction": 0.4, "dist_m": 1.4, "phase": "steady"},
+        ],
+    },
+}
+
+
+def _coach_admin(session_row=COACH_SESSION_ROW, coach_id="coach-1"):
+    """Fake supabase admin serving coaches + sessions for /coach/chat."""
+    from unittest.mock import MagicMock
+
+    admin = MagicMock()
+
+    def table(name):
+        t = MagicMock()
+        result = MagicMock()
+        if name == "coaches":
+            result.data = {"id": coach_id} if coach_id else None
+        elif name == "sessions":
+            result.data = session_row
+        t.select.return_value = t
+        t.eq.return_value = t
+        t.single.return_value = t
+        t.execute.return_value = result
+        return t
+
+    admin.table.side_effect = table
+    return admin
+
+
+def _mock_anthropic(monkeypatch, reply="MOCK COACHING REPLY"):
+    """Patch api.anthropic.Anthropic; return the create() mock for call assertions."""
+    from unittest.mock import MagicMock
+    import api
+
+    block = MagicMock()
+    block.type = "text"
+    block.text = reply
+    resp = MagicMock()
+    resp.content = [block]
+
+    create = MagicMock(return_value=resp)
+    client = MagicMock()
+    client.messages.create = create
+    monkeypatch.setattr(api.anthropic, "Anthropic", lambda *a, **k: client)
+    return create
+
+
+def _chat_body(content="How was my consistency?", role="user"):
+    return {"session_id": "sess-1", "messages": [{"role": role, "content": content}]}
+
+
+class TestCoachChat:
+    """POST /coach/chat — auth, ownership, validation, prompt source."""
+
+    def test_no_auth_401(self):
+        from fastapi.testclient import TestClient
+        import api
+
+        client = TestClient(api.app, raise_server_exceptions=True)
+        resp = client.post("/coach/chat", json=_chat_body())
+        assert resp.status_code == 401
+
+    def test_not_owner_403_and_no_model_call(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _coach_admin(session_row={**COACH_SESSION_ROW, "coach_id": "other-coach"}))
+        create = _mock_anthropic(monkeypatch)
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 403, resp.text
+        assert not create.called, "Anthropic must not be called when ownership fails"
+
+    def test_session_missing_404(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _coach_admin(session_row=None))
+        create = _mock_anthropic(monkeypatch)
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 404, resp.text
+        assert not create.called
+
+    def test_empty_messages_400(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _coach_admin())
+        _mock_anthropic(monkeypatch)
+        resp = api_client.post("/coach/chat",
+                               json={"session_id": "sess-1", "messages": []},
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 400
+
+    def test_last_message_must_be_user_400(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _coach_admin())
+        _mock_anthropic(monkeypatch)
+        resp = api_client.post("/coach/chat", json=_chat_body(role="assistant"),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 400
+
+    def test_happy_path_returns_reply(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _coach_admin())
+        _mock_anthropic(monkeypatch, reply="Nice rhythm.")
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["reply"] == "Nice rhythm."
+
+    def test_prompt_built_from_stored_metrics_no_pii(self, api_client, monkeypatch):
+        """System prompt is rebuilt from metrics_json + carries guardrails; no athlete name."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _coach_admin())
+        create = _mock_anthropic(monkeypatch)
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        system_text = create.call_args.kwargs["system"][0]["text"]
+        assert "Session Metrics:" in system_text       # built from _build_user_message
+        assert "GUARDRAILS" in system_text              # safety scoping present
+        assert "Lucas Wong" not in system_text          # no athlete PII ever in prompt
+
+    def test_not_configured_503(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _coach_admin())
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 503
+
+
+def test_system_prompt_contains_guardrails():
+    """coach._build_system_prompt must embed the guardrails block (AC-3)."""
+    import coach
+
+    for stroke in ("breaststroke", "freestyle"):
+        p = coach._build_system_prompt(stroke)
+        assert "GUARDRAILS" in p
+        assert "Defer those to the appropriate" in p
