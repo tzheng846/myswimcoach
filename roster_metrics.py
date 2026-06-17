@@ -9,7 +9,12 @@ the coach's roster and call them. Kept pure (like metrics.py) so they're unit-te
 
 
 def latest_per_athlete(rows):
-    """Newest row per athlete_id (by ISO date string; lexical compare is date-correct)."""
+    """
+    Select the most recent row for each athlete based on ISO date string ordering.
+    
+    Returns:
+        list: Rows with the latest date for each unique athlete_id.
+    """
     latest = {}
     for r in rows:
         aid = r.get("athlete_id")
@@ -22,8 +27,16 @@ def latest_per_athlete(rows):
 
 
 def rank_athletes(rows, metric, ascending=True, limit=None):
-    """Rank rows by session[metric]. Rows missing the metric are dropped.
-    ascending=True surfaces the lowest values first."""
+    """
+    Sort athletes by a specified session metric value.
+    
+    Rows without the metric are excluded. If ascending is True, results are ordered
+    from lowest to highest; otherwise highest to lowest. If limit is provided, only
+    the top limit entries are returned.
+    
+    Returns:
+        list: Dicts with keys athlete_name, value (the metric value), and date.
+    """
     scored = []
     for r in rows:
         val = (r.get("session") or {}).get(metric)
@@ -37,6 +50,26 @@ def rank_athletes(rows, metric, ascending=True, limit=None):
 
 
 def rank_progress(rows, metric, min_sessions=2):
+    """
+    Compute percent change in a metric from each athlete's earliest to latest session.
+    
+    Requires each athlete to have at least min_sessions sessions containing the metric.
+    Athletes below this threshold are returned separately without progress computation.
+    Percent change is set to None if the starting value is zero.
+    
+    Parameters:
+        rows (list): List of row dicts with athlete_id, athlete_name, date, and session.
+        metric (str): The metric name to track within each row's session dict.
+        min_sessions (int): Minimum number of sessions with the metric required for progress computation. Defaults to 2.
+    
+    Returns:
+        dict: Contains two keys:
+            - "progressed": List of dicts (sorted by improvement, best first) with athlete_name,
+              pct_change (float or None), from (dict with date and value), and to (dict with
+              date and value).
+            - "insufficient_data": List of dicts with athlete_name and sessions_with_metric count.
+    """
+
     """Percent change in `metric` from each athlete's earliest to latest session with that metric.
     Athletes below min_sessions are returned separately — never given a fabricated trend."""
     min_sessions = max(min_sessions, 1)   # guard: <1 lets empty vals reach vals[0] (IndexError)
@@ -70,7 +103,16 @@ def rank_progress(rows, metric, min_sessions=2):
 
 
 def team_summary(rows, metrics):
-    """Athlete count + mean/min/max of each metric across latest-per-athlete sessions."""
+    """
+    Compute team-level statistics for specified metrics across each athlete's latest session.
+    
+    Parameters:
+        rows: List of session row dicts containing athlete_id, athlete_name, date, and session metric values.
+        metrics: Metric names to aggregate.
+    
+    Returns:
+        dict: Dictionary with "athlete_count" and a "metrics" dict mapping each metric to mean, min, max, and count of non-None values.
+    """
     latest = latest_per_athlete(rows)
     out = {"athlete_count": len(latest), "metrics": {}}
     for metric in metrics:

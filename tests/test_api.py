@@ -592,7 +592,23 @@ def test_team_tools_declared():
 
 
 def _team_admin(anchor=ANCHOR_ROW, athletes=None, team_sessions=None, coach_id="coach-1", scope_log=None):
-    """Fake admin for team tests: serves coaches/athletes/sessions and records eq() filters."""
+    """
+    Create a fake Supabase admin client for roster and team-wide tool tests.
+    
+    Mocks table queries for coaches, athletes, and sessions with resolver behavior that depends on active filters.
+    Sessions queries return the anchor row when an id filter is present (single session lookup), or the team_sessions
+    list otherwise. All eq() filters applied to any query are logged to scope_log for assertion in tests.
+    
+    Parameters:
+        anchor: Mock session row to return for single-session (id-filtered) lookups.
+        athletes: List of athlete rows to return from athletes table queries.
+        team_sessions: List of session rows to return from sessions queries without id filter.
+        coach_id: Coach identifier used in coaches table responses and as a coach_id filter context.
+        scope_log: List to collect filter dictionaries from executed queries; created empty if None.
+    
+    Returns:
+        Mock admin object with a table(name) method supporting chainable query methods (select, order, limit, eq, execute).
+    """
     from unittest.mock import MagicMock
     log = scope_log if scope_log is not None else []
     athletes = [] if athletes is None else athletes
@@ -600,10 +616,19 @@ def _team_admin(anchor=ANCHOR_ROW, athletes=None, team_sessions=None, coach_id="
 
     class _Q:
         def __init__(self, kind):
+            """
+            Initialize a chainable query object for a Supabase table.
+            
+            Parameters:
+                kind (str): The table type (e.g., "coaches", "athletes", "sessions").
+            """
             self.kind = kind
             self.eqs = {}
 
         def select(self, *a, **k):
+            """
+            Return self to enable method chaining on query operations.
+            """
             return self
 
         def order(self, *a, **k):
@@ -613,9 +638,22 @@ def _team_admin(anchor=ANCHOR_ROW, athletes=None, team_sessions=None, coach_id="
             return self
 
         def single(self, *a, **k):
+            """
+            Return self to enable method chaining.
+            """
             return self
 
         def eq(self, col, val):
+            """
+            Add an equality filter condition for the specified column.
+            
+            Parameters:
+                col (str): Column name to filter on.
+                val: Value to match.
+            
+            Returns:
+                This query object, for method chaining.
+            """
             self.eqs[col] = val
             return self
 

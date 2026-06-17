@@ -804,12 +804,23 @@ _SESSION_SUMMARY_KEYS = ["mean_vel_ms", "mean_dps_m", "stroke_rate_spm", "fatigu
 
 @app.post("/coach/chat")
 async def coach_chat(request: Request, _auth=Depends(require_auth)):
-    """AI coaching chat for one saved session.
-
-    Body: {session_id, messages:[{role,content}...], simple?}
-    The Anthropic key is server-side only. The prompt is rebuilt here from the stored
-    session's metrics_json — the client never supplies the metrics, and no athlete PII
-    enters the prompt. Coach ownership is enforced BEFORE any model call.
+    """
+    Process a coaching chat message and return AI-generated advice with tool results.
+    
+    Enforces coach ownership before processing. Request body must include session_id,
+    messages (list of {role, content} objects), and optional simple flag for simplified
+    prompting mode.
+    
+    Returns:
+        Dictionary with:
+        - reply: Coaching response from the model.
+        - data: List of executed tool calls (tool name, input, result).
+    
+    Raises:
+        HTTPException(400): Invalid or missing request body fields.
+        HTTPException(403): Authenticated user does not own the session.
+        HTTPException(404): Session not found.
+        HTTPException(502, 503): Coaching service unavailable or error.
     """
     if not os.getenv("ANTHROPIC_API_KEY"):
         raise HTTPException(status_code=503, detail="Coaching not configured")
@@ -927,6 +938,15 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
         return {"sessions": out, "count": len(out)}
 
     def _exec_get_session_metrics(args):
+        """
+        Retrieve and format session metrics for coaching analysis.
+        
+        Parameters:
+        	args (dict): Argument dictionary that must contain 'session_id' as a string.
+        
+        Returns:
+        	dict: Either {"error": <message>} if validation or retrieval fails, or {"data": <formatted_metrics>} containing the session metrics formatted for coaching analysis.
+        """
         sid = args.get("session_id")
         if not sid or not isinstance(sid, str):
             return {"error": "session_id is required."}
@@ -957,6 +977,14 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
     _roster_cache = {}
 
     def _load_roster_rows():
+        """
+        Load and cache the coach's roster with athlete and session data.
+        
+        Results are cached after the first call to avoid repeated database queries.
+        
+        Returns:
+            list: Roster rows with athlete_id, athlete_name, date, and session metrics.
+        """
         if "rows" in _roster_cache:
             return _roster_cache["rows"]
         try:
@@ -988,6 +1016,18 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
         return rows
 
     def _exec_rank_athletes(args):
+        """
+        Rank athletes in the coach's roster by the specified metric.
+        
+        Parameters:
+            args (dict): Arguments dictionary containing:
+                - metric (str, required): The metric to rank athletes by.
+                - ascending (bool, optional): Whether to rank in ascending order; defaults to True.
+                - limit (int, optional): Maximum number of ranked athletes to return.
+        
+        Returns:
+            dict: Either an error dictionary with key "error" if the metric is missing, or a success dictionary with keys "metric", "ascending", "ranking" (list of ranked athletes), and "athletes" (count of ranked athletes).
+        """
         metric = args.get("metric")
         if not metric:
             return {"error": "metric is required."}
@@ -1002,6 +1042,15 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
         return {"metric": metric, "ascending": ascending, "ranking": ranking, "athletes": len(ranking)}
 
     def _exec_rank_progress(args):
+        """
+        Compute progress rankings for athletes based on a specified metric.
+        
+        Parameters:
+        	args (dict): Tool input with required key `metric` (string) and optional `min_sessions` (integer, defaults to 2).
+        
+        Returns:
+        	dict: Progress ranking results including the metric and ranking data from roster_metrics.rank_progress(), or an error dict if metric is not provided.
+        """
         metric = args.get("metric")
         if not metric:
             return {"error": "metric is required."}
@@ -1013,6 +1062,12 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
                 **roster_metrics.rank_progress(_load_roster_rows(), metric, min_sessions=min_sessions)}
 
     def _exec_team_summary(args):
+        """
+        Compute a summary of team performance across key coaching metrics.
+        
+        Returns:
+            dict: Aggregate statistics for the team including mean velocity, distance per stroke, stroke rate, fatigue index, and consistency.
+        """
         return roster_metrics.team_summary(_load_roster_rows(), _SESSION_SUMMARY_KEYS)
 
     _EXECUTORS = {

@@ -212,6 +212,19 @@ TEAM_TOOLS = [
 
 
 def _build_system_prompt(stroke: str) -> str:
+    """
+    Construct a system prompt for the Claude coaching model with stroke-specific biomechanical context.
+    
+    The prompt includes the model role, metric definitions, stroke-specific biomechanics guidance,
+    coaching voice instructions, tool hints, and scope guardrails.
+    
+    Parameters:
+    	stroke (str): The swimming stroke type. Use "freestyle" for freestyle; otherwise breaststroke
+    		biomechanics content is used.
+    
+    Returns:
+    	str: A formatted system prompt string for the Claude model.
+    """
     biomechanics = _FREESTYLE_BIOMECHANICS if stroke == "freestyle" else _BREASTSTROKE_BIOMECHANICS
     return f"""\
 You are an expert swim coach analyzing biomechanical data from a tethered swim wheel encoder

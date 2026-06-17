@@ -4,6 +4,18 @@ import roster_metrics as rm
 
 
 def _row(aid, name, date, **metrics):
+    """
+    Construct a test row representing an athlete's session data.
+    
+    Parameters:
+    	aid: Athlete identifier.
+    	name: Athlete name.
+    	date: Session date.
+    	**metrics: Additional session metrics, stored under the 'session' key.
+    
+    Returns:
+    	dict: A row with keys 'athlete_id', 'athlete_name', 'date', and 'session' (containing the metrics).
+    """
     return {"athlete_id": aid, "athlete_name": name, "date": date, "session": metrics}
 
 
