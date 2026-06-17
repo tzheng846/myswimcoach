@@ -41,6 +41,7 @@ def _get_supabase_admin() -> Client | None:
 import metrics as m
 import vel_acc_extraction as vae
 import coach
+import roster_metrics
 import anthropic
 
 app = FastAPI()
@@ -884,8 +885,8 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
 
     data_block = coach._build_user_message(stroke, session, _attach_t_peak(cycles))
     if simple:
-        system = (_SIMPLE_PREAMBLE + "\n" + coach._TOOLS_HINT + "\n" + coach._GUARDRAILS
-                  + "\n\nSESSION DATA:\n" + data_block)
+        system = (_SIMPLE_PREAMBLE + "\n" + coach._TOOLS_HINT + "\n" + coach._TEAM_HINT + "\n"
+                  + coach._GUARDRAILS + "\n\nSESSION DATA:\n" + data_block)
     else:
         system = coach._build_system_prompt(stroke) + "\n\nSESSION DATA:\n" + data_block
 
@@ -950,11 +951,81 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
             _attach_t_peak(mj.get("cycles", []) or []),
         )}
 
+    # ── Team executors — scoped to the coach's whole roster (coach_id), NOT one athlete.
+    # One athletes query + one sessions query per turn, cached for the request; aggregation
+    # is pure (roster_metrics) so the model only ever sees compact tables, never raw cycles.
+    _roster_cache = {}
+
+    def _load_roster_rows():
+        if "rows" in _roster_cache:
+            return _roster_cache["rows"]
+        try:
+            arows = (sb_admin.table("athletes").select("id, name")
+                     .eq("coach_id", coach_row_id).execute()).data or []
+        except Exception:
+            arows = []
+        names = {a.get("id"): a.get("name") for a in arows}
+        try:
+            srows = (sb_admin.table("sessions")
+                     .select("athlete_id, created_at, metrics_json")
+                     .eq("coach_id", coach_row_id)
+                     .order("created_at", desc=True)
+                     .execute()).data or []
+        except Exception:
+            srows = []
+        rows = []
+        for s in srows:
+            aid = s.get("athlete_id")
+            if aid not in names:          # defense in depth: only this coach's roster
+                continue
+            rows.append({
+                "athlete_id": aid,
+                "athlete_name": names.get(aid),
+                "date": (s.get("created_at") or "")[:10],
+                "session": (s.get("metrics_json") or {}).get("session", {}) or {},
+            })
+        _roster_cache["rows"] = rows
+        return rows
+
+    def _exec_rank_athletes(args):
+        metric = args.get("metric")
+        if not metric:
+            return {"error": "metric is required."}
+        ascending = bool(args.get("ascending", True))
+        try:
+            limit = int(args["limit"]) if args.get("limit") is not None else None
+        except (TypeError, ValueError):
+            limit = None
+        ranking = roster_metrics.rank_athletes(
+            roster_metrics.latest_per_athlete(_load_roster_rows()),
+            metric, ascending=ascending, limit=limit)
+        return {"metric": metric, "ascending": ascending, "ranking": ranking, "athletes": len(ranking)}
+
+    def _exec_rank_progress(args):
+        metric = args.get("metric")
+        if not metric:
+            return {"error": "metric is required."}
+        try:
+            min_sessions = int(args.get("min_sessions") or 2)
+        except (TypeError, ValueError):
+            min_sessions = 2
+        return {"metric": metric,
+                **roster_metrics.rank_progress(_load_roster_rows(), metric, min_sessions=min_sessions)}
+
+    def _exec_team_summary(args):
+        return roster_metrics.team_summary(_load_roster_rows(), _SESSION_SUMMARY_KEYS)
+
     _EXECUTORS = {
         "list_athlete_sessions": _exec_list_athlete_sessions,
         "get_session_metrics": _exec_get_session_metrics,
+        "rank_athletes": _exec_rank_athletes,
+        "rank_progress": _exec_rank_progress,
+        "team_summary": _exec_team_summary,
     }
 
+    # Structured tool results surfaced to the client alongside the prose reply, so a future
+    # "show the data" / compare deep-link panel is front-end-only (no backend rework).
+    used_data = []
     try:
         client = anthropic.Anthropic()
         convo = list(messages)
@@ -964,7 +1035,7 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
                 model=coach.MODEL,
                 max_tokens=2048,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                tools=coach.COACH_TOOLS,
+                tools=coach.COACH_TOOLS + coach.TEAM_TOOLS,
                 messages=convo,
             )
             if getattr(resp, "stop_reason", None) != "tool_use":
@@ -978,6 +1049,7 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
                     continue
                 executor = _EXECUTORS.get(blk.name)
                 result = executor(blk.input or {}) if executor else {"error": f"Unknown tool: {blk.name}"}
+                used_data.append({"tool": blk.name, "input": blk.input or {}, "result": result})
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": blk.id,
@@ -993,7 +1065,7 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
     except anthropic.APIConnectionError:
         raise HTTPException(status_code=503, detail="Connection error reaching the coaching service — try again.")
 
-    return {"reply": reply}
+    return {"reply": reply, "data": used_data}
 
 
 @app.post("/billing/checkout-session")
