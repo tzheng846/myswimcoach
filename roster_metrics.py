@@ -31,7 +31,7 @@ def rank_athletes(rows, metric, ascending=True, limit=None):
             continue
         scored.append({"athlete_name": r.get("athlete_name"), "value": val, "date": r.get("date")})
     scored.sort(key=lambda x: x["value"], reverse=not ascending)
-    if limit:
+    if limit is not None and limit > 0:   # 0/negative → treat as no limit, never a weird slice
         scored = scored[:limit]
     return scored
 
@@ -39,6 +39,7 @@ def rank_athletes(rows, metric, ascending=True, limit=None):
 def rank_progress(rows, metric, min_sessions=2):
     """Percent change in `metric` from each athlete's earliest to latest session with that metric.
     Athletes below min_sessions are returned separately — never given a fabricated trend."""
+    min_sessions = max(min_sessions, 1)   # guard: <1 lets empty vals reach vals[0] (IndexError)
     by_ath = {}
     for r in rows:
         aid = r.get("athlete_id")
