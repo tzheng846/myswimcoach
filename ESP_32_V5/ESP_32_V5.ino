@@ -40,6 +40,18 @@
  *                DUMP_SAMPLES_PER_PACKET × 7 bytes, then a single-byte 0xEE
  *                end-of-dump marker. Buffer cleared after a complete dump;
  *                a dump aborted by disconnect retains the buffer for retry.
+ *   "STATUS"   → notify one 15-byte live-diagnostics packet:
+ *                [0]      0xDD  (status marker — distinct from the 0xEE end marker)
+ *                [1]      AS5600 status register (0x0B; MD/ML/MH bits)
+ *                [2]      magnet_ok (0/1, same logic as readMagnetOk)
+ *                [3]      AS5600 AGC register (0x1A; gain → magnet-gap health)
+ *                [4..5]   raw angle uint16 LE (0x0C, 12-bit)
+ *                [6]      flags: bit0=recording bit1=dataReady bit2=motorRunning
+ *                [7..10]  bufCount    uint32 LE
+ *                [11..14] maxSamples  uint32 LE
+ *                15 is not 8, not 1, not a multiple of 7 → sample/META/end
+ *                parsers ignore it. Lets the phone show magnet/wiring/buffer
+ *                health with no laptop or serial monitor.
  *   "REEL_ON"  → start motor CW
  *   "REEL_OFF" → stop motor
  *
@@ -79,7 +91,7 @@
 #define PIN_IN2    26   // DRV8833 IN2
 
 // ── Motor config ──────────────────────────────────────────────────────────────
-#define CW_FORWARD  true   // flip to false if motor turns wrong way
+#define CW_FORWARD  false   // flip to false if motor turns wrong way
 #define MAX_RUN_S  120     // auto-stop timeout (seconds)
 #define BRAKE_MS    80     // brake hold before coast-off
 
@@ -87,6 +99,7 @@
 #define AS5600_ADDR    0x36
 #define REG_STATUS     0x0B
 #define REG_RAWANGLE_H 0x0C
+#define REG_AGC        0x1A   // automatic gain control — proxy for magnet gap
 #define MD_BIT (1 << 5)   // magnet detected
 #define ML_BIT (1 << 4)   // too weak
 #define MH_BIT (1 << 3)   // too strong
@@ -121,6 +134,10 @@
 #define DUMP_SAMPLES_PER_PACKET 24
 #define DUMP_PACKET_DELAY_MS    5     // avoid Bluedroid TX-queue saturation
 #define END_OF_DUMP_MARKER      0xEE  // 1 byte ≠ multiple of 7 → ignored by sample parsers
+
+// ── Diagnostics (STATUS) ───────────────────────────────────────────────────────
+#define STATUS_MARKER      0xDD   // first byte of the STATUS packet; ≠ END_OF_DUMP_MARKER
+#define STATUS_PACKET_SIZE 15     // not 8 (META), not 1 (end), not a multiple of 7
 
 // ── LED states ────────────────────────────────────────────────────────────────
 enum LedState {
@@ -158,6 +175,7 @@ static volatile bool  pendingRecordStart = false;
 static volatile bool  pendingRecordStop  = false;
 static volatile bool  pendingMeta        = false;
 static volatile bool  pendingDump        = false;
+static volatile bool  pendingStatus      = false;
 
 static LedState  ledState     = LED_PAIRING;
 static uint32_t  errorClearMs = 0;
@@ -209,6 +227,14 @@ static uint8_t readMagnetStatus() {
 static uint8_t readMagnetOk() {
   uint8_t s = readMagnetStatus();
   return ((s & MD_BIT) && !(s & ML_BIT) && !(s & MH_BIT)) ? 1 : 0;
+}
+
+static uint8_t readAgc() {
+  Wire.beginTransmission(AS5600_ADDR);
+  Wire.write(REG_AGC);
+  Wire.endTransmission(false);
+  Wire.requestFrom(AS5600_ADDR, 1);
+  return Wire.read();
 }
 
 // ── LED helpers ───────────────────────────────────────────────────────────────
@@ -317,6 +343,34 @@ static void sendMeta() {
       startUs ? (uint32_t)(nowUs - startUs) / 1e6 : 0.0f);
 }
 
+// Live diagnostics snapshot — reads the AS5600 fresh and reports device state so the
+// phone can show magnet/wiring/buffer health with no serial monitor. See STATUS in the
+// header comment for the byte layout. Runs on the main task (I2C), like META/DUMP.
+static void sendStatus() {
+  uint8_t  magStatus = readMagnetStatus();
+  uint8_t  magOk     = readMagnetOk();
+  uint8_t  agc       = readAgc();
+  uint16_t angle     = readAngle();
+  uint8_t  flags     = (recording   ? 0x01 : 0)
+                     | (dataReady    ? 0x02 : 0)
+                     | (motorRunning ? 0x04 : 0);
+
+  uint8_t pkt[STATUS_PACKET_SIZE];
+  pkt[0] = STATUS_MARKER;
+  pkt[1] = magStatus;
+  pkt[2] = magOk;
+  pkt[3] = agc;
+  memcpy(pkt + 4,  &angle,      2);   // ESP32 is little-endian — matches sendMeta()
+  pkt[6] = flags;
+  memcpy(pkt + 7,  &bufCount,   4);
+  memcpy(pkt + 11, &maxSamples, 4);
+  pTxChar->setValue(pkt, STATUS_PACKET_SIZE);
+  pTxChar->notify();
+  DBG("[STATUS] mag=0x%02X ok=%d agc=%u angle=%u flags=0x%02X buf=%lu/%lu",
+      magStatus, magOk, agc, angle, flags,
+      (unsigned long)bufCount, (unsigned long)maxSamples);
+}
+
 static void sendEndOfDumpMarker() {
   uint8_t marker = END_OF_DUMP_MARKER;
   pTxChar->setValue(&marker, 1);
@@ -365,6 +419,7 @@ static void processPending() {
   if (pendingRecordStop)  { pendingRecordStop  = false; stopRecording("BLE");   }
   if (pendingMeta)        { pendingMeta        = false; if (deviceConnected) sendMeta();   }
   if (pendingDump)        { pendingDump        = false; if (deviceConnected) dumpBuffer(); }
+  if (pendingStatus)      { pendingStatus      = false; if (deviceConnected) sendStatus(); }
 }
 
 // ── BLE callbacks ─────────────────────────────────────────────────────────────
@@ -378,6 +433,7 @@ class ServerCallbacks : public BLEServerCallbacks {
     deviceConnected = false;
     pendingMeta = false;
     pendingDump = false;
+    pendingStatus = false;
     DBG("[BLE] Disconnected — restarting advertising");
     // Recording is independent of the connection in buffer mode — keep going.
     if (!recording && !motorRunning) syncLed();
@@ -396,6 +452,7 @@ class RxCallbacks : public BLECharacteristicCallbacks {
     else if (val == "STOP"     &&  recording)    { pendingRecordStop  = true;  DBG("[BLE] CMD queued: STOP"); }
     else if (val == "META")                      { pendingMeta        = true;  DBG("[BLE] CMD queued: META"); }
     else if (val == "DUMP")                      { pendingDump        = true;  DBG("[BLE] CMD queued: DUMP"); }
+    else if (val == "STATUS")                    { pendingStatus      = true;  DBG("[BLE] CMD queued: STATUS"); }
     else if (val == "REEL_ON"  && !motorRunning) { pendingMotorStart  = true;  DBG("[BLE] CMD queued: REEL_ON"); }
     else if (val == "REEL_OFF" &&  motorRunning) { pendingMotorStop   = true;  DBG("[BLE] CMD queued: REEL_OFF"); }
     else if (val == "START"    &&  recording)    DBG("[BLE] CMD ignored — already recording");
