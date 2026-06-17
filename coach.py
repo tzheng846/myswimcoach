@@ -112,6 +112,17 @@ dates when you compare. If no other sessions come back, say so plainly.
 """
 
 
+_TEAM_HINT = """\
+TEAM-WIDE QUESTIONS
+You also have tools that look across the coach's whole roster: rank_athletes (rank swimmers by
+a metric using each one's latest session), rank_progress (who improved most over their history),
+and team_summary (an overall roster snapshot). Use these for "who" and "whole team" questions,
+and name the specific swimmers in your answer. Do NOT rank, compare, or judge swimmers on
+kick-specific metrics — kick detection in this pipeline is unreliable (kick_metrics_reliable is
+false); if asked, say plainly that the kick data isn't trustworthy enough to rank on.
+"""
+
+
 # Tool schemas for the API's tool-use loop. coach.py stays I/O-free: it declares the tools
 # and the prompt; the FastAPI layer (api.py) executes them against Supabase with ownership
 # checks. Shared so the prompt convention stays in one place.
@@ -151,6 +162,55 @@ COACH_TOOLS = [
 ]
 
 
+# Roster-scoped tools (33-02). Executed coach-wide in api.py; aggregation is server-side.
+TEAM_TOOLS = [
+    {
+        "name": "rank_athletes",
+        "description": (
+            "Rank the coach's whole roster by a session-level metric, using each athlete's most "
+            "recent session. Use for 'who has the lowest/highest X' team questions. Set ascending "
+            "true to surface the lowest values first (e.g. lowest mean_dps_m = weakest), false for "
+            "highest first (e.g. highest fatigue_index_pct = most fatigued). Common metrics: "
+            "mean_dps_m, mean_vel_ms, stroke_rate_spm, fatigue_index_pct, cv_isi. Cite swimmer names."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metric": {"type": "string", "description": "Session metric to rank by, e.g. 'mean_dps_m'."},
+                "ascending": {"type": "boolean", "description": "True = lowest first; False = highest first."},
+                "limit": {"type": "integer", "description": "Optional: only the top N swimmers."},
+            },
+            "required": ["metric"],
+        },
+    },
+    {
+        "name": "rank_progress",
+        "description": (
+            "Rank the roster by improvement in a metric over each athlete's session history "
+            "(percent change from earliest to latest session). Use for 'who progressed/improved "
+            "the most'. Athletes with fewer than min_sessions are returned separately as "
+            "insufficient_data — never give them a fabricated trend."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metric": {"type": "string", "description": "Metric to measure progress on, e.g. 'mean_dps_m'."},
+                "min_sessions": {"type": "integer", "description": "Minimum sessions required to score (default 2)."},
+            },
+            "required": ["metric"],
+        },
+    },
+    {
+        "name": "team_summary",
+        "description": (
+            "Roster-wide snapshot: athlete count and the mean/min/max of key metrics across each "
+            "athlete's latest session. Use for 'how is my team doing overall'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+]
+
+
 def _build_system_prompt(stroke: str) -> str:
     biomechanics = _FREESTYLE_BIOMECHANICS if stroke == "freestyle" else _BREASTSTROKE_BIOMECHANICS
     return f"""\
@@ -181,6 +241,7 @@ OUTPUT STYLE
 - If data quality is suspect (e.g. very few cycles, extreme outliers), say so briefly.
 
 {_TOOLS_HINT}
+{_TEAM_HINT}
 {_GUARDRAILS}"""
 
 

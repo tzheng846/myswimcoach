@@ -578,3 +578,124 @@ class TestCoachChatTools:
         assert resp.status_code == 200, resp.text
         assert resp.json()["reply"] == "Solid and steady."
         assert create.call_count == 1
+
+
+# ── POST /coach/chat — team-wide tools (33-02) ─────────────────────────────────
+
+def test_team_tools_declared():
+    """Three roster tools exist and the prompt mentions the kick caveat (AC-3)."""
+    import coach
+
+    names = {t["name"] for t in coach.TEAM_TOOLS}
+    assert names == {"rank_athletes", "rank_progress", "team_summary"}
+    assert "kick" in coach._build_system_prompt("freestyle").lower()
+
+
+def _team_admin(anchor=ANCHOR_ROW, athletes=None, team_sessions=None, coach_id="coach-1", scope_log=None):
+    """Fake admin for team tests: serves coaches/athletes/sessions and records eq() filters."""
+    from unittest.mock import MagicMock
+    log = scope_log if scope_log is not None else []
+    athletes = [] if athletes is None else athletes
+    team_sessions = [] if team_sessions is None else team_sessions
+
+    class _Q:
+        def __init__(self, kind):
+            self.kind = kind
+            self.eqs = {}
+
+        def select(self, *a, **k):
+            return self
+
+        def order(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def single(self, *a, **k):
+            return self
+
+        def eq(self, col, val):
+            self.eqs[col] = val
+            return self
+
+        def execute(self):
+            log.append({"table": self.kind, **self.eqs})
+            r = MagicMock()
+            if self.kind == "coaches":
+                r.data = {"id": coach_id} if coach_id else None
+            elif self.kind == "athletes":
+                r.data = athletes
+            elif self.kind == "sessions":
+                r.data = anchor if "id" in self.eqs else team_sessions
+            else:
+                r.data = None
+            return r
+
+    admin = MagicMock()
+    admin.table.side_effect = lambda name: _Q(name)
+    return admin
+
+
+class TestCoachChatTeam:
+    """Roster-scoped tools: coach scoping, out-of-roster exclusion, structured data return."""
+
+    def test_rank_athletes_coach_scoped_and_structured(self, api_client, monkeypatch):
+        """rank_athletes is coach-scoped, excludes out-of-roster, and returns structured data (AC-1/2)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        scope_log = []
+        athletes = [{"id": "ath-1", "name": "Maria"}, {"id": "ath-2", "name": "Sam"}]
+        team_sessions = [
+            {"athlete_id": "ath-1", "created_at": "2026-06-14T00:00:00Z",
+             "metrics_json": {"session": {"mean_dps_m": 1.4}}},
+            {"athlete_id": "ath-2", "created_at": "2026-06-14T00:00:00Z",
+             "metrics_json": {"session": {"mean_dps_m": 1.0}}},
+            {"athlete_id": "ath-9", "created_at": "2026-06-14T00:00:00Z",   # not in roster
+             "metrics_json": {"session": {"mean_dps_m": 0.1}}},
+        ]
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _team_admin(athletes=athletes, team_sessions=team_sessions, scope_log=scope_log))
+        create = _mock_anthropic_seq(monkeypatch, [
+            _tool_resp("rank_athletes", {"metric": "mean_dps_m", "ascending": True}),
+            _text_resp("Sam is lowest on distance per stroke."),
+        ])
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        # Both roster queries filtered by coach_id.
+        assert any(q["table"] == "athletes" and q.get("coach_id") == "coach-1" for q in scope_log)
+        assert any(q["table"] == "sessions" and "id" not in q and q.get("coach_id") == "coach-1" for q in scope_log)
+        # Structured data returned; out-of-roster athlete excluded; ascending order correct.
+        data = resp.json()["data"]
+        rank = next(d for d in data if d["tool"] == "rank_athletes")["result"]["ranking"]
+        assert [r["athlete_name"] for r in rank] == ["Sam", "Maria"]
+        assert "ath-9" not in str(rank)
+
+    def test_rank_progress_excludes_thin_data(self, api_client, monkeypatch):
+        """rank_progress reports improvement and sets aside athletes with too few sessions (AC-3)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        athletes = [{"id": "ath-1", "name": "Maria"}, {"id": "ath-2", "name": "Sam"}]
+        team_sessions = [
+            {"athlete_id": "ath-1", "created_at": "2026-06-14T00:00:00Z",
+             "metrics_json": {"session": {"mean_dps_m": 1.3}}},
+            {"athlete_id": "ath-1", "created_at": "2026-06-01T00:00:00Z",
+             "metrics_json": {"session": {"mean_dps_m": 1.0}}},
+            {"athlete_id": "ath-2", "created_at": "2026-06-14T00:00:00Z",
+             "metrics_json": {"session": {"mean_dps_m": 1.1}}},  # only one session
+        ]
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _team_admin(athletes=athletes, team_sessions=team_sessions))
+        _mock_anthropic_seq(monkeypatch, [
+            _tool_resp("rank_progress", {"metric": "mean_dps_m"}),
+            _text_resp("Maria improved the most."),
+        ])
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        result = next(d for d in resp.json()["data"] if d["tool"] == "rank_progress")["result"]
+        assert [p["athlete_name"] for p in result["progressed"]] == ["Maria"]
+        assert result["insufficient_data"] == [{"athlete_name": "Sam", "sessions_with_metric": 1}]
