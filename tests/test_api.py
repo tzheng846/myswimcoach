@@ -783,3 +783,114 @@ class TestCoachChatDrills:
         result = next(d for d in resp.json()["data"] if d["tool"] == "recommend_drills")["result"]
         assert result["drills"] == []
         assert "note" in result
+
+
+# ── GET /sessions/{id}/ratings (coach-friendly pillar ratings) ──────────────────
+
+RATINGS_TARGET = {
+    "coach_id": "coach-1",
+    "stroke_type": "breaststroke",
+    "athlete_id": "ath-1",
+    "created_at": "2026-06-02T00:00:00Z",
+    "metrics_json": {
+        "session": {"mean_vel_ms": 1.25, "max_vel_ms": 2.9, "mean_dps_m": 1.6,
+                    "cv_arm_peak_vel": 0.09, "cv_isi": 0.2, "fatigue_index_pct": 6.0},
+        "data_quality": {"segmentation_reliable": False},
+    },
+}
+
+RATINGS_PRIOR = [
+    {"created_at": "2026-05-20T00:00:00Z",
+     "metrics_json": {"session": {"mean_vel_ms": 1.05, "mean_dps_m": 1.4,
+                                  "cv_arm_peak_vel": 0.07, "fatigue_index_pct": 3.0},
+                      "data_quality": {"segmentation_reliable": False}}},
+]
+
+
+def _ratings_admin(target=RATINGS_TARGET, prior=RATINGS_PRIOR, coach_id="coach-1"):
+    """Fake supabase admin: coaches + sessions. The sessions table serves the target row via
+    .single().execute() and the prior list via the .lt()/.order()/.limit() chain's execute()."""
+    from unittest.mock import MagicMock
+
+    admin = MagicMock()
+
+    def table(name):
+        t = MagicMock()
+        if name == "coaches":
+            res = MagicMock()
+            res.data = {"id": coach_id} if coach_id else None
+            t.select.return_value = t
+            t.eq.return_value = t
+            t.single.return_value = t
+            t.execute.return_value = res
+            return t
+        if name == "sessions":
+            for chain in ("select", "eq", "lt", "order", "limit"):
+                getattr(t, chain).return_value = t
+            single_obj = MagicMock()
+            single_res = MagicMock()
+            single_res.data = target
+            single_obj.execute.return_value = single_res
+            t.single.return_value = single_obj   # target fetch
+            list_res = MagicMock()
+            list_res.data = prior
+            t.execute.return_value = list_res     # prior-sessions fetch
+            return t
+        return MagicMock()
+
+    admin.table.side_effect = table
+    return admin
+
+
+class TestSessionRatings:
+    """GET /sessions/{id}/ratings — auth, ownership, pillar payload."""
+
+    def test_no_auth_401(self):
+        from fastapi.testclient import TestClient
+        import api
+
+        client = TestClient(api.app, raise_server_exceptions=True)
+        assert client.get("/sessions/sess-1/ratings").status_code == 401
+
+    def test_owned_session_returns_pillars(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _ratings_admin())
+        resp = api_client.get("/sessions/sess-1/ratings",
+                              headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["stroke"] == "breaststroke"
+        assert data["has_baseline"] is True
+        assert {p["key"] for p in data["pillars"]} == {"speed", "stroke_length", "consistency", "endurance"}
+        assert data["rating_colors"]["good"] == "#2d9e5f"
+        speed = next(p for p in data["pillars"] if p["key"] == "speed")
+        assert speed["band"] == "good"          # 1.25 ≥ 1.20
+        assert speed["trend"] == "improved"      # 1.25 vs 1.05 baseline
+        assert speed["provisional"] is True      # segmentation unreliable
+
+    def test_first_session_when_no_prior(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _ratings_admin(prior=[]))
+        data = api_client.get("/sessions/sess-1/ratings",
+                              headers={"Authorization": "Bearer x"}).json()
+        assert data["has_baseline"] is False
+        assert all(p["trend"] == "first_session" for p in data["pillars"])
+
+    def test_foreign_session_not_found(self, api_client, monkeypatch):
+        import api
+
+        # coach_id filter means a session this coach doesn't own simply isn't returned
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _ratings_admin(target=None))
+        resp = api_client.get("/sessions/sess-1/ratings",
+                              headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 404
+
+    def test_no_coach_profile_403(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _ratings_admin(coach_id=None))
+        resp = api_client.get("/sessions/sess-1/ratings",
+                              headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 403

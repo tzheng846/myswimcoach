@@ -43,6 +43,7 @@ import vel_acc_extraction as vae
 import coach
 import roster_metrics
 import drills
+import ratings
 import anthropic
 
 app = FastAPI()
@@ -408,6 +409,84 @@ async def export_session_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/sessions/{session_id}/ratings")
+async def session_ratings(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Return the coach-friendly pillar ratings (good/ok/needs-work + 0–100 score + trend) for an
+    owned session. Trend baseline = the athlete's previous session of the same stroke
+    (ratings.select_baseline mode="previous"). All logic lives in ratings.py (shared with the
+    clients + chat); this handler only loads data and enforces auth + ownership.
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    coach_row_id = None
+    try:
+        coach_resp = (
+            sb_admin.table("coaches")
+            .select("id")
+            .eq("user_id", request.state.user_id)
+            .single()
+            .execute()
+        )
+        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+    except Exception:
+        pass
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    # coach_id filter enforces ownership — a foreign session simply isn't found.
+    try:
+        resp = (
+            sb_admin.table("sessions")
+            .select("metrics_json, stroke_type, athlete_id, created_at")
+            .eq("id", session_id)
+            .eq("coach_id", coach_row_id)
+            .single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    row        = resp.data
+    stroke     = row.get("stroke_type") or "breaststroke"
+    athlete_id = row.get("athlete_id")
+    created_at = row.get("created_at")
+    mj         = row.get("metrics_json") or {}
+    # Flatten session metrics + data-quality flags so ratings sees segmentation_reliable.
+    metrics = {**(mj.get("session") or {}), **(mj.get("data_quality") or {})}
+
+    # Baseline = this athlete's earlier same-stroke sessions, newest-first, before this one.
+    prior = []
+    if athlete_id and created_at:
+        try:
+            prior_resp = (
+                sb_admin.table("sessions")
+                .select("metrics_json, created_at")
+                .eq("coach_id", coach_row_id)
+                .eq("athlete_id", athlete_id)
+                .eq("stroke_type", stroke)
+                .lt("created_at", created_at)
+                .order("created_at", desc=True)
+                .limit(10)
+                .execute()
+            )
+            for r in (prior_resp.data or []):
+                pmj = r.get("metrics_json") or {}
+                prior.append({**(pmj.get("session") or {}), **(pmj.get("data_quality") or {})})
+        except Exception:
+            prior = []
+
+    baseline = ratings.select_baseline(prior, mode="previous")
+    return ratings.rate_session(metrics, baseline, stroke)
 
 
 @app.patch("/sessions/{session_id}")
