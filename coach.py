@@ -101,6 +101,56 @@ You are a swim coach interpreting THIS session's velocity and biomechanical data
 """
 
 
+_TOOLS_HINT = """\
+LOOKING ACROSS SESSIONS
+You have tools to look beyond the single session shown above. When the coach asks about
+trends, progress over time, improvement, or how this swim compares to the athlete's earlier
+swims, call list_athlete_sessions to see their recent sessions (with dates + summary metrics),
+and get_session_metrics to dig into a specific past session in detail. Ground every such claim
+in the real data the tools return — never invent sessions, dates, or numbers. Cite session
+dates when you compare. If no other sessions come back, say so plainly.
+"""
+
+
+# Tool schemas for the API's tool-use loop. coach.py stays I/O-free: it declares the tools
+# and the prompt; the FastAPI layer (api.py) executes them against Supabase with ownership
+# checks. Shared so the prompt convention stays in one place.
+COACH_TOOLS = [
+    {
+        "name": "list_athlete_sessions",
+        "description": (
+            "List THIS athlete's recent recorded sessions (newest first) with summary metrics, "
+            "so you can answer questions about trends, progress, and comparisons across the "
+            "athlete's own history. Use it whenever the coach asks how the swimmer is changing "
+            "over time, comparing to past swims, or whether they are improving. Cite session dates."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "How many recent sessions to return (default 10, max 25)."},
+                "stroke": {"type": "string", "description": "Optional stroke filter, e.g. 'breaststroke' or 'freestyle'."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_session_metrics",
+        "description": (
+            "Get the full per-cycle and session metrics for ONE of this athlete's past sessions, "
+            "identified by session_id (taken from list_athlete_sessions). Use it to dig into a "
+            "specific earlier session when comparing it in detail to the current one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "The session_id to fetch, from list_athlete_sessions."},
+            },
+            "required": ["session_id"],
+        },
+    },
+]
+
+
 def _build_system_prompt(stroke: str) -> str:
     biomechanics = _FREESTYLE_BIOMECHANICS if stroke == "freestyle" else _BREASTSTROKE_BIOMECHANICS
     return f"""\
@@ -130,6 +180,7 @@ OUTPUT STYLE
 - Quote specific numbers with units when they support a coaching point.
 - If data quality is suspect (e.g. very few cycles, extreme outliers), say so briefly.
 
+{_TOOLS_HINT}
 {_GUARDRAILS}"""
 
 

@@ -371,3 +371,210 @@ def test_system_prompt_contains_guardrails():
         p = coach._build_system_prompt(stroke)
         assert "GUARDRAILS" in p
         assert "Defer those to the appropriate" in p
+
+
+# ── POST /coach/chat — tool use (33-01: cross-session data access) ──────────────
+
+def test_coach_tools_declared():
+    """Two read-only tools exist and the prompt invites trend look-ups (AC-1)."""
+    import coach
+
+    names = {t["name"] for t in coach.COACH_TOOLS}
+    assert names == {"list_athlete_sessions", "get_session_metrics"}
+    assert "trends" in coach._build_system_prompt("breaststroke").lower()
+
+
+ANCHOR_ROW = {**COACH_SESSION_ROW, "athlete_id": "ath-1"}
+
+
+class _FakeSessionsQuery:
+    """A chainable sessions query whose returned data depends on the eq() filters applied."""
+
+    def __init__(self, resolver):
+        self._resolver = resolver
+        self._eqs = {}
+
+    def select(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def single(self, *a, **k):
+        return self
+
+    def eq(self, col, val):
+        self._eqs[col] = val
+        return self
+
+    def execute(self):
+        from unittest.mock import MagicMock
+        r = MagicMock()
+        r.data = self._resolver(self._eqs)
+        return r
+
+
+def _tool_admin(anchor=ANCHOR_ROW, list_rows=None, detail_row=None, coach_id="coach-1", scope_log=None):
+    """Fake admin for the tool tests. Routes the three sessions-query shapes by their filters
+    and records every sessions query's eq() filters into scope_log for scoping assertions."""
+    from unittest.mock import MagicMock
+    log = scope_log if scope_log is not None else []
+    list_rows = [] if list_rows is None else list_rows
+
+    def resolver(eqs):
+        log.append(dict(eqs))
+        if "id" in eqs and "athlete_id" in eqs:
+            return detail_row                 # get_session_metrics detail fetch
+        if "id" in eqs:
+            return anchor                     # anchor (ownership) fetch
+        return list_rows                      # list_athlete_sessions
+
+    admin = MagicMock()
+
+    def table(name):
+        if name == "coaches":
+            t = MagicMock()
+            res = MagicMock()
+            res.data = {"id": coach_id} if coach_id else None
+            t.select.return_value = t
+            t.eq.return_value = t
+            t.single.return_value = t
+            t.execute.return_value = res
+            return t
+        if name == "sessions":
+            return _FakeSessionsQuery(resolver)
+        return MagicMock()
+
+    admin.table.side_effect = table
+    return admin
+
+
+def _text_resp(text):
+    from unittest.mock import MagicMock
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    r = MagicMock()
+    r.stop_reason = "end_turn"
+    r.content = [block]
+    return r
+
+
+def _tool_resp(name, tool_input, tool_id="tu-1"):
+    from unittest.mock import MagicMock
+    block = MagicMock()
+    block.type = "tool_use"
+    block.name = name
+    block.input = tool_input
+    block.id = tool_id
+    r = MagicMock()
+    r.stop_reason = "tool_use"
+    r.content = [block]
+    return r
+
+
+def _mock_anthropic_seq(monkeypatch, responses):
+    """Patch Anthropic so successive create() calls return the given responses in order."""
+    from unittest.mock import MagicMock
+    import api
+
+    create = MagicMock(side_effect=list(responses))
+    client = MagicMock()
+    client.messages.create = create
+    monkeypatch.setattr(api.anthropic, "Anthropic", lambda *a, **k: client)
+    return create
+
+
+class TestCoachChatTools:
+    """The bounded tool-use loop: execution, athlete/coach scoping, termination, backward-compat."""
+
+    def test_tool_runs_then_answers(self, api_client, monkeypatch):
+        """Model requests list_athlete_sessions; server runs it (athlete+coach scoped) and answers (AC-1)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        scope_log = []
+        list_rows = [{
+            "id": "sess-0", "created_at": "2026-06-01T00:00:00Z", "name": "Old swim",
+            "stroke_type": "breaststroke",
+            "metrics_json": {"session": {"mean_dps_m": 1.2, "stroke_rate_spm": 30.0}},
+        }]
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _tool_admin(list_rows=list_rows, scope_log=scope_log))
+        create = _mock_anthropic_seq(monkeypatch, [
+            _tool_resp("list_athlete_sessions", {"limit": 5}),
+            _text_resp("Her DPS is trending up."),
+        ])
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["reply"] == "Her DPS is trending up."
+        assert create.call_count == 2
+        # The list query was scoped to BOTH coach_id and athlete_id.
+        list_q = [q for q in scope_log if "id" not in q]
+        assert any(q.get("coach_id") == "coach-1" and q.get("athlete_id") == "ath-1" for q in list_q)
+        # A tool_result was fed back on the second model call.
+        second_msgs = create.call_args_list[1].kwargs["messages"]
+        assert any(isinstance(msg.get("content"), list)
+                   and any(b.get("type") == "tool_result" for b in msg["content"])
+                   for msg in second_msgs)
+
+    def test_foreign_session_blocked_no_leak(self, api_client, monkeypatch):
+        """get_session_metrics for a session outside the athlete returns an error, never data (AC-2)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        scope_log = []
+        # detail_row=None simulates "no row matches id + this athlete + this coach".
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _tool_admin(detail_row=None, scope_log=scope_log))
+        create = _mock_anthropic_seq(monkeypatch, [
+            _tool_resp("get_session_metrics", {"session_id": "someone-elses-session"}),
+            _text_resp("I don't have that session for her."),
+        ])
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        # The detail query was filtered by coach_id AND athlete_id.
+        detail_q = [q for q in scope_log if "id" in q and "athlete_id" in q]
+        assert detail_q and detail_q[0]["coach_id"] == "coach-1" and detail_q[0]["athlete_id"] == "ath-1"
+        # The tool result fed back to the model carried an error, not foreign metrics.
+        tool_result = None
+        for msg in create.call_args_list[1].kwargs["messages"]:
+            if isinstance(msg.get("content"), list):
+                for b in msg["content"]:
+                    if b.get("type") == "tool_result":
+                        tool_result = b["content"]
+        assert tool_result is not None
+        assert "not available" in tool_result.lower()
+        assert "Session Metrics" not in tool_result
+
+    def test_loop_terminates_under_cap(self, api_client, monkeypatch):
+        """A model that only ever asks for tools still terminates with a reply (AC-3)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _tool_admin(list_rows=[]))
+        always_tool = [_tool_resp("list_athlete_sessions", {}) for _ in range(api.MAX_TOOL_ITERS)]
+        create = _mock_anthropic_seq(monkeypatch, always_tool)
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["reply"]  # non-empty fallback
+        assert create.call_count == api.MAX_TOOL_ITERS
+
+    def test_no_tool_single_call(self, api_client, monkeypatch):
+        """No tool needed → one model call, reply as before (backward compatible, AC-3)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _tool_admin())
+        create = _mock_anthropic_seq(monkeypatch, [_text_resp("Solid and steady.")])
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["reply"] == "Solid and steady."
+        assert create.call_count == 1
