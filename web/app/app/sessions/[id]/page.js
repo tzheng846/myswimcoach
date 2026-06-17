@@ -11,6 +11,7 @@ import TimeToX from "@/components/portal/TimeToX";
 import CycleTable from "@/components/portal/CycleTable";
 import CycleCharts from "@/components/portal/CycleCharts";
 import CoachChat from "@/components/portal/CoachChat";
+import PillarCards from "@/components/portal/PillarCards";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
 
 export default function ReportCardPage({ params }) {
@@ -182,7 +183,11 @@ export default function ReportCardPage({ params }) {
         <SessionSummaryCard session={metrics.session} unit={unit} />
 
         {isAnalyticsReady ? (
-          <MetricGrid metrics={metrics} unit={unit} />
+          view === "advanced" ? (
+            <MetricGrid metrics={metrics} unit={unit} />
+          ) : (
+            <PillarCards sessionId={sessionId} />
+          )
         ) : (
           <div className="rounded-xl border border-navy/50 bg-surface p-6 text-center">
             <p className="font-bold">
