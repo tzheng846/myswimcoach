@@ -807,9 +807,11 @@ RATINGS_PRIOR = [
 ]
 
 
-def _ratings_admin(target=RATINGS_TARGET, prior=RATINGS_PRIOR, coach_id="coach-1"):
-    """Fake supabase admin: coaches + sessions. The sessions table serves the target row via
-    .single().execute() and the prior list via the .lt()/.order()/.limit() chain's execute()."""
+def _ratings_admin(target=RATINGS_TARGET, prior=RATINGS_PRIOR, coach_id="coach-1",
+                   prior_raises=False):
+    """Fake supabase admin: coaches + sessions. All queries use .limit(...).execute() (no
+    .single()). The target session fetch ends at the base chain's execute(); the prior-sessions
+    fetch is distinguished by the .lt() call, which switches to a separate chain."""
     from unittest.mock import MagicMock
 
     admin = MagicMock()
@@ -818,23 +820,29 @@ def _ratings_admin(target=RATINGS_TARGET, prior=RATINGS_PRIOR, coach_id="coach-1
         t = MagicMock()
         if name == "coaches":
             res = MagicMock()
-            res.data = {"id": coach_id} if coach_id else None
+            res.data = [{"id": coach_id}] if coach_id else []
             t.select.return_value = t
             t.eq.return_value = t
-            t.single.return_value = t
+            t.limit.return_value = t
             t.execute.return_value = res
             return t
         if name == "sessions":
-            for chain in ("select", "eq", "lt", "order", "limit"):
-                getattr(t, chain).return_value = t
-            single_obj = MagicMock()
-            single_res = MagicMock()
-            single_res.data = target
-            single_obj.execute.return_value = single_res
-            t.single.return_value = single_obj   # target fetch
-            list_res = MagicMock()
-            list_res.data = prior
-            t.execute.return_value = list_res     # prior-sessions fetch
+            t.select.return_value = t
+            t.eq.return_value = t
+            t.limit.return_value = t
+            target_res = MagicMock()
+            target_res.data = [target] if target else []
+            t.execute.return_value = target_res   # target fetch: ...limit(1).execute()
+            prior_chain = MagicMock()
+            prior_chain.order.return_value = prior_chain
+            prior_chain.limit.return_value = prior_chain
+            prior_res = MagicMock()
+            prior_res.data = prior
+            if prior_raises:
+                prior_chain.execute.side_effect = RuntimeError("simulated DB failure")
+            else:
+                prior_chain.execute.return_value = prior_res
+            t.lt.return_value = prior_chain        # prior fetch: ...lt(...).order(...).limit(10).execute()
             return t
         return MagicMock()
 
@@ -894,3 +902,23 @@ class TestSessionRatings:
         resp = api_client.get("/sessions/sess-1/ratings",
                               headers={"Authorization": "Bearer x"})
         assert resp.status_code == 403
+
+    def test_backend_failure_surfaces_5xx(self, monkeypatch):
+        """A real DB failure on the prior-sessions query must surface as 5xx, not a degraded 200."""
+        from fastapi.testclient import TestClient
+        from starlette.requests import Request
+        import api
+        from api import app, require_auth
+
+        def mock_auth(request: Request):
+            request.state.user_id = "test-user-id"
+
+        app.dependency_overrides[require_auth] = mock_auth
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _ratings_admin(prior_raises=True))
+        # raise_server_exceptions=False so the unhandled error becomes a 500 response
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            resp = client.get("/sessions/sess-1/ratings", headers={"Authorization": "Bearer x"})
+            assert resp.status_code >= 500
+        finally:
+            app.dependency_overrides.clear()

@@ -426,37 +426,32 @@ async def session_ratings(
     if not sb_admin:
         raise HTTPException(status_code=503, detail="Storage not configured")
 
-    coach_row_id = None
-    try:
-        coach_resp = (
-            sb_admin.table("coaches")
-            .select("id")
-            .eq("user_id", request.state.user_id)
-            .single()
-            .execute()
-        )
-        coach_row_id = coach_resp.data["id"] if coach_resp.data else None
-    except Exception:
-        pass
+    # No row → 403; a real query/DB failure propagates as 5xx (not masked as 403).
+    coach_resp = (
+        sb_admin.table("coaches")
+        .select("id")
+        .eq("user_id", request.state.user_id)
+        .limit(1)
+        .execute()
+    )
+    coach_row_id = coach_resp.data[0]["id"] if coach_resp.data else None
     if not coach_row_id:
         raise HTTPException(status_code=403, detail="Coach profile not found")
 
-    # coach_id filter enforces ownership — a foreign session simply isn't found.
-    try:
-        resp = (
-            sb_admin.table("sessions")
-            .select("metrics_json, stroke_type, athlete_id, created_at")
-            .eq("id", session_id)
-            .eq("coach_id", coach_row_id)
-            .single()
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if not resp.data:
+    # coach_id filter enforces ownership — a foreign/unknown session returns no row (404),
+    # while a genuine query/DB failure propagates as 5xx rather than being masked as 404.
+    resp = (
+        sb_admin.table("sessions")
+        .select("metrics_json, stroke_type, athlete_id, created_at")
+        .eq("id", session_id)
+        .eq("coach_id", coach_row_id)
+        .limit(1)
+        .execute()
+    )
+    row = resp.data[0] if resp.data else None
+    if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    row        = resp.data
     stroke     = row.get("stroke_type") or "breaststroke"
     athlete_id = row.get("athlete_id")
     created_at = row.get("created_at")
@@ -465,25 +460,25 @@ async def session_ratings(
     metrics = {**(mj.get("session") or {}), **(mj.get("data_quality") or {})}
 
     # Baseline = this athlete's earlier same-stroke sessions, newest-first, before this one.
+    # No try/except: an empty result is the legitimate "no prior session" case (handled by
+    # select_baseline → None), so a raised error here is a real failure and should surface as 5xx
+    # rather than silently degrading the trend to "first_session".
     prior = []
     if athlete_id and created_at:
-        try:
-            prior_resp = (
-                sb_admin.table("sessions")
-                .select("metrics_json, created_at")
-                .eq("coach_id", coach_row_id)
-                .eq("athlete_id", athlete_id)
-                .eq("stroke_type", stroke)
-                .lt("created_at", created_at)
-                .order("created_at", desc=True)
-                .limit(10)
-                .execute()
-            )
-            for r in (prior_resp.data or []):
-                pmj = r.get("metrics_json") or {}
-                prior.append({**(pmj.get("session") or {}), **(pmj.get("data_quality") or {})})
-        except Exception:
-            prior = []
+        prior_resp = (
+            sb_admin.table("sessions")
+            .select("metrics_json, created_at")
+            .eq("coach_id", coach_row_id)
+            .eq("athlete_id", athlete_id)
+            .eq("stroke_type", stroke)
+            .lt("created_at", created_at)
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()
+        )
+        for r in (prior_resp.data or []):
+            pmj = r.get("metrics_json") or {}
+            prior.append({**(pmj.get("session") or {}), **(pmj.get("data_quality") or {})})
 
     baseline = ratings.select_baseline(prior, mode="previous")
     return ratings.rate_session(metrics, baseline, stroke)

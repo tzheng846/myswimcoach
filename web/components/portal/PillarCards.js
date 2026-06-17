@@ -57,7 +57,12 @@ function PillarCard({ p, colors }) {
 
   return (
     <div className="rounded-xl border border-navy/50 bg-surface p-4">
-      <button onClick={() => setOpen((o) => !o)} className="w-full text-left">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls={`pillar-detail-${p.key}`}
+        className="w-full text-left"
+      >
         <div className="flex items-center justify-between">
           <span className="font-semibold text-ink">{p.label}</span>
           <TrendChip trend={p.trend} colors={colors} />
@@ -81,7 +86,7 @@ function PillarCard({ p, colors }) {
       </button>
 
       {open && (
-        <div className="mt-3 border-t border-navy/50 pt-3">
+        <div id={`pillar-detail-${p.key}`} className="mt-3 border-t border-navy/50 pt-3">
           <p className="text-sm leading-relaxed text-muted">{p.explanation}</p>
           {detail.length > 0 && (
             <div className="mt-3 grid grid-cols-2 gap-2">
