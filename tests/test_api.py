@@ -699,3 +699,87 @@ class TestCoachChatTeam:
         result = next(d for d in resp.json()["data"] if d["tool"] == "rank_progress")["result"]
         assert [p["athlete_name"] for p in result["progressed"]] == ["Maria"]
         assert result["insufficient_data"] == [{"athlete_name": "Sam", "sessions_with_metric": 1}]
+
+    def test_rank_progress_clamps_nonpositive_min_sessions(self, api_client, monkeypatch):
+        """A non-positive min_sessions from the model is clamped, not crashed (no IndexError)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        athletes = [{"id": "ath-1", "name": "Maria"}, {"id": "ath-2", "name": "Sam"}]
+        team_sessions = [
+            {"athlete_id": "ath-1", "created_at": "2026-06-14T00:00:00Z",
+             "metrics_json": {"session": {"mean_dps_m": 1.3}}},
+            {"athlete_id": "ath-1", "created_at": "2026-06-01T00:00:00Z",
+             "metrics_json": {"session": {"mean_dps_m": 1.0}}},
+            {"athlete_id": "ath-2", "created_at": "2026-06-14T00:00:00Z",
+             "metrics_json": {"session": {"mean_dps_m": 1.1}}},  # only one session
+        ]
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _team_admin(athletes=athletes, team_sessions=team_sessions))
+        _mock_anthropic_seq(monkeypatch, [
+            _tool_resp("rank_progress", {"metric": "mean_dps_m", "min_sessions": 0}),
+            _text_resp("Maria improved the most."),
+        ])
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        result = next(d for d in resp.json()["data"] if d["tool"] == "rank_progress")["result"]
+        # Clamped to the ≥2 floor → behaves like the default, no crash.
+        assert [p["athlete_name"] for p in result["progressed"]] == ["Maria"]
+        assert result["insufficient_data"] == [{"athlete_name": "Sam", "sessions_with_metric": 1}]
+
+
+# ── POST /coach/chat — drill recommendation (33-03) ────────────────────────────
+
+def test_drill_tool_declared():
+    import coach
+
+    assert any(t["name"] == "recommend_drills" for t in coach.DRILL_TOOLS)
+    assert "drill" in coach._build_system_prompt("breaststroke").lower()
+
+
+def _anchor_with_session(session_metrics):
+    """An anchor session row whose metrics_json.session carries the given metrics."""
+    return {**ANCHOR_ROW, "metrics_json": {"session": session_metrics, "cycles": []}}
+
+
+class TestCoachChatDrills:
+    """recommend_drills grounds the call-to-action in the library, matched to session metrics."""
+
+    def test_recommends_library_drills_for_flagged_session(self, api_client, monkeypatch):
+        """A low-DPS / low-trough session surfaces matching library drills (AC-1)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        anchor = _anchor_with_session({"mean_dps_m": 1.3, "mean_trough_vel_ms": 0.03})
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _tool_admin(anchor=anchor))
+        _mock_anthropic_seq(monkeypatch, [
+            _tool_resp("recommend_drills", {}),
+            _text_resp("Your DPS is 1.3 m — try the streamline glide hold."),
+        ])
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        result = next(d for d in resp.json()["data"] if d["tool"] == "recommend_drills")["result"]
+        ids = {d["id"] for d in result["drills"]}
+        assert "streamline-glide-hold" in ids
+        assert "low_dps" in result["flags"]
+
+    def test_clean_session_returns_no_drills(self, api_client, monkeypatch):
+        """A session with no flagged problem returns an empty list + an honest note (AC-2)."""
+        import api
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        anchor = _anchor_with_session({"mean_dps_m": 1.9, "mean_trough_vel_ms": 0.30,
+                                       "cv_isi": 0.05, "fatigue_index_pct": 1})
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _tool_admin(anchor=anchor))
+        _mock_anthropic_seq(monkeypatch, [
+            _tool_resp("recommend_drills", {}),
+            _text_resp("Form looks solid."),
+        ])
+        resp = api_client.post("/coach/chat", json=_chat_body(),
+                               headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        result = next(d for d in resp.json()["data"] if d["tool"] == "recommend_drills")["result"]
+        assert result["drills"] == []
+        assert "note" in result

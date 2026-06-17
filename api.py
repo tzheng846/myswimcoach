@@ -42,6 +42,7 @@ import metrics as m
 import vel_acc_extraction as vae
 import coach
 import roster_metrics
+import drills
 import anthropic
 
 app = FastAPI()
@@ -886,7 +887,7 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
     data_block = coach._build_user_message(stroke, session, _attach_t_peak(cycles))
     if simple:
         system = (_SIMPLE_PREAMBLE + "\n" + coach._TOOLS_HINT + "\n" + coach._TEAM_HINT + "\n"
-                  + coach._GUARDRAILS + "\n\nSESSION DATA:\n" + data_block)
+                  + coach._DRILL_HINT + "\n" + coach._GUARDRAILS + "\n\nSESSION DATA:\n" + data_block)
     else:
         system = coach._build_system_prompt(stroke) + "\n\nSESSION DATA:\n" + data_block
 
@@ -959,20 +960,16 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
     def _load_roster_rows():
         if "rows" in _roster_cache:
             return _roster_cache["rows"]
-        try:
-            arows = (sb_admin.table("athletes").select("id, name")
-                     .eq("coach_id", coach_row_id).execute()).data or []
-        except Exception:
-            arows = []
+        # Let query failures propagate — a backend outage must surface as a tool error,
+        # not masquerade as an empty roster ("you have no athletes").
+        arows = (sb_admin.table("athletes").select("id, name")
+                 .eq("coach_id", coach_row_id).execute()).data or []
         names = {a.get("id"): a.get("name") for a in arows}
-        try:
-            srows = (sb_admin.table("sessions")
-                     .select("athlete_id, created_at, metrics_json")
-                     .eq("coach_id", coach_row_id)
-                     .order("created_at", desc=True)
-                     .execute()).data or []
-        except Exception:
-            srows = []
+        srows = (sb_admin.table("sessions")
+                 .select("athlete_id, created_at, metrics_json")
+                 .eq("coach_id", coach_row_id)
+                 .order("created_at", desc=True)
+                 .execute()).data or []
         rows = []
         for s in srows:
             aid = s.get("athlete_id")
@@ -996,8 +993,12 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
             limit = int(args["limit"]) if args.get("limit") is not None else None
         except (TypeError, ValueError):
             limit = None
+        try:
+            rows = _load_roster_rows()
+        except Exception:
+            return {"error": "Could not load the team roster."}
         ranking = roster_metrics.rank_athletes(
-            roster_metrics.latest_per_athlete(_load_roster_rows()),
+            roster_metrics.latest_per_athlete(rows),
             metric, ascending=ascending, limit=limit)
         return {"metric": metric, "ascending": ascending, "ranking": ranking, "athletes": len(ranking)}
 
@@ -1009,11 +1010,31 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
             min_sessions = int(args.get("min_sessions") or 2)
         except (TypeError, ValueError):
             min_sessions = 2
+        min_sessions = max(min_sessions, 2)   # progress needs ≥2 points; also blocks 0/negative
+        try:
+            rows = _load_roster_rows()
+        except Exception:
+            return {"error": "Could not load the team roster."}
         return {"metric": metric,
-                **roster_metrics.rank_progress(_load_roster_rows(), metric, min_sessions=min_sessions)}
+                **roster_metrics.rank_progress(rows, metric, min_sessions=min_sessions)}
 
     def _exec_team_summary(args):
-        return roster_metrics.team_summary(_load_roster_rows(), _SESSION_SUMMARY_KEYS)
+        try:
+            rows = _load_roster_rows()
+        except Exception:
+            return {"error": "Could not load the team roster."}
+        return roster_metrics.team_summary(rows, _SESSION_SUMMARY_KEYS)
+
+    def _exec_recommend_drills(args):
+        # Grounds the call-to-action in the curated library, matched to THIS session's metrics.
+        flags = drills.flags_from_session(session)
+        matched = drills.match_drills(flags)
+        out = {"flags": sorted(flags),
+               "drills": [{k: d[k] for k in ("id", "name", "how_to", "why", "targets")}
+                          for d in matched]}
+        if not matched:
+            out["note"] = "no metric problems flagged — the swim looks solid"
+        return out
 
     _EXECUTORS = {
         "list_athlete_sessions": _exec_list_athlete_sessions,
@@ -1021,6 +1042,7 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
         "rank_athletes": _exec_rank_athletes,
         "rank_progress": _exec_rank_progress,
         "team_summary": _exec_team_summary,
+        "recommend_drills": _exec_recommend_drills,
     }
 
     # Structured tool results surfaced to the client alongside the prose reply, so a future
@@ -1035,7 +1057,7 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
                 model=coach.MODEL,
                 max_tokens=2048,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                tools=coach.COACH_TOOLS + coach.TEAM_TOOLS,
+                tools=coach.COACH_TOOLS + coach.TEAM_TOOLS + coach.DRILL_TOOLS,
                 messages=convo,
             )
             if getattr(resp, "stop_reason", None) != "tool_use":

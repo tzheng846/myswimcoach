@@ -211,6 +211,30 @@ TEAM_TOOLS = [
 ]
 
 
+# Drill recommendation (33-03). Matches THIS session's metric problems to a curated library.
+DRILL_TOOLS = [
+    {
+        "name": "recommend_drills",
+        "description": (
+            "Return drills from the curated library matched to THIS session's metric problems, "
+            "each with a 'why it applies'. ALWAYS call this before recommending a drill, and only "
+            "recommend a drill it returns. If it returns no drills, the swim has no flagged problem."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+]
+
+
+_DRILL_HINT = """\
+RECOMMENDING A DRILL
+Before you suggest a drill, call recommend_drills — it returns drills from a curated library
+matched to this session's actual metric problems, each with a why-it-applies. Recommend ONLY a
+drill it returns, and tie your recommendation to the specific numbers (e.g. "your DPS is 1.3 m
+and speed drops to 0.04 m/s between strokes, so..."). If it returns no drills, say the swim
+looks solid and offer a light sharpener rather than inventing a fix.
+"""
+
+
 def _build_system_prompt(stroke: str) -> str:
     biomechanics = _FREESTYLE_BIOMECHANICS if stroke == "freestyle" else _BREASTSTROKE_BIOMECHANICS
     return f"""\
@@ -242,6 +266,7 @@ OUTPUT STYLE
 
 {_TOOLS_HINT}
 {_TEAM_HINT}
+{_DRILL_HINT}
 {_GUARDRAILS}"""
 
 
