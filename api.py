@@ -1,6 +1,7 @@
 import csv as _csv
 import datetime
 import io as _io
+import json
 import math
 import os
 import tempfile
@@ -794,6 +795,11 @@ Avoid jargon: say 'stroke rate' not 'SPM', 'how far each stroke takes you' not '
 Keep your answer short — 3 to 5 sentences maximum.
 """
 
+# Max model<->tool round-trips per chat turn. Bounds latency/cost and guarantees termination.
+MAX_TOOL_ITERS = 5
+# Session-level metric keys returned in the list_athlete_sessions summary (compact, no raw cycles).
+_SESSION_SUMMARY_KEYS = ["mean_vel_ms", "mean_dps_m", "stroke_rate_spm", "fatigue_index_pct", "cv_isi"]
+
 
 @app.post("/coach/chat")
 async def coach_chat(request: Request, _auth=Depends(require_auth)):
@@ -849,7 +855,7 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
     try:
         session_resp = (
             sb_admin.table("sessions")
-            .select("metrics_json, stroke_type, coach_id")
+            .select("metrics_json, stroke_type, coach_id, athlete_id")
             .eq("id", session_id)
             .single()
             .execute()
@@ -862,32 +868,124 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
     if row.get("coach_id") != coach_row_id:
         raise HTTPException(status_code=403, detail="Not authorized for this session")
 
-    stroke   = row.get("stroke_type") or "breaststroke"
-    metrics  = row.get("metrics_json") or {}
-    session  = metrics.get("session", {}) or {}
-    cycles   = metrics.get("cycles", []) or []
+    stroke     = row.get("stroke_type") or "breaststroke"
+    athlete_id = row.get("athlete_id")
+    metrics    = row.get("metrics_json") or {}
+    session    = metrics.get("session", {}) or {}
+    cycles     = metrics.get("cycles", []) or []
 
-    # Attach t_peak_s (peak_idx is an index into the 100 Hz grid) so the per-cycle table renders.
-    for c in cycles:
-        idx = c.get("peak_idx")
-        if isinstance(idx, (int, float)) and idx is not None:
-            c["t_peak_s"] = float(idx) / 100.0
+    def _attach_t_peak(cyc):
+        # peak_idx is an index into the 100 Hz grid; t_peak_s lets the per-cycle table render.
+        for c in cyc:
+            idx = c.get("peak_idx")
+            if isinstance(idx, (int, float)) and idx is not None:
+                c["t_peak_s"] = float(idx) / 100.0
+        return cyc
 
-    data_block = coach._build_user_message(stroke, session, cycles)
+    data_block = coach._build_user_message(stroke, session, _attach_t_peak(cycles))
     if simple:
-        system = _SIMPLE_PREAMBLE + "\n" + coach._GUARDRAILS + "\n\nSESSION DATA:\n" + data_block
+        system = (_SIMPLE_PREAMBLE + "\n" + coach._TOOLS_HINT + "\n" + coach._GUARDRAILS
+                  + "\n\nSESSION DATA:\n" + data_block)
     else:
         system = coach._build_system_prompt(stroke) + "\n\nSESSION DATA:\n" + data_block
 
+    # ── Tool executors — ALWAYS scoped to the anchor session's athlete AND the owning coach.
+    # The model may *request* a tool; the server decides whether to honor it. A session_id the
+    # model supplies is re-validated against coach_id + athlete_id — never trusted as given.
+    def _exec_list_athlete_sessions(args):
+        if not athlete_id:
+            return {"error": "No athlete is linked to this session, so history is unavailable."}
+        try:
+            limit = int(args.get("limit") or 10)
+        except (TypeError, ValueError):
+            limit = 10
+        limit = max(1, min(limit, 25))
+        q = (sb_admin.table("sessions")
+             .select("id, created_at, name, stroke_type, metrics_json")
+             .eq("coach_id", coach_row_id)
+             .eq("athlete_id", athlete_id)
+             .order("created_at", desc=True)
+             .limit(limit))
+        stroke_filter = args.get("stroke")
+        if stroke_filter:
+            q = q.eq("stroke_type", stroke_filter)
+        try:
+            rows = q.execute().data or []
+        except Exception:
+            return {"error": "Could not load sessions."}
+        out = []
+        for r in rows:
+            sess = (r.get("metrics_json") or {}).get("session", {}) or {}
+            out.append({
+                "session_id": r.get("id"),
+                "date": (r.get("created_at") or "")[:10],
+                "name": r.get("name"),
+                "stroke": r.get("stroke_type"),
+                **{k: sess.get(k) for k in _SESSION_SUMMARY_KEYS},
+            })
+        return {"sessions": out, "count": len(out)}
+
+    def _exec_get_session_metrics(args):
+        sid = args.get("session_id")
+        if not sid or not isinstance(sid, str):
+            return {"error": "session_id is required."}
+        if not athlete_id:
+            return {"error": "No athlete is linked to this session."}
+        try:
+            r = (sb_admin.table("sessions")
+                 .select("metrics_json, stroke_type")
+                 .eq("id", sid)
+                 .eq("coach_id", coach_row_id)
+                 .eq("athlete_id", athlete_id)
+                 .single()
+                 .execute()).data
+        except Exception:
+            r = None
+        if not r:
+            return {"error": "That session is not available for this athlete."}
+        mj = r.get("metrics_json") or {}
+        return {"data": coach._build_user_message(
+            r.get("stroke_type") or "breaststroke",
+            mj.get("session", {}) or {},
+            _attach_t_peak(mj.get("cycles", []) or []),
+        )}
+
+    _EXECUTORS = {
+        "list_athlete_sessions": _exec_list_athlete_sessions,
+        "get_session_metrics": _exec_get_session_metrics,
+    }
+
     try:
         client = anthropic.Anthropic()
-        resp = client.messages.create(
-            model=coach.MODEL,
-            max_tokens=2048,
-            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            messages=messages,
-        )
-        reply = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+        convo = list(messages)
+        reply = ""
+        for _ in range(MAX_TOOL_ITERS):
+            resp = client.messages.create(
+                model=coach.MODEL,
+                max_tokens=2048,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                tools=coach.COACH_TOOLS,
+                messages=convo,
+            )
+            if getattr(resp, "stop_reason", None) != "tool_use":
+                reply = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+                break
+            # Model asked for tool(s): run each, feed results back, loop.
+            convo.append({"role": "assistant", "content": resp.content})
+            tool_results = []
+            for blk in resp.content:
+                if getattr(blk, "type", None) != "tool_use":
+                    continue
+                executor = _EXECUTORS.get(blk.name)
+                result = executor(blk.input or {}) if executor else {"error": f"Unknown tool: {blk.name}"}
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": blk.id,
+                    "content": json.dumps(result),
+                })
+            convo.append({"role": "user", "content": tool_results})
+        else:
+            reply = reply or "I couldn't finish analyzing that — try asking something more specific."
     except anthropic.APIStatusError as e:
         if e.status_code == 529 or "overloaded" in str(e).lower():
             raise HTTPException(status_code=503, detail="The coaching service is busy — try again in a few seconds.")
