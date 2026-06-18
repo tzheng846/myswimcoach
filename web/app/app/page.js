@@ -1,55 +1,57 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
-import AthleteCard from "@/components/portal/AthleteCard";
+import { apiFetch } from "@/lib/api";
+import TeamPulse from "@/components/portal/TeamPulse";
+import NeedsAttention from "@/components/portal/NeedsAttention";
+import RecentActivity from "@/components/portal/RecentActivity";
+import RosterBandCard from "@/components/portal/RosterBandCard";
 
 export default function DashboardPage() {
-  const [athletes, setAthletes] = useState(null);
-  const [lastSessions, setLastSessions] = useState({});
+  const [data, setData] = useState(undefined); // undefined = loading, null = error
 
   useEffect(() => {
-    (async () => {
-      const { data: athletes } = await supabase
-        .from("athletes")
-        .select("id, name, stroke_type, head_waist_m")
-        .order("name");
-      setAthletes(athletes ?? []);
-
-      const ids = (athletes ?? []).map((a) => a.id);
-      if (ids.length > 0) {
-        const { data: sessions } = await supabase
-          .from("sessions")
-          .select("athlete_id, created_at, metrics_json")
-          .in("athlete_id", ids)
-          .order("created_at", { ascending: false });
-        const latest = {};
-        for (const s of sessions ?? []) {
-          if (!latest[s.athlete_id]) latest[s.athlete_id] = s;
-        }
-        setLastSessions(latest);
-      }
-    })();
+    let live = true;
+    apiFetch("/team/overview")
+      .then((d) => live && setData(d))
+      .catch(() => live && setData(null));
+    return () => {
+      live = false;
+    };
   }, []);
 
-  if (athletes === null) return <p className="text-muted">Loading…</p>;
+  if (data === undefined) return <p className="text-muted">Loading…</p>;
+  if (data === null) return <p className="text-muted">Couldn’t load the dashboard.</p>;
+
+  const colors = data.rating_colors;
 
   return (
     <div>
       <h1 className="text-2xl font-bold">Dashboard</h1>
-      <p className="mt-1 text-sm text-muted">
-        Latest session at a glance, per athlete.
-      </p>
+      <p className="mt-1 text-sm text-muted">How your team is doing, at a glance.</p>
 
-      {athletes.length === 0 ? (
+      {data.athlete_count === 0 ? (
         <p className="mt-10 text-center text-muted">
           No athletes yet — add your roster on the Athletes page.
         </p>
       ) : (
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {athletes.map((a) => (
-            <AthleteCard key={a.id} athlete={a} lastSession={lastSessions[a.id]} />
-          ))}
+        <div className="mt-6 space-y-8">
+          <TeamPulse
+            athleteCount={data.athlete_count}
+            testedThisWeek={data.tested_this_week}
+            pillars={data.pillars}
+            colors={colors}
+          />
+          <NeedsAttention items={data.needs_attention} colors={colors} />
+          <RecentActivity items={data.recent} />
+          <section>
+            <h2 className="text-sm uppercase tracking-wider text-muted">Team</h2>
+            <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {data.athletes.map((a) => (
+                <RosterBandCard key={a.athlete_id} athlete={a} colors={colors} />
+              ))}
+            </div>
+          </section>
         </div>
       )}
     </div>
