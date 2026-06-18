@@ -498,21 +498,24 @@ async def team_overview(request: Request, _auth=Depends(require_auth)):
     # No row → 403; a real query/DB failure propagates as 5xx (not masked).
     coach_resp = (
         sb_admin.table("coaches")
-        .select("id")
+        .select("id, team_id")
         .eq("user_id", request.state.user_id)
         .limit(1)
         .execute()
     )
-    coach_row_id = coach_resp.data[0]["id"] if coach_resp.data else None
-    if not coach_row_id:
+    coach_row = coach_resp.data[0] if coach_resp.data else None
+    if not coach_row:
         raise HTTPException(status_code=403, detail="Coach profile not found")
+    coach_row_id = coach_row["id"]
+    team_id = coach_row.get("team_id")
 
-    # One athletes query + one sessions query for the whole roster (same shape as the chat team
-    # loader). A query failure propagates as 5xx rather than masquerading as an empty roster.
+    # Roster is scoped by team_id (the live athletes table has no coach_id column — scoping that
+    # the web gets from RLS; the service-role client must filter explicitly). Sessions stay on
+    # coach_id (that column exists). A query failure propagates as 5xx, not an empty roster.
     athletes_rows = (
         sb_admin.table("athletes")
         .select("id, name, stroke_type")
-        .eq("coach_id", coach_row_id)
+        .eq("team_id", team_id)
         .execute()
     ).data or []
     sessions_rows = (

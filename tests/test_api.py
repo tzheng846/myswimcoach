@@ -978,7 +978,7 @@ def _team_overview_admin(coach_id="coach-1", athletes=None, sessions=None, sessi
         t = MagicMock()
         res = MagicMock()
         if name == "coaches":
-            res.data = [{"id": coach_id}] if coach_id else []
+            res.data = [{"id": coach_id, "team_id": "team-1"}] if coach_id else []
         elif name == "athletes":
             res.data = athletes
         elif name == "sessions":
