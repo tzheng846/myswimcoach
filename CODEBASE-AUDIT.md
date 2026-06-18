@@ -5,6 +5,13 @@ code, test runs, or live probes on that date — file:line references are eviden
 decoration. Project history and decision log live in `.paul/STATE.md`; this document is
 the cross-system map.*
 
+*Last refreshed 2026-06-18 (Phase 35-03 doc reconciliation) for Phases 33–36 + the 35-02
+iOS work: added the `/coach/chat` tool-use loop (coach.py + roster_metrics.py + drills.py),
+the rating engine (ratings.py + `GET /sessions/{id}/ratings` + RATINGS-SPEC.md), the iOS
+ratings UI, DiagnosticsScreen / VideoOverlayScreen, and the iPhone-first device family;
+resolved the 2026-06-12 Railway/Vercel deploy-drift rows (35-01 verified prod live); added
+the Feature Status Ledger below. Rows still dated 2026-06-12 carry their original evidence.*
+
 ---
 
 ## 1. System overview
@@ -36,6 +43,29 @@ Streamlit app.py — desktop analysis tool + AI coach (coach.py). Dev tool, not 
 
 ---
 
+## Feature Status Ledger (refreshed 2026-06-18)
+
+One-glance "what works / what's deferred / what's draft." Detail + evidence in the sections below.
+
+| Surface | Status | Note |
+|---------|--------|------|
+| Signal pipeline + breaststroke metrics | ✅ WORKING | 93 tests pass; kick metrics flagged unreliable by design |
+| Wavelet segmentation (all strokes) | ⚠️ DRAFT | `segmentation_reliable=False` always → ratings provisional; tuning = future 16-06 |
+| Railway API (process/sessions/devices/athletes) | ✅ WORKING | live + verified (35-01 prod probe) |
+| Parent reports (`/reports/{token}`) | ✅ WORKING | prod verified (35-01) — was the 06-12 deploy-drift ❌, now resolved |
+| AI coaching chat (`/coach/chat`) | ✅ WORKING (web) | tool-use loop live; `ANTHROPIC_API_KEY` set on Railway (35-01); **web only — not on iOS** |
+| Coach-friendly ratings (`/sessions/{id}/ratings`) | ✅ WORKING / ⚠️ DRAFT thresholds | engine + endpoint live (PR #5); breaststroke bands DRAFT — coach review owed |
+| Web coach portal + marketing | ✅ WORKING | live on Vercel (35-01); all surfaces verified |
+| iOS ratings pillar UI | ✅ WORKING | shipped 35-02, verified on device (breaststroke); non-breaststroke render unexercised (no data) |
+| iOS iPad support | ➖ DE-SCOPED | iPhone-first (TARGETED_DEVICE_FAMILY=1); responsive iPad = future phase |
+| iOS device diagnostics (34-01) | ◐ PARTIAL | screen verified live; full magnet→buffer flow DEFERRED (resolder) |
+| iOS recording / retrieval / video (21-02 / 26-01 / 22-02) | ⏸ DEFERRED | post-resolder build (one build; no rebuild cost) |
+| AI chat + advanced per-cycle graphs on iOS | ❌ NOT BUILT | web-only parity gap (not a regression) — candidate future iOS-parity phase |
+| Stripe billing checkout/portal | ⚠️ UNREACHABLE | endpoints exist, no client UI (deliberate per Phase 23) |
+| Email dispatch of parent reports | ⏸ DEFERRED | mailto/copy-link shipped; Resend slots in later |
+
+---
+
 ## 2. Folder map — myswimcoach
 
 | Item | Role | Status |
@@ -43,14 +73,17 @@ Streamlit app.py — desktop analysis tool + AI coach (coach.py). Dev tool, not 
 | `api.py` | FastAPI server — all production endpoints (see §4) | **Production** |
 | `vel_acc_extraction.py` | Signal pipeline: counts → velocity @ 100 Hz. Owns `WHEEL_DIAMETER_M = 0.06` (vel_acc_extraction.py:27) — the only copy of this constant in the system | **Production** |
 | `metrics.py` | Breaststroke feature extraction, pure functions | **Production** |
+| `ratings.py` | Coach-friendly rating engine (pure): 4 pillars + 0–100 score + direction-aware trend; source of truth for `/sessions/{id}/ratings` + web/iOS pillar cards (Phase 36; contract `.paul/.../RATINGS-SPEC.md`). DRAFT breaststroke thresholds | **Production** |
+| `drills.py` | Drill library + metric tag-matching recommender (pure) — used by `/coach/chat` (Phase 33) | **Production** |
+| `roster_metrics.py` | Team/roster aggregation (pure) — powers `/coach/chat` team questions (Phase 33) | **Production** |
 | `supabase/` | `schema.sql` + 3 patch files — **stale vs live DB, see §5.2**; patch_03 not in git (§5.3) | Production (drifted) |
-| `web/` | Next.js 16 website: marketing + coach portal + parent reports. Builds clean | **Production** (not yet deployed) |
-| `tests/` | Pytest suite (30 tests, all passing). `conftest.py` mocks the supabase module and overrides `require_auth` — no network | **Production** (NOT in git, §5.3) |
-| `ESP_32_V5/` | Current firmware 1.1.0 — buffer-and-dump | **Production** (NOT in git, §5.3) |
+| `web/` | Next.js 16 website: marketing + coach portal + parent reports | **Production** (live on Vercel — verified 35-01) |
+| `tests/` | Pytest suite (93 tests incl. `test_ratings.py`, all passing). `conftest.py` mocks the supabase module and overrides `require_auth` — no network | **Production** |
+| `ESP_32_V5/` | Current firmware 1.1.0 — buffer-and-dump (+ STATUS command, Phase 34) | **Production** |
 | `Procfile` | Railway entry: `uvicorn api:app` | **Production** |
 | `requirements.txt` | Railway deps — includes Streamlit-only packages (streamlit, plotly, matplotlib, stumpy, anthropic); missing `python-dotenv` used by dev tools | Production (untidy) |
 | `app.py` | Streamlit desktop dashboard + AI coach chat | Dev/analysis tool |
-| `coach.py` | Anthropic coaching-prompt builder — imported **only** by app.py (app.py:18), not by api.py | Dev/analysis tool |
+| `coach.py` | Anthropic coaching system-prompt builder — **shared** by app.py (Streamlit) AND api.py `/coach/chat` (Phase 31/33). (06-12 note "only app.py" is obsolete) | **Production** (+ dev) |
 | `fetch_sessions.py`, `inspect_cycles.py`, `pipeline_view.py` | Dev utilities (Supabase fetch, cycle inspection, pipeline view) | Dev tools |
 | `logger.py`, `logger_ble.py` | Bench logging (serial / BLE incl. META/DUMP support) | Dev tools |
 | `motor_logger_esp32/` | Firmware base for ESP_32_V5 (live-streaming + motor). Kept untouched as reference. Contains `gpio32_test/` diagnostic | Legacy/reference |
@@ -82,9 +115,12 @@ Streamlit app.py — desktop analysis tool + AI coach (coach.py). Dev tool, not 
 | `src/screens/RecordingConfigScreen.js` | Pre-session config: athlete, stroke, name, notes, device picker |
 | `src/screens/RecordScreen.js` | Buffer-and-dump retrieval: META → clock correlation → DUMP → CSV → upload. Constants META_SIZE=8, END_OF_DUMP_MARKER=0xEE (RecordScreen.js:24-25) |
 | `src/screens/SessionHistoryScreen.js` | Per-athlete history; star/delete via `PATCH`/`DELETE /sessions/{id}` |
-| `src/screens/ReportCardScreen.js` | Historical report card; CSV export built **client-side** via Share (ReportCardScreen.js:146-180) |
+| `src/screens/ReportCardScreen.js` | Historical report card; **Simple/Advanced toggle** — Simple = ratings pillar cards, Advanced = raw metric cards (Phase 36, 35-02); CSV export built client-side via Share |
+| `src/screens/DiagnosticsScreen.js` | Live magnet/wiring/buffer/link health via the STATUS BLE command (Phase 34); plain-English verdicts |
+| `src/screens/VideoOverlayScreen.js` | In-app record-with-video playback overlay synced to the velocity cursor (Phase 26) |
+| `src/components/PillarCards.js` | RN ratings pillar UI — fetches `GET /sessions/{id}/ratings`, mirrors web (band/marker/verdict/trend/expand); colors from payload (Phase 36, 35-02) |
 | `src/components/VelocityChart.js`, `DataQualityCard.js` | Shared display components |
-| `ios/`, `android/` | Native projects (edited directly — no Mac for prebuild) |
+| `ios/`, `android/` | Native projects (edited directly — no Mac for prebuild). **iPhone-first**: `TARGETED_DEVICE_FAMILY=1` in the pbxproj (iPad de-scoped, 35-02) |
 
 ---
 
@@ -113,9 +149,11 @@ undocumented) · ❌ MISMATCH/DRIFT · ❔ UNVERIFIED
 | `GET /health` (api.py:93) | — | — | ✅ Railway healthcheck; live 200 |
 | `POST /process` (api.py:98) | RecordScreen.js:165 — sends file, head_waist_m, stroke_type, athlete_id, name, notes, device_id | — | ✅ (fields match Form params; `firmware_version` accepted but never sent — see 4.1) |
 | `GET /sessions/{id}/export` (api.py:312) | **none** — iOS builds CSV client-side (ReportCardScreen.js:146) | **none** | ⚠️ **Orphan endpoint** — no caller anywhere; duplicates the iOS client-side logic |
+| `GET /sessions/{id}/ratings` (Phase 36) | PillarCards.js (35-02) | PillarCards.js (36-02) | ✅ live + auth-guarded (prod probe 2026-06-18: unauth → 401, bogus route → 404 = per-route auth, route deployed). Baseline = athlete's previous same-stroke session |
+| `POST /coach/chat` (Phase 31/33) | **none** (web-only) | CoachChat.js | ✅ live; bounded tool-use loop (coach.py + roster_metrics.py + drills.py), coach-scoped; returns `{reply, data}`; needs `ANTHROPIC_API_KEY` (set on Railway, 35-01) |
 | `PATCH /sessions/{id}` (api.py:403) — allowed fields `name, notes, is_starred` only (api.py:418) | ReportCardScreen.js:185, SessionHistoryScreen.js:144 | sessions/page.js:73, sessions/[id]/page.js:62 | ✅ (note: root CLAUDE.md claimed `stroke_type` is patchable — it is **not**; doc fixed in this audit) |
 | `DELETE /sessions/{id}` (api.py:451) | SessionHistoryScreen.js:165 | sessions/page.js:92 | ✅ |
-| `GET /reports/{token}` (api.py:488, no auth, service role) | — | report/[token]/page.js:43 | ❌ **Local-only — NOT on Railway** (see §5.1) |
+| `GET /reports/{token}` (api.py:488, no auth, service role) | — | report/[token]/page.js:43 | ✅ **deployed + verified** (35-01 prod probe 2026-06-17: `/reports/{valid}` 200, junk → route-specific 404). Was the 06-12 deploy-drift ❌ in §5.1 — now resolved |
 | `GET /devices`, `PATCH/DELETE /devices/{chip_id}` (api.py:566-673) | DevicesScreen.js:27,45,64 | — (descoped from web) | ✅ |
 | `POST /athletes` (api.py:676) | AthletesScreen.js:60 | AddAthleteModal.js:17 | ✅ |
 | `POST /billing/checkout-session`, `/billing/portal-session`, `GET /billing/status`, `POST /billing/webhook`, `GET /billing/complete` (api.py:760-923) | **none** | **none** | ⚠️ No client UI calls billing (only iOS 402 *handling* exists, RecordScreen.js:174). Intentional per Phase 23 decision (checkout not exposed), but checkout/portal are currently unreachable by any user |
@@ -149,7 +187,7 @@ undocumented) · ❌ MISMATCH/DRIFT · ❔ UNVERIFIED
 | `pytest tests/` | ✅ **30/30 passed** in 7.9 s (test_api.py 15, test_metrics.py 15; includes `TestPublicReport` for `/reports/{token}`) |
 | `npm run build` in `web/` | ✅ Clean — Next.js 16.2.9, TypeScript pass, 10 routes (8 static, `/app/sessions/[id]` + `/report/[token]` dynamic) |
 | Railway `GET /health` | ✅ 200 `{"status":"ok"}` |
-| Railway `GET /reports/<dummy>` | ❌ Generic `{"detail":"Not Found"}` — identical to a nonsense control route. A deployed route would return `"Report not found"` (api.py:512). **Route absent on Railway** |
+| Railway `GET /reports/<dummy>` | ❌ (2026-06-12) Generic `{"detail":"Not Found"}` → ✅ **RESOLVED 2026-06-17** — now returns route-specific `"Report not found"`; route deployed (§5.1) |
 
 ---
 
@@ -158,12 +196,12 @@ undocumented) · ❌ MISMATCH/DRIFT · ❔ UNVERIFIED
 Ordered by impact. Nothing here was fixed in this audit (documentation-only pass) —
 each row is a candidate for `/paul:consider-issues`.
 
-### 5.1 Railway is running a pre-Phase-24 api.py ❌ (user action queued)
-Live probe (§4.5): `/reports/{token}` does not exist on the deployment. **Every parent
-report link 404s in production.** The web portal can *create* reports (direct Supabase
-write) but no parent can open one. Fix = push current api.py to Railway (already on the
-user's follow-up list in STATE.md). The same push also deploys `/sessions/{id}/export`
-(currently unused) and any other post-deploy changes.
+### 5.1 Railway is running a pre-Phase-24 api.py ❌ → ✅ RESOLVED 2026-06-17
+~~Live probe (§4.5): `/reports/{token}` does not exist on the deployment. Every parent
+report link 404s in production.~~ **RESOLVED:** Railway is GitHub-auto-deploy; current api.py
+is live. 35-01 prod probe (2026-06-17): `/reports/{valid}` 200, junk → route-specific 404;
+`/coach/chat` 401 unauth; and (2026-06-18) `/sessions/{id}/ratings` 401 unauth, bogus route
+404 — i.e. all Phase 24/31/33/36 endpoints are deployed. Parent links work in production.
 
 ### 5.2 Committed Supabase SQL cannot rebuild the live database ❌
 The live DB was evolved through SQL-editor migrations that were never committed.
@@ -288,10 +326,10 @@ pass through RecordScreen upload params) completes it.
 
 | Surface | State |
 |---------|-------|
-| Railway (`swimnetics-api-production.up.railway.app`) | Live, healthy, **pre-Phase-24 code** — push api.py (§5.1) |
-| Vercel | **Serving the legacy `landing/index.html` placeholder** at myswimcoach.vercel.app (probed 2026-06-12: `/` = old static page, `/report/x` = NOT_FOUND). The Next.js `web/` app is NOT what's deployed — portal + parent pages unreachable until the Vercel project is repointed at `web/` |
+| Railway (`swimnetics-api-production.up.railway.app`) | Live, healthy, **current code** — Phase 24/31/33/36 endpoints all deployed + verified (35-01/35-03). GitHub-auto-deploy on push to main |
+| Vercel | ✅ **Live serving `web/`** — marketing + portal + parent pages verified (35-01, 2026-06-17). (Was the legacy `landing/` placeholder on 2026-06-12.) |
 | Supabase (`ujrotuijxrbscjhzekjk`) | Live; schema = committed SQL **+ uncommitted SQL-editor migrations** (§5.2); patch_03 applied by user 2026-06-11 |
-| TestFlight | Stale build — predates Phases 12+ on-device features; EAS credits exhausted |
+| TestFlight | EAS build w/ Phase 36 ratings UI + Phase 34/26 screens installed (35-02, 2026-06-18); recording-gated checks pending a post-resolder build |
 | Firmware on device | 1.1.0 buffer-and-dump (ESP_32_V5) |
 | Version control | ⚠ Both repos missing production files from git — firmware, tests, patch_03, most mobile src/ (§5.3) |
 
@@ -300,8 +338,8 @@ pass through RecordScreen upload params) completes it.
 **Read in this order:**
 1. `.paul/STATE.md` — current position, decision log, locked BLE protocol, deferred issues
 2. This file — what actually connects to what, and what's drifted
-3. Root `CLAUDE.md` — pipeline/metrics reference (refreshed 2026-06-12)
-4. `swimnetics-mobile/CLAUDE.md` — iOS specifics (refreshed 2026-06-12)
+3. Root `CLAUDE.md` — pipeline/metrics reference (refreshed 2026-06-18: + ratings.py, /coach/chat, /sessions/{id}/ratings)
+4. `swimnetics-mobile/CLAUDE.md` — iOS specifics (refreshed 2026-06-12; pre-dates the 35-02 ratings UI + iPhone-first change)
 
 **Run things:**
 ```bash
