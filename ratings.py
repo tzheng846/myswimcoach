@@ -23,6 +23,7 @@ how it was picked. That keeps the future "let the coach choose the comparison sc
 caller-only change.
 """
 import math
+from datetime import date
 
 # Verdict colors — single source so clients never hard-code per-component (shipped Phase-2 trio).
 RATING_COLORS = {"good": "#2d9e5f", "ok": "#d4860a", "needs_work": "#c0392b"}
@@ -245,3 +246,67 @@ def select_baseline(prior_sessions, mode="previous"):
                     counts[k] = counts.get(k, 0) + 1
         return {k: agg[k] / counts[k] for k in agg} or None
     raise ValueError(f"unknown baseline mode: {mode}")
+
+
+# ── Team rollup (GET /team/overview) ────────────────────────────────────────────
+# Pure aggregation over per-athlete rating summaries for the coach dashboard. Consumes the band
+# strings already on each pillar (never re-derives them). Clock-free: callers pass `today` so it
+# stays unit-testable.
+STALE_DAYS = 14   # no session within this many days → flagged in needs-attention
+
+
+def _days_since(last_tested, today):
+    """Whole days from an ISO date string to `today` (a date). None when missing/unparseable."""
+    if not last_tested:
+        return None
+    try:
+        d = date.fromisoformat(str(last_tested)[:10])
+    except (ValueError, TypeError):
+        return None
+    return (today - d).days
+
+
+def summarize_team(athletes, today, stale_days=STALE_DAYS):
+    """Roll per-athlete rating summaries into a team band-distribution + needs-attention list.
+
+    athletes: list of {athlete_id, name, stroke_type, last_tested (ISO date str | None),
+        last_session_id, pillars: [{key, label, band, trend, score, provisional}]}. An empty
+        `pillars` means the athlete has no sessions yet.
+    today: a datetime.date (passed in — this function never reads the clock).
+    Returns {"pillars": [...band counts per PILLARS entry, in order...], "needs_attention": [...]}.
+
+    needs-attention reasons (band/trend only from NON-provisional pillars — an untrusted band must
+    never raise an alarm): {"type":"needs_work","pillar":<label>}, {"type":"declined","pillar":
+    <label>}, {"type":"stale","days":N}, {"type":"never_tested"}. Athletes with no reasons are
+    omitted; the list is sorted by reason-count desc then name.
+    """
+    dist = {p["key"]: {"good": 0, "ok": 0, "needs_work": 0, "unknown": 0} for p in PILLARS}
+    for a in athletes:
+        for pl in a.get("pillars") or []:
+            bucket = dist.get(pl.get("key"))
+            if bucket is not None and pl.get("band") in bucket:
+                bucket[pl["band"]] += 1
+    pillars = [{"key": p["key"], "label": p["label"], **dist[p["key"]]} for p in PILLARS]
+
+    needs = []
+    for a in athletes:
+        reasons = []
+        pls = a.get("pillars") or []
+        if not pls:
+            reasons.append({"type": "never_tested"})
+        else:
+            for pl in pls:
+                if pl.get("provisional"):
+                    continue
+                if pl.get("band") == "needs_work":
+                    reasons.append({"type": "needs_work", "pillar": pl.get("label")})
+                if pl.get("trend") == "declined":
+                    reasons.append({"type": "declined", "pillar": pl.get("label")})
+            days = _days_since(a.get("last_tested"), today)
+            if days is not None and days > stale_days:
+                reasons.append({"type": "stale", "days": days})
+        if reasons:
+            needs.append({"athlete_id": a.get("athlete_id"), "name": a.get("name"),
+                          "reasons": reasons})
+    needs.sort(key=lambda x: (-len(x["reasons"]), x["name"] or ""))
+    return {"pillars": pillars, "needs_attention": needs}

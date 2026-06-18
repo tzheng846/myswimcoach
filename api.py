@@ -484,6 +484,121 @@ async def session_ratings(
     return ratings.rate_session(metrics, baseline, stroke)
 
 
+@app.get("/team/overview")
+async def team_overview(request: Request, _auth=Depends(require_auth)):
+    """Team-level coach dashboard payload: each athlete's latest-session pillar verdicts, a team
+    band distribution, a needs-attention list, a recent-activity feed, and counts. All rating
+    logic is reused from ratings.py (the same path as /sessions/{id}/ratings) — this handler only
+    loads data, enforces auth + coach scope, and rolls it up. Contract: 37-01-PLAN DESIGN SPEC.
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    # No row → 403; a real query/DB failure propagates as 5xx (not masked).
+    coach_resp = (
+        sb_admin.table("coaches")
+        .select("id")
+        .eq("user_id", request.state.user_id)
+        .limit(1)
+        .execute()
+    )
+    coach_row_id = coach_resp.data[0]["id"] if coach_resp.data else None
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    # One athletes query + one sessions query for the whole roster (same shape as the chat team
+    # loader). A query failure propagates as 5xx rather than masquerading as an empty roster.
+    athletes_rows = (
+        sb_admin.table("athletes")
+        .select("id, name, stroke_type")
+        .eq("coach_id", coach_row_id)
+        .execute()
+    ).data or []
+    sessions_rows = (
+        sb_admin.table("sessions")
+        .select("id, athlete_id, stroke_type, created_at, metrics_json")
+        .eq("coach_id", coach_row_id)
+        .order("created_at", desc=True)
+        .execute()
+    ).data or []
+
+    # Group sessions by athlete (already newest-first); drop any not in this coach's roster.
+    roster = {a["id"]: a for a in athletes_rows}
+    by_athlete = {}
+    for s in sessions_rows:
+        aid = s.get("athlete_id")
+        if aid in roster:
+            by_athlete.setdefault(aid, []).append(s)
+
+    def _flat(mj):
+        mj = mj or {}
+        return {**(mj.get("session") or {}), **(mj.get("data_quality") or {})}
+
+    today = datetime.date.today()
+    week_ago = today - datetime.timedelta(days=7)
+
+    athlete_summaries = []
+    tested_this_week = 0
+    for a in athletes_rows:
+        sess = by_athlete.get(a["id"], [])
+        if not sess:
+            athlete_summaries.append({
+                "athlete_id": a["id"], "name": a.get("name"),
+                "stroke_type": a.get("stroke_type"),
+                "last_tested": None, "last_session_id": None, "pillars": [],
+            })
+            continue
+        latest = sess[0]
+        stroke = latest.get("stroke_type") or a.get("stroke_type") or "breaststroke"
+        metrics = _flat(latest.get("metrics_json"))
+        # Baseline = this athlete's earlier same-stroke sessions, before latest, newest-first.
+        prior = [
+            _flat(s.get("metrics_json")) for s in sess[1:]
+            if (s.get("stroke_type") or a.get("stroke_type") or "breaststroke") == stroke
+        ]
+        baseline = ratings.select_baseline(prior, mode="previous")
+        rated = ratings.rate_session(metrics, baseline, stroke)
+        pillars = [
+            {"key": p["key"], "label": p["label"], "band": p["band"],
+             "trend": p["trend"], "score": p["score"], "provisional": p["provisional"]}
+            for p in rated["pillars"]
+        ]
+        last_tested = (latest.get("created_at") or "")[:10]
+        try:
+            if last_tested and datetime.date.fromisoformat(last_tested) >= week_ago:
+                tested_this_week += 1
+        except ValueError:
+            pass  # malformed created_at → skip the week count for this row, keep the rest
+
+        athlete_summaries.append({
+            "athlete_id": a["id"], "name": a.get("name"), "stroke_type": stroke,
+            "last_tested": last_tested or None, "last_session_id": latest.get("id"),
+            "pillars": pillars,
+        })
+
+    # Recent feed: newest sessions team-wide (cap 10), no per-session rating (keeps compute
+    # O(athletes), not O(sessions); the web links each row to its full report card).
+    recent = [
+        {"athlete_id": s.get("athlete_id"),
+         "name": roster.get(s.get("athlete_id"), {}).get("name"),
+         "session_id": s.get("id"), "date": (s.get("created_at") or "")[:10],
+         "stroke_type": s.get("stroke_type")}
+        for s in sessions_rows if s.get("athlete_id") in roster
+    ][:10]
+
+    rollup = ratings.summarize_team(athlete_summaries, today)
+    return {
+        "athlete_count": len(athletes_rows),
+        "tested_this_week": tested_this_week,
+        "pillars": rollup["pillars"],
+        "athletes": athlete_summaries,
+        "recent": recent,
+        "needs_attention": rollup["needs_attention"],
+        "rating_colors": dict(ratings.RATING_COLORS),
+    }
+
+
 @app.patch("/sessions/{session_id}")
 async def update_session(
     session_id: str,

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Backend for Swimnetics — a biomechanical swim coaching tool. An AS5600 magnetic rotary encoder on a tethered wheel logs angle counts at ~270 Hz. The iOS app records via BLE, uploads a raw CSV to this FastAPI server, which runs the signal pipeline and returns metrics JSON. Results are saved to Supabase and displayed on the phone.
 
-**Full-system map (folder roles, connection matrix, known drift): see [CODEBASE-AUDIT.md](CODEBASE-AUDIT.md) (2026-06-12).**
+**Full-system map (folder roles, connection matrix, known drift): see [CODEBASE-AUDIT.md](CODEBASE-AUDIT.md) (2026-06-18).**
 
 ## System connections
 
@@ -29,7 +29,7 @@ Supabase: ujrotuijxrbscjhzekjk.supabase.co
 Railway:  https://swimnetics-api-production.up.railway.app
 ```
 
-The Streamlit `app.py` is a desktop analysis tool — not the primary product path. The iOS app is. `coach.py` (AI coaching prompts) is imported only by `app.py`, not by `api.py`.
+The Streamlit `app.py` is a desktop analysis tool — not the primary product path. The iOS app is. `coach.py` (AI coaching prompts) is the **shared** system-prompt builder used by both `app.py` (Streamlit demo) and `api.py` (the `/coach/chat` endpoint, Phase 31/33).
 
 ## Pipeline
 
@@ -53,8 +53,11 @@ logger → raw/<session>.csv → vel_acc_extraction.py → processed/<session>.c
 | `supabase/` | schema.sql + patches — ⚠ stale vs live DB (see CODEBASE-AUDIT.md §5.2) |
 | `ESP_32_V5/` | Current firmware 1.1.0 (buffer-and-dump); older sketch dirs are legacy |
 | `app.py` | Streamlit desktop UI (dev/analysis tool, not production path) |
-| `coach.py` | AI coaching prompt builder — used only by app.py |
-| `tests/` | Pytest suite — test_metrics.py + test_api.py (supabase mocked, no network) |
+| `coach.py` | AI coaching prompt builder — shared by app.py (Streamlit) + api.py `/coach/chat` |
+| `ratings.py` | Coach-friendly rating engine (pure) — 4 pillars + 0–100 score + trend; shared source of truth for `GET /sessions/{id}/ratings` + web/iOS pillar cards. Contract: `.paul/phases/36-metric-ratings/RATINGS-SPEC.md`. DRAFT breaststroke thresholds (coach review owed) |
+| `drills.py` | Drill library + metric tag-matching recommender (pure) — used by `/coach/chat` |
+| `roster_metrics.py` | Team/roster aggregation (pure) — powers `/coach/chat` team questions |
+| `tests/` | Pytest suite — test_metrics.py + test_api.py + test_ratings.py (supabase mocked, no network) |
 
 ## Running
 
@@ -118,6 +121,8 @@ All functions are pure (no I/O, no plots).
 - `PATCH /sessions/{session_id}` — update name, notes, is_starred (only — stroke_type is NOT patchable)
 - `DELETE /sessions/{session_id}` — deletes the DB row + raw CSV from storage (storage removal non-fatal)
 - `GET /sessions/{session_id}/export` — 100 Hz CSV download; ⚠ no caller anywhere (iOS builds its CSV client-side)
+- `GET /sessions/{session_id}/ratings` — coach-friendly pillar ratings (band / 0–100 score / trend) from `ratings.py`; auth + ownership; baseline = athlete's previous same-stroke session. Consumed by web + iOS pillar cards (Phase 36; see RATINGS-SPEC.md)
+- `POST /coach/chat` — AI coaching chat; bounded tool-use loop (`coach.py` + `roster_metrics.py` + `drills.py`), coach-scoped; returns `{reply, data}`; requires `ANTHROPIC_API_KEY` (503 if unset). Phase 31/33
 - `GET /reports/{token}` — public parent report payload (no auth, service role)
 - `GET /devices`, `PATCH/DELETE /devices/{chip_id}` — device list (+session counts), rename, deregister
 - `POST /athletes` — create athlete; enforces athlete limit (402)
