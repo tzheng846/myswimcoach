@@ -1,5 +1,6 @@
 """Unit tests for ratings.py — pure pillar rating logic (no I/O)."""
 import math
+from datetime import date
 
 import ratings
 
@@ -136,3 +137,57 @@ class TestSelectBaseline:
         import pytest
         with pytest.raises(ValueError):
             ratings.select_baseline([{"x": 1}], "bogus")
+
+
+class TestSummarizeTeam:
+    TODAY = date(2026, 6, 18)
+
+    def _ath(self, aid, name, pillars, last_tested):
+        return {"athlete_id": aid, "name": name, "stroke_type": "breaststroke",
+                "last_session_id": f"s-{aid}", "last_tested": last_tested, "pillars": pillars}
+
+    @staticmethod
+    def _pl(band="good", trend="steady", provisional=False, key="speed", label="Speed"):
+        return {"key": key, "label": label, "band": band, "trend": trend,
+                "score": 50, "provisional": provisional}
+
+    def test_distribution_counts_only_athletes_with_pillars(self):
+        a1 = self._ath("1", "A", [self._pl(band="good")], "2026-06-17")
+        a2 = self._ath("2", "B", [self._pl(band="needs_work")], "2026-06-17")
+        a3 = self._ath("3", "C", [], None)  # no sessions → contributes nothing
+        out = ratings.summarize_team([a1, a2, a3], self.TODAY)
+        assert len(out["pillars"]) == 4   # all PILLARS present, in order
+        speed = next(p for p in out["pillars"] if p["key"] == "speed")
+        assert (speed["good"], speed["needs_work"], speed["ok"], speed["unknown"]) == (1, 1, 0, 0)
+
+    def test_needs_work_and_declined_reasons(self):
+        pillars = [self._pl(band="good", trend="declined", key="speed", label="Speed"),
+                   self._pl(band="needs_work", trend="steady", key="consistency", label="Consistency")]
+        out = ratings.summarize_team([self._ath("1", "A", pillars, "2026-06-17")], self.TODAY)
+        types = {(r["type"], r.get("pillar")) for r in out["needs_attention"][0]["reasons"]}
+        assert ("needs_work", "Consistency") in types
+        assert ("declined", "Speed") in types
+
+    def test_provisional_pillar_raises_no_alarm(self):
+        pillars = [self._pl(band="needs_work", trend="declined", provisional=True)]
+        out = ratings.summarize_team([self._ath("1", "A", pillars, "2026-06-17")], self.TODAY)
+        assert out["needs_attention"] == []   # untrusted band/trend → no reason; recent → not stale
+
+    def test_stale_reason(self):
+        out = ratings.summarize_team(
+            [self._ath("1", "A", [self._pl(band="good")], "2026-05-01")], self.TODAY)  # ~48d ago
+        stale = [r for r in out["needs_attention"][0]["reasons"] if r["type"] == "stale"]
+        assert stale and stale[0]["days"] > ratings.STALE_DAYS
+
+    def test_never_tested(self):
+        out = ratings.summarize_team([self._ath("1", "A", [], None)], self.TODAY)
+        assert out["needs_attention"][0]["reasons"] == [{"type": "never_tested"}]
+
+    def test_clean_athlete_omitted_and_sorted_by_reason_count(self):
+        clean = self._ath("1", "Clean", [self._pl(band="good")], "2026-06-17")
+        two = self._ath("2", "Two", [self._pl(band="needs_work", trend="declined")], "2026-06-17")
+        one = self._ath("3", "One", [self._pl(band="needs_work", trend="steady")], "2026-06-17")
+        out = ratings.summarize_team([clean, one, two], self.TODAY)
+        names = [n["name"] for n in out["needs_attention"]]
+        assert "Clean" not in names            # no reasons → omitted
+        assert names == ["Two", "One"]         # 2 reasons before 1, ties broken by name

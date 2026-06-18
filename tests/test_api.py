@@ -922,3 +922,145 @@ class TestSessionRatings:
             assert resp.status_code >= 500
         finally:
             app.dependency_overrides.clear()
+
+
+# ── GET /team/overview (team coach dashboard) ──────────────────────────────────
+from datetime import date as _date, timedelta as _timedelta
+
+
+def _today_iso(days_ago=0):
+    return (_date.today() - _timedelta(days=days_ago)).isoformat() + "T00:00:00Z"
+
+
+TEAM_ATHLETES = [
+    {"id": "ath-1", "name": "Maya R.", "stroke_type": "breaststroke"},
+    {"id": "ath-2", "name": "Theo K.", "stroke_type": "breaststroke"},
+    {"id": "ath-3", "name": "New Kid", "stroke_type": "breaststroke"},  # no sessions yet
+]
+
+
+def _team_sessions():
+    """Newest-first across the roster (mirrors the endpoint's .order(created_at desc))."""
+    return [
+        {"id": "s-a1-2", "athlete_id": "ath-1", "stroke_type": "breaststroke",
+         "created_at": _today_iso(1),
+         "metrics_json": {"session": {"mean_vel_ms": 1.25, "mean_dps_m": 1.6,
+                                      "cv_arm_peak_vel": 0.09, "fatigue_index_pct": 6.0},
+                          "data_quality": {"segmentation_reliable": True}}},
+        {"id": "s-a2-1", "athlete_id": "ath-2", "stroke_type": "breaststroke",
+         "created_at": _today_iso(2),
+         "metrics_json": {"session": {"mean_vel_ms": 0.50, "mean_dps_m": 0.6,
+                                      "cv_arm_peak_vel": 0.28, "fatigue_index_pct": 35.0},
+                          "data_quality": {"segmentation_reliable": True}}},
+        {"id": "s-a1-1", "athlete_id": "ath-1", "stroke_type": "breaststroke",
+         "created_at": _today_iso(20),
+         "metrics_json": {"session": {"mean_vel_ms": 1.05},
+                          "data_quality": {"segmentation_reliable": True}}},
+        # foreign athlete not in this coach's roster → must be dropped from ratings + recent
+        {"id": "s-foreign", "athlete_id": "ath-X", "stroke_type": "breaststroke",
+         "created_at": _today_iso(0),
+         "metrics_json": {"session": {"mean_vel_ms": 9.9}}},
+    ]
+
+
+def _team_overview_admin(coach_id="coach-1", athletes=None, sessions=None, sessions_raises=False):
+    """Fake supabase admin serving coaches + athletes + sessions for /team/overview."""
+    from unittest.mock import MagicMock
+
+    if athletes is None:
+        athletes = TEAM_ATHLETES
+    if sessions is None:
+        sessions = _team_sessions()
+
+    admin = MagicMock()
+
+    def table(name):
+        t = MagicMock()
+        res = MagicMock()
+        if name == "coaches":
+            res.data = [{"id": coach_id}] if coach_id else []
+        elif name == "athletes":
+            res.data = athletes
+        elif name == "sessions":
+            res.data = sessions
+        t.select.return_value = t
+        t.eq.return_value = t
+        t.order.return_value = t
+        t.limit.return_value = t
+        if name == "sessions" and sessions_raises:
+            t.execute.side_effect = RuntimeError("simulated DB failure")
+        else:
+            t.execute.return_value = res
+        return t
+
+    admin.table.side_effect = table
+    return admin
+
+
+class TestTeamOverview:
+    """GET /team/overview — auth, coach scope, dashboard rollup."""
+
+    def test_no_auth_401(self):
+        from fastapi.testclient import TestClient
+        import api
+
+        client = TestClient(api.app, raise_server_exceptions=True)
+        assert client.get("/team/overview").status_code == 401
+
+    def test_shape_scope_and_rollup(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _team_overview_admin())
+        resp = api_client.get("/team/overview", headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert set(data) >= {"athlete_count", "tested_this_week", "pillars", "athletes",
+                             "recent", "needs_attention", "rating_colors"}
+        assert data["athlete_count"] == 3
+        assert data["tested_this_week"] == 2          # ath-1 (1d) + ath-2 (2d), ath-3 untested
+        assert data["rating_colors"]["good"] == "#2d9e5f"
+
+        # coach scope: the foreign athlete/session never leaks into ratings or the feed
+        ath_ids = {a["athlete_id"] for a in data["athletes"]}
+        assert "ath-X" not in ath_ids
+        assert all(r["athlete_id"] != "ath-X" for r in data["recent"])
+        assert all(r["session_id"] != "s-foreign" for r in data["recent"])
+
+        # no-session athlete present with empty pillars
+        new_kid = next(a for a in data["athletes"] if a["athlete_id"] == "ath-3")
+        assert new_kid["pillars"] == [] and new_kid["last_tested"] is None
+
+        # band distribution counts both rated athletes' speed pillar
+        speed = next(p for p in data["pillars"] if p["key"] == "speed")
+        assert speed["good"] == 1 and speed["needs_work"] == 1
+
+        # needs-attention surfaces the weak + the never-tested athlete, not the clean one
+        na_ids = {n["athlete_id"] for n in data["needs_attention"]}
+        assert {"ath-2", "ath-3"} <= na_ids
+        assert "ath-1" not in na_ids                   # good bands, improved, tested recently
+
+    def test_no_coach_profile_403(self, api_client, monkeypatch):
+        import api
+
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _team_overview_admin(coach_id=None))
+        resp = api_client.get("/team/overview", headers={"Authorization": "Bearer x"})
+        assert resp.status_code == 403
+
+    def test_backend_failure_surfaces_5xx(self, monkeypatch):
+        """A real DB failure on the sessions query must surface as 5xx, not a degraded 200."""
+        from fastapi.testclient import TestClient
+        from starlette.requests import Request
+        import api
+        from api import app, require_auth
+
+        def mock_auth(request: Request):
+            request.state.user_id = "test-user-id"
+
+        app.dependency_overrides[require_auth] = mock_auth
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _team_overview_admin(sessions_raises=True))
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            resp = client.get("/team/overview", headers={"Authorization": "Bearer x"})
+            assert resp.status_code >= 500
+        finally:
+            app.dependency_overrides.clear()
