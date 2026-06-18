@@ -565,8 +565,12 @@ async def team_overview(request: Request, _auth=Depends(require_auth)):
             for p in rated["pillars"]
         ]
         last_tested = (latest.get("created_at") or "")[:10]
-        if last_tested and datetime.date.fromisoformat(last_tested) >= week_ago:
-            tested_this_week += 1
+        try:
+            if last_tested and datetime.date.fromisoformat(last_tested) >= week_ago:
+                tested_this_week += 1
+        except ValueError:
+            pass  # malformed created_at → skip the week count for this row, keep the rest
+
         athlete_summaries.append({
             "athlete_id": a["id"], "name": a.get("name"), "stroke_type": stroke,
             "last_tested": last_tested or None, "last_session_id": latest.get("id"),
