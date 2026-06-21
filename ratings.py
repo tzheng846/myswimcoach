@@ -69,8 +69,7 @@ PILLARS = [
         "direction": "higher",
         "explanation": "How far each stroke carries the swimmer — efficiency. Long strokes at a sustainable tempo beat short, choppy ones.",
         "metrics": [
-            {"key": "mean_impulse_m", "label": "Impulse per stroke", "unit": "m",
-             "explanation": "Distance gained during the drive of each stroke."},
+            # mean_impulse_m removed — for an always-forward swimmer it equals distance-per-stroke (redundant).
             {"key": "stroke_rate_spm", "label": "Tempo", "unit": "spm",
              "explanation": "The length-vs-tempo trade-off — long strokes shouldn't come from just slowing down."},
             {"key": "mean_coast_fraction", "label": "Glide", "unit": "",
