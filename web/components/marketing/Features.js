@@ -105,33 +105,33 @@ const platform = [
 
 function Card({ f }) {
   return (
-    <div className="rounded-xl border border-navy/50 bg-surface p-5 transition-colors hover:border-navy">
+    <div className="rounded-2xl border border-line bg-card p-5 shadow-sm transition-colors hover:border-periwinkle">
       <svg
         viewBox="0 0 24 24"
-        className="h-6 w-6 stroke-primary"
+        className="h-6 w-6 stroke-brand"
         fill="none"
         strokeWidth="1.6"
         aria-hidden="true"
       >
         {f.icon}
       </svg>
-      <h3 className="mt-3 text-sm font-semibold">{f.name}</h3>
+      <h3 className="mt-3 text-sm font-semibold text-ink-900">{f.name}</h3>
       {f.value && (
-        <p className="mt-1 text-2xl font-bold text-primary">{f.value}</p>
+        <p className="mt-1 text-2xl font-bold text-brand">{f.value}</p>
       )}
-      <p className="mt-1.5 text-sm leading-relaxed text-muted">{f.body}</p>
+      <p className="mt-1.5 text-sm leading-relaxed text-ink-600">{f.body}</p>
     </div>
   );
 }
 
 export default function Features() {
   return (
-    <section id="features" className="border-t border-navy/30">
+    <section id="features" className="border-t border-line">
       <div className="mx-auto max-w-6xl px-5 py-20">
-        <p className="text-xs font-semibold tracking-[0.3em] text-primary">
+        <p className="text-xs font-semibold tracking-[0.3em] text-periwinkle">
           METRICS
         </p>
-        <h2 className="mt-3 max-w-[24ch] text-3xl font-bold">
+        <h2 className="mt-3 max-w-[24ch] text-3xl font-bold text-ink-900">
           Objective biomechanics for every swimmer in the lane
         </h2>
         <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -140,7 +140,7 @@ export default function Features() {
           ))}
         </div>
 
-        <p className="mt-16 text-xs font-semibold tracking-[0.3em] text-primary">
+        <p className="mt-16 text-xs font-semibold tracking-[0.3em] text-periwinkle">
           PLATFORM
         </p>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

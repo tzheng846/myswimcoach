@@ -14,8 +14,8 @@ const CONTACT_EMAIL = "info@swimnetics.com";
 function Section({ id, title, children }) {
   return (
     <section id={id} className="mt-10 scroll-mt-24">
-      <h2 className="text-xl font-semibold text-ink">{title}</h2>
-      <div className="mt-3 space-y-3 text-sm leading-relaxed text-subtle">
+      <h2 className="text-xl font-semibold text-ink-900">{title}</h2>
+      <div className="mt-3 space-y-3 text-sm leading-relaxed text-ink-600">
         {children}
       </div>
     </section>
@@ -28,7 +28,7 @@ function Ext({ href, children }) {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-primary transition-colors hover:text-wave"
+      className="text-brand transition-colors hover:text-brand-pressed"
     >
       {children}
     </a>
@@ -37,16 +37,16 @@ function Ext({ href, children }) {
 
 export default function PrivacyPolicy() {
   return (
-    <>
+    <div className="flex min-h-screen flex-col bg-paper text-ink-900">
       <Nav />
       <main className="flex-1">
         <div className="mx-auto w-full max-w-3xl px-5 py-16">
-          <h1 className="text-3xl font-bold tracking-tight text-ink">
+          <h1 className="text-3xl font-bold tracking-tight text-ink-900">
             Privacy Policy
           </h1>
-          <p className="mt-3 text-sm text-muted">Last updated: {LAST_UPDATED}</p>
+          <p className="mt-3 text-sm text-ink-400">Last updated: {LAST_UPDATED}</p>
 
-          <p className="mt-6 text-sm leading-relaxed text-subtle">
+          <p className="mt-6 text-sm leading-relaxed text-ink-600">
             This policy explains what information Swimnetics collects, how we use
             it, and the choices and rights available to coaches, swimmers, and
             parents. Swimnetics provides biomechanical swim-coaching tools: a
@@ -76,34 +76,34 @@ export default function PrivacyPolicy() {
             <p>We collect only what we need to provide the service:</p>
             <ul className="ml-5 list-disc space-y-2">
               <li>
-                <span className="text-ink">Account information.</span> The
+                <span className="text-ink-900">Account information.</span> The
                 coach&rsquo;s or club&rsquo;s email address and name, used to
                 create and secure the account (managed through our authentication
                 provider).
               </li>
               <li>
-                <span className="text-ink">Athlete records.</span> Information a
+                <span className="text-ink-900">Athlete records.</span> Information a
                 coach enters about a swimmer: name, optional age or date of birth,
                 a body-measurement value used to calibrate distance
                 (head-to-waist length), and the swimmer&rsquo;s stroke type.
               </li>
               <li>
-                <span className="text-ink">Performance data.</span> Metrics
+                <span className="text-ink-900">Performance data.</span> Metrics
                 derived from a recorded swim, such as velocity, acceleration,
                 stroke rate, distance-per-stroke, and per-cycle breakdowns.
               </li>
               <li>
-                <span className="text-ink">Raw sensor data.</span> The raw
+                <span className="text-ink-900">Raw sensor data.</span> The raw
                 measurement file produced by the encoder during a session, stored
                 so sessions can be reprocessed.
               </li>
               <li>
-                <span className="text-ink">Device data.</span> A hardware
+                <span className="text-ink-900">Device data.</span> A hardware
                 identifier for the encoder unit and session timestamps, used to
                 associate sessions with the device that produced them.
               </li>
               <li>
-                <span className="text-ink">Video (optional cloud tier only).</span>{" "}
+                <span className="text-ink-900">Video (optional cloud tier only).</span>{" "}
                 If a coach uses our optional cloud subscription, video a coach
                 records of a swim can be uploaded and stored so it can be played
                 back alongside the swim&rsquo;s metrics. Without the cloud tier,
@@ -121,7 +121,7 @@ export default function PrivacyPolicy() {
               that a coach may choose to share with a swimmer&rsquo;s parents.
             </p>
             <p>
-              <span className="text-ink">
+              <span className="text-ink-900">
                 We do not sell personal information, we do not use it for
                 advertising, and we do not build behavioral or marketing profiles
                 of swimmers.
@@ -169,7 +169,7 @@ export default function PrivacyPolicy() {
           <Section id="childrens-privacy" title="6. Minors and age requirement">
             <p>
               Swimnetics is currently intended for swimmers who are{" "}
-              <span className="text-ink">13 years of age or older</span>. We do
+              <span className="text-ink-900">13 years of age or older</span>. We do
               not knowingly collect personal information from children under 13.
               If we learn that a child under 13 has been added to the service, we
               will work with the relevant club to delete that information.
@@ -189,7 +189,7 @@ export default function PrivacyPolicy() {
               A parent or guardian may contact us at{" "}
               <a
                 href={`mailto:${CONTACT_EMAIL}`}
-                className="text-primary transition-colors hover:text-wave"
+                className="text-brand transition-colors hover:text-brand-pressed"
               >
                 {CONTACT_EMAIL}
               </a>{" "}
@@ -237,7 +237,7 @@ export default function PrivacyPolicy() {
               To exercise any of these rights, contact us at{" "}
               <a
                 href={`mailto:${CONTACT_EMAIL}`}
-                className="text-primary transition-colors hover:text-wave"
+                className="text-brand transition-colors hover:text-brand-pressed"
               >
                 {CONTACT_EMAIL}
               </a>
@@ -255,7 +255,7 @@ export default function PrivacyPolicy() {
               Questions about this policy or your data can be sent to{" "}
               <a
                 href={`mailto:${CONTACT_EMAIL}`}
-                className="text-primary transition-colors hover:text-wave"
+                className="text-brand transition-colors hover:text-brand-pressed"
               >
                 {CONTACT_EMAIL}
               </a>
@@ -264,7 +264,7 @@ export default function PrivacyPolicy() {
             <p className="pt-2">
               <Link
                 href="/"
-                className="text-sm text-muted transition-colors hover:text-ink"
+                className="text-sm text-ink-400 transition-colors hover:text-ink-900"
               >
                 &larr; Back to home
               </Link>
@@ -273,6 +273,6 @@ export default function PrivacyPolicy() {
         </div>
       </main>
       <Footer />
-    </>
+    </div>
   );
 }

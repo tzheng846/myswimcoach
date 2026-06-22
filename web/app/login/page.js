@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -29,42 +31,41 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center px-6 py-16">
-      <Link href="/" className="text-2xl font-bold tracking-[0.35em]">
+    <main className="flex min-h-screen flex-1 flex-col items-center justify-center bg-paper px-6 py-16 text-ink-900">
+      <Link
+        href="/"
+        className="text-2xl font-extrabold tracking-[0.3em] text-ink-900"
+      >
         SWIMNETICS
       </Link>
-      <p className="mt-1.5 text-[11px] tracking-[0.3em] text-amber">
+      <p className="mt-1.5 text-[11px] font-semibold tracking-[0.3em] text-periwinkle">
         VELOCITY INTELLIGENCE
       </p>
 
       <form onSubmit={handleSignIn} className="mt-10 w-full max-w-sm">
-        <input
+        <Input
           type="email"
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           autoComplete="email"
           required
-          className="mb-3 w-full rounded-lg border border-surface-3 bg-surface px-4 py-3.5 text-ink placeholder-muted outline-none focus:border-primary"
+          className="mb-3 h-12"
         />
-        <input
+        <Input
           type="password"
           placeholder="Password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           autoComplete="current-password"
           required
-          className="mb-3 w-full rounded-lg border border-surface-3 bg-surface px-4 py-3.5 text-ink placeholder-muted outline-none focus:border-primary"
+          className="mb-3 h-12"
         />
-        <button
-          type="submit"
-          disabled={loading}
-          className="mt-2 w-full rounded-lg bg-primary py-3.5 font-semibold text-white transition-colors hover:bg-accent disabled:opacity-60"
-        >
+        <Button type="submit" disabled={loading} className="mt-2 h-12 w-full">
           {loading ? "Signing in…" : "Sign In"}
-        </button>
+        </Button>
         {error && (
-          <p className="mt-4 text-center text-sm text-[#ff5252]">{error}</p>
+          <p className="mt-4 text-center text-sm text-[#c0392b]">{error}</p>
         )}
       </form>
     </main>

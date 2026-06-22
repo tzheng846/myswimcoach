@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 @theme {
   /* Swimnetics design tokens — match iOS app + Phase 18 mockup */
@@ -18,6 +19,24 @@
   --color-warning: #f39c12;
   --color-warning-2: #e67e22;
   --color-danger: #c0392b;
+
+  /* Marketing redesign (Phase 40) — iOS light-purple palette, additive.
+     The dark tokens above belong to the coach portal; do NOT change them.
+     These new names never collide with the portal's --color-primary/accent/muted. */
+  --color-brand: #4e148c;
+  --color-brand-pressed: #3d0f6e;
+  --color-brand-foreground: #ffffff;
+  --color-secondary-2: #613dc1;
+  --color-periwinkle: #858ae3;
+  --color-sky: #97dffc;
+  --color-ink-900: #2c0735;
+  --color-ink-600: #6e5a78;
+  --color-ink-400: #9b8ba6;
+  --color-paper: #fbfbfe;
+  --color-card: #ffffff;
+  --color-card-foreground: #2c0735;
+  --color-lavender: #f4f1fb;
+  --color-line: #e8e4f2;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;

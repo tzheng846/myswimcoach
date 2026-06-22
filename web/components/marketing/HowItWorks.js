@@ -18,25 +18,25 @@ const steps = [
 
 export default function HowItWorks() {
   return (
-    <section id="how-it-works" className="border-t border-navy/30">
+    <section id="how-it-works" className="border-t border-line">
       <div className="mx-auto max-w-6xl px-5 py-20">
-        <p className="text-xs font-semibold tracking-[0.3em] text-primary">
+        <p className="text-xs font-semibold tracking-[0.3em] text-periwinkle">
           HOW IT WORKS
         </p>
-        <h2 className="mt-3 text-3xl font-bold">
+        <h2 className="mt-3 text-3xl font-bold text-ink-900">
           From dive to data in three steps
         </h2>
         <div className="mt-10 grid gap-5 sm:grid-cols-3">
           {steps.map((s) => (
             <div
               key={s.n}
-              className="rounded-xl border border-navy/50 bg-surface p-6"
+              className="rounded-2xl border border-line bg-card p-6 shadow-sm"
             >
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-navy text-sm font-bold text-ink">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-brand text-sm font-bold text-white">
                 {s.n}
               </span>
-              <h3 className="mt-4 font-semibold">{s.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted">
+              <h3 className="mt-4 font-semibold text-ink-900">{s.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-ink-600">
                 {s.body}
               </p>
             </div>

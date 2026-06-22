@@ -1,38 +1,34 @@
 import Link from "next/link";
+import { CONTACT_EMAIL } from "@/lib/site";
 
 export default function Footer() {
   return (
-    <footer className="border-t border-navy/40">
+    <footer className="border-t border-line bg-paper">
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-12 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div className="flex items-center">
-            <span className="text-xs font-bold tracking-[0.3em] text-ink">
-              SWIMNETICS
-            </span>
-          </div>
-          <p className="mt-3 text-sm text-muted">
+          <span className="text-xs font-extrabold tracking-[0.3em] text-ink-900">
+            SWIMNETICS
+          </span>
+          <p className="mt-3 text-sm text-ink-400">
             Built for swim academies and competitive programs.
           </p>
         </div>
-        <div className="text-sm text-muted">
+        <div className="text-sm text-ink-400">
           <a
-            href="mailto:info@swimnetics.com"
-            className="text-subtle transition-colors hover:text-primary"
+            href={`mailto:${CONTACT_EMAIL}`}
+            className="text-ink-600 transition-colors hover:text-brand"
           >
-            info@swimnetics.com
+            {CONTACT_EMAIL}
           </a>
           <p className="mt-2">
-            <Link
-              href="/faq"
-              className="text-subtle transition-colors hover:text-primary"
-            >
+            <Link href="/faq" className="text-ink-600 transition-colors hover:text-brand">
               FAQ
             </Link>
           </p>
           <p className="mt-2">
             <Link
               href="/privacy"
-              className="text-subtle transition-colors hover:text-primary"
+              className="text-ink-600 transition-colors hover:text-brand"
             >
               Privacy Policy
             </Link>

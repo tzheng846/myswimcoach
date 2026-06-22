@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
+import ContactDialog from "@/components/marketing/ContactDialog";
 
 export const metadata = {
   title: "FAQ — Swimnetics",
@@ -13,8 +14,8 @@ const CONTACT_EMAIL = "info@swimnetics.com";
 function Faq({ q, children }) {
   return (
     <section className="mt-10">
-      <h2 className="text-xl font-semibold text-ink">{q}</h2>
-      <div className="mt-3 space-y-3 text-sm leading-relaxed text-subtle">
+      <h2 className="text-xl font-semibold text-ink-900">{q}</h2>
+      <div className="mt-3 space-y-3 text-sm leading-relaxed text-ink-600">
         {children}
       </div>
     </section>
@@ -23,19 +24,19 @@ function Faq({ q, children }) {
 
 export default function FAQ() {
   return (
-    <>
+    <div className="flex min-h-screen flex-col bg-paper text-ink-900">
       <Nav />
       <main className="flex-1">
         <div className="mx-auto w-full max-w-3xl px-5 py-16">
-          <h1 className="text-3xl font-bold tracking-tight text-ink">
+          <h1 className="text-3xl font-bold tracking-tight text-ink-900">
             Frequently asked questions
           </h1>
-          <p className="mt-6 text-sm leading-relaxed text-subtle">
+          <p className="mt-6 text-sm leading-relaxed text-ink-600">
             Straight answers to what coaches ask us most. If yours isn&rsquo;t
             here, email{" "}
             <a
               href={`mailto:${CONTACT_EMAIL}`}
-              className="text-primary transition-colors hover:text-wave"
+              className="text-brand transition-colors hover:text-brand-pressed"
             >
               {CONTACT_EMAIL}
             </a>{" "}
@@ -109,16 +110,14 @@ export default function FAQ() {
 
           <Faq q="How much does it cost?">
             <p>
-              <span className="text-ink">$300 one-time for the device</span>,
-              which gives you the core stroke-level metrics. One shared unit
-              covers a whole lane &mdash; you don&rsquo;t buy one per swimmer.
+              Pricing is tailored to your program &mdash; it depends on your
+              roster size and whether you want the optional cloud features. One
+              shared unit covers a whole lane, so you don&rsquo;t buy one per
+              swimmer.
             </p>
             <p>
-              An optional{" "}
-              <span className="text-ink">$20 / swimmer / month cloud tier</span>{" "}
-              adds video storage, long-term progress tracking, full session
-              history, and shareable parent progress reports. The device&rsquo;s
-              core metrics work without it.
+              Tell us a bit about your team and we&rsquo;ll put together a quote
+              that fits.
             </p>
           </Faq>
 
@@ -131,7 +130,7 @@ export default function FAQ() {
               club&rsquo;s normal registration. Full details are in our{" "}
               <Link
                 href="/privacy"
-                className="text-primary transition-colors hover:text-wave"
+                className="text-brand transition-colors hover:text-brand-pressed"
               >
                 Privacy Policy
               </Link>
@@ -139,26 +138,23 @@ export default function FAQ() {
             </p>
           </Faq>
 
-          <section className="mt-12 rounded-2xl border border-navy bg-surface p-8">
-            <h2 className="text-xl font-semibold text-ink">
+          <section className="mt-12 rounded-2xl border border-line bg-card p-8 shadow-sm">
+            <h2 className="text-xl font-semibold text-ink-900">
               Still have questions?
             </h2>
-            <p className="mt-3 text-sm leading-relaxed text-subtle">
+            <p className="mt-3 text-sm leading-relaxed text-ink-600">
               We&rsquo;re onboarding a small number of programs first. Reach out
               and we&rsquo;ll get back to you.
             </p>
-            <a
-              href={`mailto:${CONTACT_EMAIL}?subject=Early%20access%20to%20Swimnetics`}
-              className="mt-6 inline-block rounded-lg bg-primary px-6 py-3 font-semibold text-white transition-colors hover:bg-accent"
-            >
-              Get early access
-            </a>
+            <div className="mt-6">
+              <ContactDialog label="Request a quote" size="lg" />
+            </div>
           </section>
 
           <p className="mt-10">
             <Link
               href="/"
-              className="text-sm text-muted transition-colors hover:text-ink"
+              className="text-sm text-ink-400 transition-colors hover:text-ink-900"
             >
               &larr; Back to home
             </Link>
@@ -166,6 +162,6 @@ export default function FAQ() {
         </div>
       </main>
       <Footer />
-    </>
+    </div>
   );
 }
