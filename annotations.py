@@ -108,6 +108,58 @@ def build_seed(metrics_json):
     return {"phases": phases, "stroke_marks_s": marks, "source": "seeded"}
 
 
+def annotation_to_overrides(annotation, n_samples):
+    """Map an annotation doc to compute_session_metrics(manual=...) overrides (Phase 47).
+
+    Index convention: idx = round(time_s × FS_HZ), clamped to [0, n_samples−1];
+    swim_end_idx is an exclusive slice end (finish idx + 1). Cycle boundaries =
+    stroke_marks_s plus finish_s when it lies beyond the last mark; consecutive
+    boundary pairs become cycle_bounds — fewer than 2 boundaries → no cycle_bounds.
+    Pure, never raises; malformed input yields {} or a partial dict.
+    """
+    if not isinstance(annotation, dict) or not isinstance(n_samples, int) or n_samples < 2:
+        return {}
+    phases = annotation.get("phases")
+    phases = phases if isinstance(phases, dict) else {}
+
+    def to_idx(time_s):
+        return min(max(int(round(time_s * FS_HZ)), 0), n_samples - 1)
+
+    out = {}
+    dive = _num(phases.get("dive_start_s"))
+    if dive is not None:
+        out["baseline_end_idx"] = to_idx(dive)
+    stroke = _num(phases.get("stroke_start_s"))
+    if stroke is not None:
+        out["ip_end_idx"] = to_idx(stroke)
+    finish = _num(phases.get("finish_s"))
+    if finish is not None:
+        out["swim_end_idx"] = min(to_idx(finish) + 1, n_samples)
+
+    raw_marks = annotation.get("stroke_marks_s")
+    marks = sorted(
+        m for m in (_num(v) for v in (raw_marks if isinstance(raw_marks, list) else []))
+        if m is not None
+    )
+    boundaries = list(marks)
+    if finish is not None and (not boundaries or finish > boundaries[-1]):
+        boundaries.append(finish)
+
+    idxs = []
+    for b in boundaries:
+        i = to_idx(b)
+        if not idxs or i > idxs[-1]:
+            idxs.append(i)
+    bounds = [
+        (idxs[i], idxs[i + 1])
+        for i in range(len(idxs) - 1)
+        if idxs[i + 1] - idxs[i] >= 2
+    ]
+    if bounds:
+        out["cycle_bounds"] = bounds
+    return out
+
+
 def validate_annotation(doc, duration_s=None):
     """Validate an annotation doc. Returns a list of error strings (empty = valid).
 

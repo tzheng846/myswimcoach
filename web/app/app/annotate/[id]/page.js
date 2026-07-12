@@ -120,7 +120,7 @@ export default function AnnotatePage({ params }) {
     setSaving(true);
     setErrors([]);
     try {
-      await apiFetch(`/sessions/${sessionId}/annotations`, {
+      const res = await apiFetch(`/sessions/${sessionId}/annotations`, {
         method: "PUT",
         body: JSON.stringify({
           phases,
@@ -129,7 +129,14 @@ export default function AnnotatePage({ params }) {
         }),
       });
       setDirty(false);
-      setSavedMsg("Saved.");
+      if (res?.recompute_error) {
+        setSavedMsg("Saved — metrics NOT recomputed.");
+        setErrors([`Recompute failed: ${res.recompute_error}`]);
+      } else if (res?.recomputed) {
+        setSavedMsg("Saved — metrics recomputed.");
+      } else {
+        setSavedMsg("Saved (add ≥2 stroke boundaries to recompute metrics).");
+      }
     } catch (e) {
       const errList = e.body?.detail?.errors;
       setErrors(Array.isArray(errList) ? errList : [e.message]);

@@ -409,14 +409,24 @@ def extract_cycle_peaks(vel, cycles):
 
 # ── METRICS ──────────────────────────────────────────────────────────────────
 
-def compute_session_metrics(t, vel, dist, head_waist_m=0.0):
+def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None):
     """
     Top-level function: run the full breaststroke analysis pipeline.
+
+    manual (optional, Phase 47): dict of human-annotation overrides — any subset of
+        baseline_end_idx  – replaces detect_phases baseline_end
+        ip_end_idx        – replaces detect_initial_phase end (cyclic analysis start)
+        swim_end_idx      – replaces detect_phases swim_end (exclusive slice end)
+        cycle_bounds      – list of (start_idx, end_idx) FULL-TRACE index pairs;
+                            bypasses the wavelet segmenter entirely
+    All indices are full-trace. Omitted keys fall back to auto-detection, so the
+    default (manual=None) path is identical to the pre-Phase-47 behavior.
 
     Returns a dict with two keys:
         'session'   – single-value session-level metrics
         'cycles'    – list of per-cycle dicts (one entry per stroke)
     """
+    manual = manual or {}
     fs  = _compute_fs(t)
     v95 = float(np.percentile(np.abs(vel), 95))
 
@@ -424,29 +434,53 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0):
     phases   = detect_phases(t, vel)
     b_end    = phases["baseline_end"]
     swim_end = phases["swim_end"]
+    if manual.get("baseline_end_idx") is not None:
+        b_end = min(max(int(manual["baseline_end_idx"]), 0), len(t) - 1)
+    if manual.get("swim_end_idx") is not None:
+        swim_end = min(max(int(manual["swim_end_idx"]), b_end + 1), len(t))
 
     # ── initial phase detection (dive + pulldown) ──────────────────────────
     initial_phase = detect_initial_phase(t, vel, b_end)
     ip_end = initial_phase["initial_phase_end_idx"]
+    if manual.get("ip_end_idx") is not None:
+        ip_end = min(max(int(manual["ip_end_idx"]), b_end), swim_end - 1)
 
     # ── segmentation (from initial-phase end to swim_end) ──────────────────
     t_seg    = t[ip_end:swim_end]
     vel_seg  = vel[ip_end:swim_end]
     vel_swim = vel[b_end:swim_end]   # full window for session velocity stats
 
-    # Production segmenter = wavelet/CWT ridge for ALL strokes (Phase 16-05).
-    # segment_cycles_trough is kept above as a never-called backup (user decision:
-    # wavelet only, no fallback). Shipped at placeholder quality — see
-    # session["segmentation_reliable"] below and 16-04-SUMMARY.
-    cycles = segment_cycles_wavelet(t_seg, vel_seg)
-    if cycles is None:
+    manual_bounds = manual.get("cycle_bounds")
+    if manual_bounds:
+        # Human-annotated boundaries (Phase 47) — already full-trace indices, so
+        # no ip_end offset. Peak = velocity argmax within the cycle (same anchor
+        # role as the segmenters' peak_idx; refined by extract_cycle_peaks below).
         cycles = []
+        for a, b in manual_bounds:
+            a = min(max(int(a), 0), len(t) - 1)
+            b = min(int(b), len(t))
+            if b - a < 2:
+                continue  # degenerate (<2 samples) — cannot support per-cycle metrics
+            cycles.append({
+                "cycle_num": len(cycles),
+                "start_idx": a,
+                "end_idx":   b,
+                "peak_idx":  a + int(np.argmax(vel[a:b])),
+            })
+    else:
+        # Production segmenter = wavelet/CWT ridge for ALL strokes (Phase 16-05).
+        # segment_cycles_trough is kept above as a never-called backup (user decision:
+        # wavelet only, no fallback). Shipped at placeholder quality — see
+        # session["segmentation_reliable"] below and 16-04-SUMMARY.
+        cycles = segment_cycles_wavelet(t_seg, vel_seg)
+        if cycles is None:
+            cycles = []
 
-    # Offset indices so they map back to the full-trace arrays
-    for c in cycles:
-        c["start_idx"] += ip_end
-        c["end_idx"]   += ip_end
-        c["peak_idx"]  += ip_end
+        # Offset indices so they map back to the full-trace arrays
+        for c in cycles:
+            c["start_idx"] += ip_end
+            c["end_idx"]   += ip_end
+            c["peak_idx"]  += ip_end
 
     # Tag cycles as ramp-up or steady based on arm-pull velocity.
     # steady_floor = 50% of the 75th-pct peak velocity across all cycles.
@@ -578,7 +612,9 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0):
     session["outlier_cycle_count"]     = outlier_cycle_count
     session["implausible_cycle_count"] = implausible_cycle_count
     session["kick_metrics_reliable"]   = False  # LP filter merges arm/kick; see CLAUDE.md
-    session["segmentation_reliable"]   = False  # wavelet ridge shipped as placeholder (16-05); see 16-04-SUMMARY
+    # Wavelet ridge shipped as placeholder (16-05) → False; human-annotated cycle
+    # boundaries (Phase 47) ARE the ground truth → True.
+    session["segmentation_reliable"]   = bool(manual_bounds)
 
     return {"session": session, "cycles": cycles, "initial_phase": initial_phase}
 

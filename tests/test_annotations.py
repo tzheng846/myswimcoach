@@ -3,6 +3,7 @@ the /sessions/{id}/annotations + video endpoints (supabase mocked, no network)."
 import io
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 import annotations as annot
@@ -11,7 +12,7 @@ import annotations as annot
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 METRICS_JSON = {
-    "session": {"baseline_end_s": 1.2},
+    "session": {"baseline_end_s": 1.2, "lap_time_s": 30.0},
     "initial_phase": {
         "initial_phase_end_idx": 450,
         "dive_detected": True,
@@ -22,12 +23,24 @@ METRICS_JSON = {
         {"cycle_num": 0, "start_idx": 500, "end_idx": 700},
         {"cycle_num": 1, "start_idx": 700, "end_idx": 910},
     ],
+    "data_quality": {"magnet_dropout_pct": 3.5, "warnings": ["kick metrics unreliable"]},
 }
+
+# Realistic 30 s @ 100 Hz profiles so the recompute path exercises the real pipeline
+_N = 3000
+_t_fix = np.arange(_N) / 100.0
+_vel_fix = np.maximum(0.8 + 0.4 * np.sin(2 * np.pi * 0.5 * _t_fix), 0.05)
+_dist_fix = np.concatenate([[0.0], np.cumsum(_vel_fix[:-1] / 100.0)])
 
 SESSION_ROW = {
     "id": "sess-1",
     "metrics_json": METRICS_JSON,
-    "velocity_profile": [0.0] * 3000,  # 30.0 s at 100 Hz
+    "metrics_json_auto": None,
+    "velocity_profile": _vel_fix.tolist(),  # 30.0 s at 100 Hz
+    "distance_profile": _dist_fix.tolist(),
+    "stroke_type": "breaststroke",
+    "created_at": "2026-07-01T00:00:00Z",
+    "raw_csv_path": "ath-1/123.csv",
     "video_path": None,
     "video_origin_s": None,
 }
@@ -58,7 +71,7 @@ def _annot_admin(session_row=SESSION_ROW, annotation_row=None, coach_id="coach-1
             result.data = [session_row] if session_row else []
         elif name == "session_annotations":
             result.data = [annotation_row] if annotation_row else []
-        for method in ("select", "eq", "limit", "update", "upsert", "delete"):
+        for method in ("select", "eq", "limit", "update", "upsert", "delete", "in_"):
             getattr(t, method).return_value = t
         t.execute.return_value = result
         admin._tables[name] = t
@@ -315,3 +328,132 @@ class TestVideoEndpoints:
         data = resp.json()
         assert data["url"].startswith("https://signed.example/")
         assert data["origin_s"] == pytest.approx(2.1)
+
+
+# ── Phase 47-04: recompute on save / restore on delete / export ───────────────
+
+RECOMPUTE_DOC = {
+    "phases": {"dive_start_s": 1.1, "stroke_start_s": 4.2, "finish_s": 9.4},
+    "stroke_marks_s": [5.0, 6.2],  # + finish → 3 boundaries → 2 cycles
+}
+
+
+class TestRecomputeOnSave:
+    def test_recompute_overwrites_and_backs_up_once(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin()  # metrics_json_auto is None → backup expected
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["recomputed"] is True
+        updates = admin._tables["sessions"].update.call_args[0][0]
+        assert "metrics_json" in updates
+        assert updates["metrics_json_auto"] == METRICS_JSON  # once-only backup
+        new_mj = updates["metrics_json"]
+        # Recomputed from the human boundaries
+        assert new_mj["session"]["total_cycles_raw"] == 2
+        assert new_mj["session"]["segmentation_reliable"] is True
+        assert [(c["start_idx"], c["end_idx"]) for c in new_mj["cycles"]] == [
+            (500, 620), (620, 940)]
+        # Non-recomputable quality fields carried over; provenance marked
+        dq = new_mj["data_quality"]
+        assert dq["magnet_dropout_pct"] == 3.5
+        assert dq["recomputed_from_annotation"] is True
+        assert dq["segmentation_reliable"] is True
+        # dive/pulldown detection carried from the original
+        assert new_mj["initial_phase"]["dive_detected"] is True
+
+    def test_backup_not_overwritten_on_second_save(self, api_client, monkeypatch):
+        import api
+        row = {**SESSION_ROW, "metrics_json_auto": {"session": {"orig": True}}}
+        admin = _annot_admin(session_row=row)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
+                              headers=AUTH)
+        assert resp.json()["recomputed"] is True
+        updates = admin._tables["sessions"].update.call_args[0][0]
+        assert "metrics_json" in updates
+        assert "metrics_json_auto" not in updates  # backup preserved
+
+    def test_too_few_boundaries_saves_without_recompute(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put(
+            "/sessions/sess-1/annotations",
+            json={"phases": {"dive_start_s": 1.0}, "stroke_marks_s": [5.0]},
+            headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["recomputed"] is False
+        admin._tables["session_annotations"].upsert.assert_called_once()
+        admin._tables["sessions"].update.assert_not_called()
+
+    def test_recompute_failure_keeps_annotation(self, api_client, monkeypatch):
+        import api
+        row = {**SESSION_ROW, "distance_profile": [0.0, 1.0]}  # mismatched → error
+        admin = _annot_admin(session_row=row)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["recomputed"] is False
+        assert "recompute_error" in body
+        admin._tables["session_annotations"].upsert.assert_called_once()
+        admin._tables["sessions"].update.assert_not_called()
+
+
+class TestDeleteRestoresAuto:
+    def test_delete_restores_metrics_from_backup(self, api_client, monkeypatch):
+        import api
+        row = {**SESSION_ROW, "metrics_json_auto": {"session": {"orig": True}}}
+        admin = _annot_admin(session_row=row, annotation_row=ANNOTATION_ROW)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.delete("/sessions/sess-1/annotations", headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json()["metrics_restored"] is True
+        admin._tables["session_annotations"].delete.assert_called_once()
+        updates = admin._tables["sessions"].update.call_args[0][0]
+        assert updates == {"metrics_json": {"session": {"orig": True}}}
+
+    def test_delete_without_backup_no_restore(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin(annotation_row=ANNOTATION_ROW)  # metrics_json_auto None
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.delete("/sessions/sess-1/annotations", headers=AUTH)
+        assert resp.json()["metrics_restored"] is False
+        admin._tables["sessions"].update.assert_not_called()
+
+
+class TestExport:
+    def test_export_shape(self, api_client, monkeypatch):
+        import api
+        ann = {**ANNOTATION_ROW, "session_id": "sess-1"}
+        admin = _annot_admin(annotation_row=ann)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.get("/annotations/export", headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        sessions = resp.json()["sessions"]
+        assert len(sessions) == 1
+        rec = sessions[0]
+        assert rec["session_id"] == "sess-1"
+        assert rec["stroke_type"] == "breaststroke"
+        assert rec["duration_s"] == 30.0
+        assert rec["raw_csv_path"] == "ath-1/123.csv"
+        assert rec["annotation"]["stroke_marks_s"] == [5.0, 6.1, 7.3]
+        assert rec["annotation"]["source"] == "manual"
+
+    def test_export_empty_when_no_sessions(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _annot_admin(session_row=None))
+        resp = api_client.get("/annotations/export", headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json()["sessions"] == []
+
+    def test_export_requires_auth(self):
+        from fastapi.testclient import TestClient
+        import api
+        client = TestClient(api.app, raise_server_exceptions=True)
+        assert client.get("/annotations/export").status_code == 401

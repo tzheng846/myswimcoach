@@ -790,8 +790,11 @@ async def put_annotations(
     request: Request,
     _auth=Depends(require_auth),
 ):
-    """Upsert the session's annotation (one row per session, last write wins).
-    422 with an errors list on out-of-range/mis-ordered times (annotations.py)."""
+    """Upsert the session's annotation (one row per session, last write wins), then
+    RECOMPUTE the session metrics from the human boundaries (Phase 47-04, auto on save):
+    metrics_json is overwritten (original auto result backed up once in metrics_json_auto)
+    when the annotation yields >=1 cycle. Recompute failure never loses the annotation —
+    it is reported as recompute_error. 422 with an errors list on bad docs."""
     try:
         body = await request.json()
     except Exception:
@@ -802,10 +805,12 @@ async def put_annotations(
         raise HTTPException(status_code=503, detail="Storage not configured")
 
     coach_row_id, row = _owned_session(
-        sb_admin, request.state.user_id, session_id, "velocity_profile"
+        sb_admin, request.state.user_id, session_id,
+        "velocity_profile, distance_profile, metrics_json, metrics_json_auto",
     )
 
-    duration_s = len(row.get("velocity_profile") or []) / annot.FS_HZ
+    vel_list = row.get("velocity_profile") or []
+    duration_s = len(vel_list) / annot.FS_HZ
     errors = annot.validate_annotation(body, duration_s or None)
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
@@ -826,11 +831,54 @@ async def put_annotations(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {
+    # ── recompute from the human boundaries (runs on the stored 100 Hz profiles) ──
+    recomputed = False
+    recompute_error = None
+    manual = annot.annotation_to_overrides(record, len(vel_list))
+    if manual.get("cycle_bounds"):
+        try:
+            vel_arr  = np.asarray(vel_list, dtype=float)
+            dist_arr = np.asarray(row.get("distance_profile") or [], dtype=float)
+            if dist_arr.size != vel_arr.size or vel_arr.size < 2:
+                raise ValueError("velocity/distance profiles missing or mismatched")
+            t_arr  = np.arange(vel_arr.size) / annot.FS_HZ
+            result = m.compute_session_metrics(t_arr, vel_arr, dist_arr, manual=manual)
+
+            old_mj = row.get("metrics_json") or {}
+            old_dq = old_mj.get("data_quality") or {}
+            # Carry non-recomputable quality fields (dropout/warnings come from the raw
+            # CSV); refresh the cycle-derived counts; mark provenance.
+            new_dq = {**old_dq}
+            for k in ("total_cycles_raw", "outlier_cycle_count", "implausible_cycle_count"):
+                if k in result["session"]:
+                    new_dq[k] = result["session"][k]
+            new_dq["segmentation_reliable"] = True
+            new_dq["recomputed_from_annotation"] = True
+
+            new_mj = _clean({
+                "session":       result["session"],
+                "cycles":        result["cycles"],
+                # dive/pulldown detection unchanged by recompute — carry the original
+                "initial_phase": old_mj.get("initial_phase") or result.get("initial_phase", {}),
+                "data_quality":  new_dq,
+            })
+            updates = {"metrics_json": new_mj}
+            if row.get("metrics_json_auto") is None and old_mj:
+                updates["metrics_json_auto"] = old_mj  # once-only backup of the auto result
+            sb_admin.table("sessions").update(updates).eq("id", session_id).execute()
+            recomputed = True
+        except Exception as e:
+            recompute_error = str(e)  # annotation saved; metrics untouched
+
+    resp = {
         "phases":         record["phases"],
         "stroke_marks_s": record["stroke_marks_s"],
         "source":         record["source"],
+        "recomputed":     recomputed,
     }
+    if recompute_error:
+        resp["recompute_error"] = recompute_error
+    return resp
 
 
 @app.delete("/sessions/{session_id}/annotations")
@@ -839,19 +887,33 @@ async def delete_annotations(
     request: Request,
     _auth=Depends(require_auth),
 ):
-    """Remove the session's annotation row (the seed remains available via GET)."""
+    """Remove the session's annotation row (the seed remains available via GET) and
+    restore the auto-computed metrics from metrics_json_auto if a recompute had
+    overwritten them (Phase 47-04; the backup column itself is kept)."""
     sb_admin = _get_supabase_admin()
     if not sb_admin:
         raise HTTPException(status_code=503, detail="Storage not configured")
 
-    _owned_session(sb_admin, request.state.user_id, session_id, "id")
+    _, row = _owned_session(
+        sb_admin, request.state.user_id, session_id, "metrics_json_auto"
+    )
     try:
         sb_admin.table("session_annotations").delete().eq(
             "session_id", session_id
         ).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    return {"ok": True}
+
+    restored = False
+    if row.get("metrics_json_auto") is not None:
+        try:
+            sb_admin.table("sessions").update(
+                {"metrics_json": row["metrics_json_auto"]}
+            ).eq("id", session_id).execute()
+            restored = True
+        except Exception:
+            pass  # annotation row already gone; restore can be retried by re-deleting
+    return {"ok": True, "metrics_restored": restored}
 
 
 @app.post("/sessions/{session_id}/video")
@@ -939,6 +1001,66 @@ async def session_video_url(
     if not url:
         raise HTTPException(status_code=500, detail="Could not create signed URL")
     return {"url": url, "origin_s": row.get("video_origin_s")}
+
+
+@app.get("/annotations/export")
+async def export_annotations(request: Request, _auth=Depends(require_auth)):
+    """Ground-truth bulk export (Phase 47-04): every annotated session owned by the
+    calling coach, with the annotation doc + enough session context to pair it with
+    the raw data for segmenter tuning (16-06). Mirrored locally by fetch_annotations.py.
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    coach_resp = (
+        sb_admin.table("coaches")
+        .select("id")
+        .eq("user_id", request.state.user_id)
+        .limit(1)
+        .execute()
+    )
+    coach_row_id = coach_resp.data[0]["id"] if coach_resp.data else None
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    sess_resp = (
+        sb_admin.table("sessions")
+        .select("id, stroke_type, created_at, raw_csv_path, metrics_json")
+        .eq("coach_id", coach_row_id)
+        .execute()
+    )
+    sess_by_id = {s["id"]: s for s in (sess_resp.data or [])}
+    if not sess_by_id:
+        return {"sessions": []}
+
+    ann_resp = (
+        sb_admin.table("session_annotations")
+        .select("session_id, phases, stroke_marks_s, source, updated_at")
+        .in_("session_id", list(sess_by_id.keys()))
+        .execute()
+    )
+
+    out = []
+    for a in ann_resp.data or []:
+        s = sess_by_id.get(a["session_id"])
+        if not s:
+            continue  # defensive — .in_ already scoped to this coach's sessions
+        lap = ((s.get("metrics_json") or {}).get("session") or {}).get("lap_time_s")
+        out.append({
+            "session_id":   a["session_id"],
+            "stroke_type":  s.get("stroke_type"),
+            "created_at":   s.get("created_at"),
+            "duration_s":   lap,
+            "raw_csv_path": s.get("raw_csv_path"),
+            "annotation": {
+                "phases":         a.get("phases"),
+                "stroke_marks_s": a.get("stroke_marks_s"),
+                "source":         a.get("source"),
+                "updated_at":     a.get("updated_at"),
+            },
+        })
+    return {"sessions": out}
 
 
 @app.get("/reports/{token}")

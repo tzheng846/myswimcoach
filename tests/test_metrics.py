@@ -158,3 +158,85 @@ class TestComputeSessionMetricsEdgeCases:
         t, vel, dist = _sine_wave_inputs()
         result = m.compute_session_metrics(t, vel, dist, head_waist_m=0.35)
         assert "session" in result
+
+
+# ── Phase 47: manual annotation overrides ─────────────────────────────────────
+
+class TestManualOverrides:
+    """compute_session_metrics(manual=...) — human-annotation boundary injection."""
+
+    def test_no_manual_identical_to_default(self):
+        """manual=None and omitted must produce identical results."""
+        t, vel, dist = _sine_wave_inputs()
+        base = m.compute_session_metrics(t, vel, dist)
+        with_none = m.compute_session_metrics(t, vel, dist, manual=None)
+        assert base["session"] == with_none["session"]
+        assert len(base["cycles"]) == len(with_none["cycles"])
+
+    def test_manual_cycle_bounds_used_verbatim(self):
+        t, vel, dist = _sine_wave_inputs()
+        bounds = [(500, 700), (700, 910), (910, 1100)]
+        result = m.compute_session_metrics(t, vel, dist, manual={"cycle_bounds": bounds})
+        got = [(c["start_idx"], c["end_idx"]) for c in result["cycles"]]
+        assert got == bounds
+        # Downstream per-cycle metrics computed on the injected cycles
+        for c in result["cycles"]:
+            assert np.isfinite(c["duration_s"]) and c["duration_s"] > 0
+            assert np.isfinite(c["arm_peak_vel"])
+        assert result["session"]["total_cycles_raw"] == 3
+
+    def test_manual_bounds_flip_segmentation_reliable(self):
+        t, vel, dist = _sine_wave_inputs()
+        result = m.compute_session_metrics(
+            t, vel, dist, manual={"cycle_bounds": [(500, 700), (700, 910)]})
+        assert result["session"]["segmentation_reliable"] is True
+        auto = m.compute_session_metrics(t, vel, dist)
+        assert auto["session"]["segmentation_reliable"] is False
+
+    def test_manual_window_overrides(self):
+        t, vel, dist = _sine_wave_inputs()
+        result = m.compute_session_metrics(
+            t, vel, dist,
+            manual={"baseline_end_idx": 120, "swim_end_idx": 2500,
+                    "cycle_bounds": [(500, 700)]})
+        assert result["session"]["baseline_end_s"] == pytest.approx(t[120], abs=0.02)
+
+    def test_degenerate_bounds_skipped(self):
+        t, vel, dist = _sine_wave_inputs()
+        result = m.compute_session_metrics(
+            t, vel, dist, manual={"cycle_bounds": [(500, 501), (600, 800)]})
+        assert len(result["cycles"]) == 1
+        assert result["cycles"][0]["start_idx"] == 600
+
+
+class TestAnnotationToOverrides:
+    """annotations.annotation_to_overrides — times → indices mapping."""
+
+    def test_full_annotation_maps(self):
+        import annotations as a
+        ann = {
+            "phases": {"dive_start_s": 1.2, "stroke_start_s": 4.5, "finish_s": 11.0},
+            "stroke_marks_s": [5.0, 7.0, 9.1],
+        }
+        out = a.annotation_to_overrides(ann, 3000)
+        assert out["baseline_end_idx"] == 120
+        assert out["ip_end_idx"] == 450
+        assert out["swim_end_idx"] == 1101  # exclusive: finish idx + 1
+        # marks + finish → 4 boundaries → 3 cycles
+        assert out["cycle_bounds"] == [(500, 700), (700, 910), (910, 1100)]
+
+    def test_fewer_than_two_boundaries_no_cycles(self):
+        import annotations as a
+        assert "cycle_bounds" not in a.annotation_to_overrides(
+            {"stroke_marks_s": [5.0]}, 3000)
+        assert "cycle_bounds" not in a.annotation_to_overrides(
+            {"stroke_marks_s": []}, 3000)
+
+    def test_clamping_and_malformed(self):
+        import annotations as a
+        out = a.annotation_to_overrides(
+            {"phases": {"finish_s": 999.0}, "stroke_marks_s": [5.0, "junk", 7.0]}, 3000)
+        assert out["swim_end_idx"] == 3000  # clamped to n_samples
+        assert out["cycle_bounds"][0] == (500, 700)
+        assert a.annotation_to_overrides(None, 3000) == {}
+        assert a.annotation_to_overrides({}, 0) == {}
