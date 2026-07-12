@@ -40,6 +40,7 @@ def _get_supabase_admin() -> Client | None:
 
 import metrics as m
 import vel_acc_extraction as vae
+import annotations as annot
 import coach
 import roster_metrics
 import drills
@@ -707,6 +708,237 @@ async def delete_session(
             pass  # non-fatal — row is gone; orphaned file is the pre-fix status quo
 
     return {"ok": True}
+
+
+# ── Trial annotations (Phase 47) ───────────────────────────────────────────────
+# Contract shared by the web annotation GUI (47-02), iOS video upload (47-03), and
+# metric recompute (47-04). Doc shape + validation live in annotations.py.
+
+def _owned_session(sb_admin, user_id: str, session_id: str, fields: str):
+    """Auth + ownership lookup shared by the annotation/video endpoints.
+    Returns the session row. 403 = no coach profile, 404 = foreign/unknown session
+    (matching /sessions/{id}/ratings); genuine DB failures propagate as 5xx.
+    """
+    coach_resp = (
+        sb_admin.table("coaches")
+        .select("id")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    coach_row_id = coach_resp.data[0]["id"] if coach_resp.data else None
+    if not coach_row_id:
+        raise HTTPException(status_code=403, detail="Coach profile not found")
+
+    resp = (
+        sb_admin.table("sessions")
+        .select(fields)
+        .eq("id", session_id)
+        .eq("coach_id", coach_row_id)
+        .limit(1)
+        .execute()
+    )
+    row = resp.data[0] if resp.data else None
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return coach_row_id, row
+
+
+@app.get("/sessions/{session_id}/annotations")
+async def get_annotations(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Saved annotation (or null) + an auto-seeded draft from the stored metrics_json,
+    plus the video attachment info. Works for velocity-only sessions (video: null).
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    _, row = _owned_session(
+        sb_admin, request.state.user_id, session_id,
+        "metrics_json, velocity_profile, video_path, video_origin_s",
+    )
+
+    ann_resp = (
+        sb_admin.table("session_annotations")
+        .select("phases, stroke_marks_s, source, updated_at")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+    )
+    annotation = ann_resp.data[0] if ann_resp.data else None
+
+    vel = row.get("velocity_profile") or []
+    video_path = row.get("video_path")
+    return {
+        "annotation": annotation,
+        "seed": _clean(annot.build_seed(row.get("metrics_json"))),
+        "video": (
+            {"path": video_path, "origin_s": row.get("video_origin_s")}
+            if video_path else None
+        ),
+        "duration_s": len(vel) / annot.FS_HZ,
+    }
+
+
+@app.put("/sessions/{session_id}/annotations")
+async def put_annotations(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Upsert the session's annotation (one row per session, last write wins).
+    422 with an errors list on out-of-range/mis-ordered times (annotations.py)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    coach_row_id, row = _owned_session(
+        sb_admin, request.state.user_id, session_id, "velocity_profile"
+    )
+
+    duration_s = len(row.get("velocity_profile") or []) / annot.FS_HZ
+    errors = annot.validate_annotation(body, duration_s or None)
+    if errors:
+        raise HTTPException(status_code=422, detail={"errors": errors})
+
+    phases = {k: annot._num(body.get("phases", {}).get(k)) for k in annot.PHASE_KEYS}
+    record = {
+        "session_id":     session_id,
+        "phases":         phases,
+        "stroke_marks_s": [float(v) for v in body.get("stroke_marks_s", [])],
+        "source":         body.get("source", "manual"),
+        "updated_by":     coach_row_id,
+        "updated_at":     "now()",
+    }
+    try:
+        sb_admin.table("session_annotations").upsert(
+            record, on_conflict="session_id"
+        ).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "phases":         record["phases"],
+        "stroke_marks_s": record["stroke_marks_s"],
+        "source":         record["source"],
+    }
+
+
+@app.delete("/sessions/{session_id}/annotations")
+async def delete_annotations(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Remove the session's annotation row (the seed remains available via GET)."""
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    _owned_session(sb_admin, request.state.user_id, session_id, "id")
+    try:
+        sb_admin.table("session_annotations").delete().eq(
+            "session_id", session_id
+        ).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"ok": True}
+
+
+@app.post("/sessions/{session_id}/video")
+async def upload_session_video(
+    session_id: str,
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    video_origin_s: Optional[float] = Form(None),
+    _auth=Depends(require_auth),
+):
+    """Attach a video to a session (private `videos` bucket, {session_id}.mp4), or
+    update just video_origin_s (origin nudge) when no file is sent. origin_s =
+    session-clock time at video t=0 (44-03 end-anchor: deviceDuration − videoDuration).
+    """
+    if file is None and video_origin_s is None:
+        raise HTTPException(
+            status_code=422, detail="Provide a video file and/or video_origin_s"
+        )
+
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    _, row = _owned_session(
+        sb_admin, request.state.user_id, session_id, "video_path, video_origin_s"
+    )
+
+    updates = {}
+    if file is not None:
+        video_bytes = await file.read()
+        if not video_bytes:
+            raise HTTPException(status_code=422, detail="Empty video file")
+        storage_path = f"{session_id}.mp4"
+        try:
+            sb_admin.storage.from_("videos").upload(
+                path=storage_path,
+                file=video_bytes,
+                file_options={
+                    "content-type": file.content_type or "video/mp4",
+                    "x-upsert": "true",  # re-upload replaces the previous attachment
+                },
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Video upload failed: {e}")
+        updates["video_path"] = storage_path
+    if video_origin_s is not None:
+        updates["video_origin_s"] = video_origin_s
+
+    try:
+        sb_admin.table("sessions").update(updates).eq("id", session_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "ok": True,
+        "video_path": updates.get("video_path", row.get("video_path")),
+        "video_origin_s": updates.get("video_origin_s", row.get("video_origin_s")),
+    }
+
+
+@app.get("/sessions/{session_id}/video-url")
+async def session_video_url(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Time-limited signed URL for the session's video (bucket is private; bytes
+    never proxy through this API). 404 when the session has no video attached."""
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    _, row = _owned_session(
+        sb_admin, request.state.user_id, session_id, "video_path, video_origin_s"
+    )
+    video_path = row.get("video_path")
+    if not video_path:
+        raise HTTPException(status_code=404, detail="No video attached to this session")
+
+    try:
+        signed = sb_admin.storage.from_("videos").create_signed_url(video_path, 3600)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    url = (signed or {}).get("signedURL") or (signed or {}).get("signedUrl")
+    if not url:
+        raise HTTPException(status_code=500, detail="Could not create signed URL")
+    return {"url": url, "origin_s": row.get("video_origin_s")}
 
 
 @app.get("/reports/{token}")

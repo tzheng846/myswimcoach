@@ -162,22 +162,32 @@ export default function ReportCardPage({ params }) {
         </button>
       )}
 
-      {/* Simple / Advanced view toggle */}
-      {isAnalyticsReady && (
-        <div className="mt-3 inline-flex rounded-lg border border-surface-3 bg-surface-2 p-0.5">
-          {["simple", "advanced"].map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`rounded-md px-3.5 py-1.5 text-xs font-semibold capitalize transition-colors ${
-                view === v ? "bg-accent text-white" : "text-subtle hover:text-ink"
-              }`}
-            >
-              {v}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Simple / Advanced view toggle + annotation entry */}
+      <div className="mt-3 flex items-center justify-between">
+        {isAnalyticsReady ? (
+          <div className="inline-flex rounded-lg border border-surface-3 bg-surface-2 p-0.5">
+            {["simple", "advanced"].map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`rounded-md px-3.5 py-1.5 text-xs font-semibold capitalize transition-colors ${
+                  view === v ? "bg-accent text-white" : "text-subtle hover:text-ink"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span />
+        )}
+        <Link
+          href={`/app/annotate/${sessionId}`}
+          className="text-xs font-semibold text-primary"
+        >
+          Annotate ›
+        </Link>
+      </div>
 
       <div className="mt-4 space-y-3">
         <SessionSummaryCard session={metrics.session} unit={unit} />

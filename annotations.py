@@ -1,0 +1,173 @@
+"""
+annotations.py — trial-annotation seed building + validation (Phase 47).
+
+Pure functions, no I/O (same convention as metrics.py / ratings.py). Shared source
+of truth for the annotation contract served by api.py:
+
+    {
+      "phases": {
+        "dive_start_s":       float | null,
+        "underwater_start_s": float | null,   # displayed as "pulldown" for breaststroke
+        "breakout_start_s":   float | null,
+        "stroke_start_s":     float | null,
+        "finish_s":           float | null,
+      },
+      "stroke_marks_s": [float, ...],          # sorted, individual stroke boundaries
+      "source": "manual" | "seeded",
+    }
+
+Phase model (user decision, 2026-07-11): a trial is a SINGLE ORDERED PASS —
+dive → underwater kick/pulldown → breakout → stroke → finish. Any subset of phases
+may be annotated; present times must be non-decreasing in canonical order.
+Times are seconds on the 100 Hz session clock (sample index / 100).
+"""
+
+FS_HZ = 100  # sessions' velocity_profile sample rate (index/100 = seconds)
+
+PHASE_KEYS = [
+    "dive_start_s",
+    "underwater_start_s",
+    "breakout_start_s",
+    "stroke_start_s",
+    "finish_s",
+]
+
+SOURCES = ("manual", "seeded")
+
+
+def _num(v):
+    """Return v as float if it is a real (non-bool) finite number, else None."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    if f != f or f in (float("inf"), float("-inf")):  # NaN / inf
+        return None
+    return f
+
+
+def build_seed(metrics_json):
+    """Best-effort draft annotation from a session's stored metrics_json.
+
+    Sources (all optional — anything undetected stays null, never raises):
+      dive_start_s       ← session.baseline_end_s (swim motion begins)
+      underwater_start_s ← dive peak (baseline_end_s + initial_phase.dive_duration_s)
+      breakout_start_s   ← null (no automatic detection exists)
+      stroke_start_s     ← initial_phase.initial_phase_end_idx / 100, else first cycle start
+      finish_s           ← last cycle end_idx / 100
+      stroke_marks_s     ← each cycle's start_idx / 100 (the 39-05 overlay convention)
+    """
+    mj = metrics_json if isinstance(metrics_json, dict) else {}
+    session = mj.get("session") if isinstance(mj.get("session"), dict) else {}
+    initial = mj.get("initial_phase") if isinstance(mj.get("initial_phase"), dict) else {}
+    cycles = mj.get("cycles") if isinstance(mj.get("cycles"), list) else []
+
+    phases = {k: None for k in PHASE_KEYS}
+
+    baseline_end_s = _num(session.get("baseline_end_s"))
+    phases["dive_start_s"] = baseline_end_s
+
+    dive_dur = _num(initial.get("dive_duration_s"))
+    if initial.get("dive_detected") and baseline_end_s is not None and dive_dur is not None:
+        phases["underwater_start_s"] = baseline_end_s + dive_dur
+
+    ip_end_idx = _num(initial.get("initial_phase_end_idx"))
+    if ip_end_idx is not None and ip_end_idx > 0:
+        phases["stroke_start_s"] = ip_end_idx / FS_HZ
+
+    marks = []
+    last_end = None
+    for c in cycles:
+        if not isinstance(c, dict):
+            continue
+        start = _num(c.get("start_idx"))
+        if start is not None:
+            marks.append(start / FS_HZ)
+        end = _num(c.get("end_idx"))
+        if end is not None:
+            last_end = end / FS_HZ
+    marks.sort()
+
+    if phases["stroke_start_s"] is None and marks:
+        phases["stroke_start_s"] = marks[0]
+    phases["finish_s"] = last_end
+
+    # Seeded phases must themselves satisfy the ordering contract; detection stages are
+    # independent and can disagree (e.g. a dive+duration underwater estimate landing after
+    # the first cycle). Walk backwards so the cycle-derived anchors (stroke_start, finish)
+    # win and the more speculative upstream estimates get dropped.
+    next_val = None
+    for k in reversed(PHASE_KEYS):
+        v = phases[k]
+        if v is None:
+            continue
+        if next_val is not None and v > next_val:
+            phases[k] = None
+        else:
+            next_val = v
+
+    return {"phases": phases, "stroke_marks_s": marks, "source": "seeded"}
+
+
+def validate_annotation(doc, duration_s=None):
+    """Validate an annotation doc. Returns a list of error strings (empty = valid).
+
+    Light-touch by design: any subset of phases is fine, stroke marks are not
+    required to sit inside the stroke phase span. Rejects only structural problems —
+    unknown phase keys, non-numeric/negative/out-of-range times, phases out of
+    canonical order, unsorted stroke marks, bad source.
+    """
+    errors = []
+    if not isinstance(doc, dict):
+        return ["annotation body must be a JSON object"]
+
+    phases = doc.get("phases", {})
+    if not isinstance(phases, dict):
+        errors.append("phases must be an object")
+        phases = {}
+
+    for key in phases:
+        if key not in PHASE_KEYS:
+            errors.append(f"unknown phase key: {key}")
+
+    def check_time(label, v):
+        if v is None:
+            return None
+        f = _num(v)
+        if f is None:
+            errors.append(f"{label} must be a number")
+            return None
+        if f < 0:
+            errors.append(f"{label} must be >= 0")
+            return None
+        if duration_s is not None and duration_s > 0 and f > duration_s:
+            errors.append(f"{label} exceeds session duration ({duration_s:.2f} s)")
+            return None
+        return f
+
+    prev_key, prev_val = None, None
+    for key in PHASE_KEYS:
+        f = check_time(key, phases.get(key))
+        if f is None:
+            continue
+        if prev_val is not None and f < prev_val:
+            errors.append(f"{key} must not precede {prev_key}")
+        prev_key, prev_val = key, f
+
+    marks = doc.get("stroke_marks_s", [])
+    if not isinstance(marks, list):
+        errors.append("stroke_marks_s must be an array")
+        marks = []
+    prev_mark = None
+    for i, v in enumerate(marks):
+        f = check_time(f"stroke_marks_s[{i}]", v)
+        if f is None:
+            continue
+        if prev_mark is not None and f < prev_mark:
+            errors.append(f"stroke_marks_s[{i}] is out of order")
+        prev_mark = f
+
+    source = doc.get("source", "manual")
+    if source not in SOURCES:
+        errors.append(f"source must be one of {list(SOURCES)}")
+
+    return errors

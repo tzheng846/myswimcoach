@@ -1,0 +1,317 @@
+"""Tests for the Phase 47 trial-annotation contract — annotations.py (pure) +
+the /sessions/{id}/annotations + video endpoints (supabase mocked, no network)."""
+import io
+from unittest.mock import MagicMock
+
+import pytest
+
+import annotations as annot
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+METRICS_JSON = {
+    "session": {"baseline_end_s": 1.2},
+    "initial_phase": {
+        "initial_phase_end_idx": 450,
+        "dive_detected": True,
+        "dive_duration_s": 0.8,
+        "pulldown_detected": True,
+    },
+    "cycles": [
+        {"cycle_num": 0, "start_idx": 500, "end_idx": 700},
+        {"cycle_num": 1, "start_idx": 700, "end_idx": 910},
+    ],
+}
+
+SESSION_ROW = {
+    "id": "sess-1",
+    "metrics_json": METRICS_JSON,
+    "velocity_profile": [0.0] * 3000,  # 30.0 s at 100 Hz
+    "video_path": None,
+    "video_origin_s": None,
+}
+
+ANNOTATION_ROW = {
+    "phases": {"dive_start_s": 1.0, "stroke_start_s": 4.0, "finish_s": 9.0},
+    "stroke_marks_s": [5.0, 6.1, 7.3],
+    "source": "manual",
+    "updated_at": "2026-07-11T00:00:00Z",
+}
+
+
+def _annot_admin(session_row=SESSION_ROW, annotation_row=None, coach_id="coach-1"):
+    """Fake supabase admin for the annotation/video endpoints. Query data is
+    list-shaped (endpoints use .limit(1) + data[0], the ratings pattern).
+    Table mocks are memoized on the admin so tests can assert on calls."""
+    admin = MagicMock()
+    admin._tables = {}
+
+    def table(name):
+        if name in admin._tables:
+            return admin._tables[name]
+        t = MagicMock()
+        result = MagicMock()
+        if name == "coaches":
+            result.data = [{"id": coach_id}] if coach_id else []
+        elif name == "sessions":
+            result.data = [session_row] if session_row else []
+        elif name == "session_annotations":
+            result.data = [annotation_row] if annotation_row else []
+        for method in ("select", "eq", "limit", "update", "upsert", "delete"):
+            getattr(t, method).return_value = t
+        t.execute.return_value = result
+        admin._tables[name] = t
+        return t
+
+    admin.table.side_effect = table
+    admin.storage.from_.return_value.create_signed_url.return_value = {
+        "signedURL": "https://signed.example/videos/sess-1.mp4"
+    }
+    return admin
+
+
+AUTH = {"Authorization": "Bearer fake-token-mocked"}
+
+
+# ── annotations.py (pure) ─────────────────────────────────────────────────────
+
+class TestBuildSeed:
+    def test_representative_metrics(self):
+        seed = annot.build_seed(METRICS_JSON)
+        p = seed["phases"]
+        assert p["dive_start_s"] == pytest.approx(1.2)
+        assert p["underwater_start_s"] == pytest.approx(2.0)  # baseline + dive duration
+        assert p["breakout_start_s"] is None  # no automatic detection
+        assert p["stroke_start_s"] == pytest.approx(4.5)  # initial_phase_end_idx / 100
+        assert p["finish_s"] == pytest.approx(9.1)  # last cycle end_idx / 100
+        assert seed["stroke_marks_s"] == [5.0, 7.0]
+        assert seed["stroke_marks_s"] == sorted(seed["stroke_marks_s"])
+        assert seed["source"] == "seeded"
+
+    @pytest.mark.parametrize("mj", [None, {}, {"session": None, "cycles": "junk"}])
+    def test_missing_or_malformed_metrics_all_null(self, mj):
+        seed = annot.build_seed(mj)
+        assert all(v is None for v in seed["phases"].values())
+        assert seed["stroke_marks_s"] == []
+
+    def test_stroke_start_falls_back_to_first_cycle(self):
+        mj = {"cycles": [{"start_idx": 300, "end_idx": 500}]}
+        seed = annot.build_seed(mj)
+        assert seed["phases"]["stroke_start_s"] == pytest.approx(3.0)
+
+    def test_misordered_detection_dropped(self):
+        # Pulldown/dive estimate lands AFTER the first cycle start → drop it, keep order.
+        mj = {
+            "session": {"baseline_end_s": 1.0},
+            "initial_phase": {"dive_detected": True, "dive_duration_s": 10.0,
+                              "initial_phase_end_idx": 450},
+            "cycles": [{"start_idx": 500, "end_idx": 700}],
+        }
+        seed = annot.build_seed(mj)
+        p = seed["phases"]
+        assert p["underwater_start_s"] is None  # 11.0 would precede... follow order rule
+        assert p["dive_start_s"] == pytest.approx(1.0)
+        assert p["stroke_start_s"] == pytest.approx(4.5)
+        # remaining present phases are non-decreasing
+        present = [v for k, v in ((k, p[k]) for k in annot.PHASE_KEYS) if v is not None]
+        assert present == sorted(present)
+
+
+class TestValidateAnnotation:
+    def test_valid_full_doc(self):
+        doc = {
+            "phases": {"dive_start_s": 1.0, "underwater_start_s": 2.0,
+                       "breakout_start_s": 3.0, "stroke_start_s": 4.0, "finish_s": 9.0},
+            "stroke_marks_s": [5.0, 6.0, 7.0],
+            "source": "manual",
+        }
+        assert annot.validate_annotation(doc, 30.0) == []
+
+    def test_valid_partial_doc(self):
+        assert annot.validate_annotation({"phases": {"finish_s": 9.0}}, 30.0) == []
+        assert annot.validate_annotation({"stroke_marks_s": []}, 30.0) == []
+        assert annot.validate_annotation({}, 30.0) == []
+
+    def test_misordered_phases(self):
+        errs = annot.validate_annotation(
+            {"phases": {"dive_start_s": 5.0, "stroke_start_s": 2.0}}, 30.0)
+        assert any("must not precede" in e for e in errs)
+
+    def test_out_of_range_time(self):
+        errs = annot.validate_annotation({"phases": {"finish_s": 99.0}}, 30.0)
+        assert any("exceeds session duration" in e for e in errs)
+        errs = annot.validate_annotation({"phases": {"dive_start_s": -1.0}}, 30.0)
+        assert any(">= 0" in e for e in errs)
+
+    def test_unsorted_marks(self):
+        errs = annot.validate_annotation({"stroke_marks_s": [6.0, 4.0]}, 30.0)
+        assert any("out of order" in e for e in errs)
+
+    def test_unknown_phase_key(self):
+        errs = annot.validate_annotation({"phases": {"bogus_s": 1.0}}, 30.0)
+        assert any("unknown phase key" in e for e in errs)
+
+    def test_non_numeric_time(self):
+        errs = annot.validate_annotation({"phases": {"dive_start_s": "abc"}}, 30.0)
+        assert any("must be a number" in e for e in errs)
+
+    def test_bad_source(self):
+        errs = annot.validate_annotation({"source": "robot"}, 30.0)
+        assert any("source" in e for e in errs)
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+class TestGetAnnotations:
+    def test_unannotated_session_returns_seed(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _annot_admin())
+        resp = api_client.get("/sessions/sess-1/annotations", headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["annotation"] is None
+        assert data["seed"]["phases"]["dive_start_s"] == pytest.approx(1.2)
+        assert data["seed"]["stroke_marks_s"] == [5.0, 7.0]
+        assert data["video"] is None  # velocity-only sessions fully supported
+        assert data["duration_s"] == pytest.approx(30.0)
+
+    def test_saved_annotation_and_video_returned(self, api_client, monkeypatch):
+        import api
+        row = {**SESSION_ROW, "video_path": "sess-1.mp4", "video_origin_s": 2.1}
+        monkeypatch.setattr(
+            api, "_get_supabase_admin",
+            lambda: _annot_admin(session_row=row, annotation_row=ANNOTATION_ROW))
+        data = api_client.get("/sessions/sess-1/annotations", headers=AUTH).json()
+        assert data["annotation"]["stroke_marks_s"] == [5.0, 6.1, 7.3]
+        assert data["video"] == {"path": "sess-1.mp4", "origin_s": 2.1}
+
+    def test_foreign_session_404(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _annot_admin(session_row=None))
+        resp = api_client.get("/sessions/other/annotations", headers=AUTH)
+        assert resp.status_code == 404
+
+    def test_no_coach_profile_403(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _annot_admin(coach_id=None))
+        resp = api_client.get("/sessions/sess-1/annotations", headers=AUTH)
+        assert resp.status_code == 403
+
+    def test_no_auth_401(self):
+        from fastapi.testclient import TestClient
+        import api
+        client = TestClient(api.app, raise_server_exceptions=True)
+        resp = client.get("/sessions/sess-1/annotations")
+        assert resp.status_code == 401
+
+
+class TestPutAnnotations:
+    VALID_DOC = {
+        "phases": {"dive_start_s": 1.1, "stroke_start_s": 4.2, "finish_s": 9.4},
+        "stroke_marks_s": [5.0, 6.2],
+    }
+
+    def test_round_trip_upsert(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=self.VALID_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["phases"]["stroke_start_s"] == pytest.approx(4.2)
+        assert data["phases"]["breakout_start_s"] is None  # absent keys normalized
+        assert data["stroke_marks_s"] == [5.0, 6.2]
+        assert data["source"] == "manual"
+        record, kwargs = (admin._tables["session_annotations"].upsert.call_args[0][0],
+                          admin._tables["session_annotations"].upsert.call_args[1])
+        assert record["session_id"] == "sess-1"
+        assert record["updated_by"] == "coach-1"
+        assert kwargs.get("on_conflict") == "session_id"
+
+    def test_invalid_doc_422_with_errors(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _annot_admin())
+        resp = api_client.put(
+            "/sessions/sess-1/annotations",
+            json={"phases": {"dive_start_s": 99.0}},  # beyond 30 s duration
+            headers=AUTH)
+        assert resp.status_code == 422
+        assert any("exceeds session duration" in e
+                   for e in resp.json()["detail"]["errors"])
+
+    def test_foreign_session_404(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _annot_admin(session_row=None))
+        resp = api_client.put("/sessions/other/annotations", json=self.VALID_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 404
+
+
+class TestDeleteAnnotations:
+    def test_delete_ok(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin(annotation_row=ANNOTATION_ROW)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.delete("/sessions/sess-1/annotations", headers=AUTH)
+        assert resp.status_code == 200
+        admin._tables["session_annotations"].delete.assert_called_once()
+
+
+class TestVideoEndpoints:
+    def test_upload_video_sets_path_and_origin(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.post(
+            "/sessions/sess-1/video",
+            files={"file": ("trial.mp4", io.BytesIO(b"fake-mp4-bytes"), "video/mp4")},
+            data={"video_origin_s": "2.05"},
+            headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["video_path"] == "sess-1.mp4"
+        assert data["video_origin_s"] == pytest.approx(2.05)
+        upload_kwargs = admin.storage.from_.return_value.upload.call_args[1]
+        assert upload_kwargs["path"] == "sess-1.mp4"
+        update_arg = admin._tables["sessions"].update.call_args[0][0]
+        assert update_arg == {"video_path": "sess-1.mp4",
+                              "video_origin_s": pytest.approx(2.05)}
+
+    def test_origin_only_update(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.post("/sessions/sess-1/video",
+                               data={"video_origin_s": "1.5"}, headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        admin.storage.from_.return_value.upload.assert_not_called()
+        update_arg = admin._tables["sessions"].update.call_args[0][0]
+        assert update_arg == {"video_origin_s": pytest.approx(1.5)}
+
+    def test_neither_file_nor_origin_422(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _annot_admin())
+        resp = api_client.post("/sessions/sess-1/video", headers=AUTH)
+        assert resp.status_code == 422
+
+    def test_video_url_without_video_404(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _annot_admin())
+        resp = api_client.get("/sessions/sess-1/video-url", headers=AUTH)
+        assert resp.status_code == 404
+
+    def test_video_url_signed(self, api_client, monkeypatch):
+        import api
+        row = {**SESSION_ROW, "video_path": "sess-1.mp4", "video_origin_s": 2.1}
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _annot_admin(session_row=row))
+        resp = api_client.get("/sessions/sess-1/video-url", headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["url"].startswith("https://signed.example/")
+        assert data["origin_s"] == pytest.approx(2.1)
