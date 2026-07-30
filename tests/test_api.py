@@ -1064,3 +1064,20 @@ class TestTeamOverview:
             assert resp.status_code >= 500
         finally:
             app.dependency_overrides.clear()
+
+
+# ── Regression: POST /athletes insert chain must not call .single() on a mutation builder ──
+# Bug (Phase 48): supabase-py's .insert() returns a SyncQueryRequestBuilder, and .select()
+# after it stays a mutation builder that has NO .single() method — so `.insert().select()
+# .single()` raised `'SyncQueryRequestBuilder' object has no attribute 'single'` and blocked
+# all athlete creation. The endpoint must call .execute() and index resp.data[0] instead.
+#
+# This guard imports the REAL postgrest builder class. It deliberately does NOT go through the
+# app's supabase client: conftest globally mocks `create_client` to return a MagicMock (which
+# has every attribute), and that mock is exactly why this bug reached production undetected.
+
+def test_mutation_builder_class_lacks_single():
+    """The builder .insert() returns must have no .single() — so the endpoint can't reintroduce it."""
+    from postgrest._sync.request_builder import SyncQueryRequestBuilder
+
+    assert not hasattr(SyncQueryRequestBuilder, "single")

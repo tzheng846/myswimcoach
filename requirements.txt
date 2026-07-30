@@ -9,6 +9,7 @@ streamlit
 fastapi
 uvicorn[standard]
 python-multipart
-supabase
+supabase==2.30.1
+postgrest==2.30.1
 stumpy
 stripe

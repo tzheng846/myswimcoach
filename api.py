@@ -1304,10 +1304,16 @@ async def create_athlete(request: Request, _auth=Depends(require_auth)):
                 "head_waist_m": hw,
             })
             .select("id, name, stroke_type, head_waist_m")
-            .single()
             .execute()
         )
-        return resp.data
+        # .insert() returns a mutation builder (SyncQueryRequestBuilder) which has no
+        # .single() — chaining it raises AttributeError. Take the first returned row instead.
+        row = (resp.data or [None])[0]
+        if row is None:
+            raise HTTPException(status_code=500, detail="Athlete insert returned no row")
+        return row
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
