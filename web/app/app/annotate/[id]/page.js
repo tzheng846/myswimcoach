@@ -43,7 +43,9 @@ export default function AnnotatePage({ params }) {
       const [{ data: sRow, error: sErr }, annRes] = await Promise.all([
         supabase
           .from("sessions")
-          .select("velocity_profile, stroke_type, name, athlete_id, created_at")
+          .select(
+            "velocity_profile, stroke_type, name, athlete_id, created_at, sample_rate_hz"
+          )
           .eq("id", sessionId)
           .single(),
         apiFetch(`/sessions/${sessionId}/annotations`).catch((e) => ({
@@ -146,9 +148,13 @@ export default function AnnotatePage({ params }) {
   }, [sessionId, phases, strokeMarks]);
 
   const vel = row?.velocity_profile ?? [];
+  // Must match the rate the API used to build the seed (GET /annotations returns it as
+  // sample_rate_hz) — a mismatch puts seeded marks on the wrong x position, and the
+  // times this page saves would be re-interpreted against a different clock on recompute.
+  const fsHz = row?.sample_rate_hz > 0 ? row.sample_rate_hz : 100;
   const time = useMemo(
-    () => Array.from({ length: vel.length }, (_, i) => i / 100),
-    [vel.length]
+    () => Array.from({ length: vel.length }, (_, i) => i / fsHz),
+    [vel.length, fsHz]
   );
 
   if (loadError)

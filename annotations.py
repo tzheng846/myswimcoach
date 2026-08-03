@@ -19,10 +19,15 @@ of truth for the annotation contract served by api.py:
 Phase model (user decision, 2026-07-11): a trial is a SINGLE ORDERED PASS —
 dive → underwater kick/pulldown → breakout → stroke → finish. Any subset of phases
 may be annotated; present times must be non-decreasing in canonical order.
-Times are seconds on the 100 Hz session clock (sample index / 100).
+Times are seconds on the session's own clock (sample index / sample rate). The rate is
+per session — `sessions.sample_rate_hz`, written by /process from the pipeline's real
+decimated rate (Phase 52). Callers pass it as `fs_hz`; it is NOT 100 in practice.
 """
 
-FS_HZ = 100  # sessions' velocity_profile sample rate (index/100 = seconds)
+# Fallback rate only, for sessions recorded before Phase 52 that have no
+# sample_rate_hz. Decimation is by an integer factor (round(268.5/100) = 3), so the
+# real rate is ~89.5 Hz — never assume this constant for a session that has its own.
+FS_HZ = 100
 
 PHASE_KEYS = [
     "dive_start_s",
@@ -45,17 +50,31 @@ def _num(v):
     return f
 
 
-def build_seed(metrics_json):
+def _fs(fs_hz):
+    """Coerce a caller-supplied sample rate to a usable positive float, else FS_HZ.
+
+    Never raises and never returns 0 — a missing or malformed rate must degrade to the
+    pre-Phase-52 behavior, not to a ZeroDivisionError inside a pure function.
+    """
+    f = _num(fs_hz)
+    return f if f is not None and f > 0 else float(FS_HZ)
+
+
+def build_seed(metrics_json, fs_hz=FS_HZ):
     """Best-effort draft annotation from a session's stored metrics_json.
+
+    fs_hz is the session's own sample rate (sessions.sample_rate_hz); it defaults to the
+    FS_HZ fallback for rows recorded before Phase 52.
 
     Sources (all optional — anything undetected stays null, never raises):
       dive_start_s       ← session.baseline_end_s (swim motion begins)
       underwater_start_s ← dive peak (baseline_end_s + initial_phase.dive_duration_s)
       breakout_start_s   ← null (no automatic detection exists)
-      stroke_start_s     ← initial_phase.initial_phase_end_idx / 100, else first cycle start
-      finish_s           ← last cycle end_idx / 100
-      stroke_marks_s     ← each cycle's start_idx / 100 (the 39-05 overlay convention)
+      stroke_start_s     ← initial_phase.initial_phase_end_idx / fs, else first cycle start
+      finish_s           ← last cycle end_idx / fs
+      stroke_marks_s     ← each cycle's start_idx / fs (the 39-05 overlay convention)
     """
+    fs = _fs(fs_hz)
     mj = metrics_json if isinstance(metrics_json, dict) else {}
     session = mj.get("session") if isinstance(mj.get("session"), dict) else {}
     initial = mj.get("initial_phase") if isinstance(mj.get("initial_phase"), dict) else {}
@@ -72,7 +91,7 @@ def build_seed(metrics_json):
 
     ip_end_idx = _num(initial.get("initial_phase_end_idx"))
     if ip_end_idx is not None and ip_end_idx > 0:
-        phases["stroke_start_s"] = ip_end_idx / FS_HZ
+        phases["stroke_start_s"] = ip_end_idx / fs
 
     marks = []
     last_end = None
@@ -81,10 +100,10 @@ def build_seed(metrics_json):
             continue
         start = _num(c.get("start_idx"))
         if start is not None:
-            marks.append(start / FS_HZ)
+            marks.append(start / fs)
         end = _num(c.get("end_idx"))
         if end is not None:
-            last_end = end / FS_HZ
+            last_end = end / fs
     marks.sort()
 
     if phases["stroke_start_s"] is None and marks:
@@ -108,10 +127,13 @@ def build_seed(metrics_json):
     return {"phases": phases, "stroke_marks_s": marks, "source": "seeded"}
 
 
-def annotation_to_overrides(annotation, n_samples):
+def annotation_to_overrides(annotation, n_samples, fs_hz=FS_HZ):
     """Map an annotation doc to compute_session_metrics(manual=...) overrides (Phase 47).
 
-    Index convention: idx = round(time_s × FS_HZ), clamped to [0, n_samples−1];
+    fs_hz must be the SAME rate build_seed used and the same one the UI displayed against,
+    or marks land on a different sample than the coach clicked (Phase 52).
+
+    Index convention: idx = round(time_s × fs_hz), clamped to [0, n_samples−1];
     swim_end_idx is an exclusive slice end (finish idx + 1). Cycle boundaries =
     stroke_marks_s plus finish_s when it lies beyond the last mark; consecutive
     boundary pairs become cycle_bounds — fewer than 2 boundaries → no cycle_bounds.
@@ -119,11 +141,12 @@ def annotation_to_overrides(annotation, n_samples):
     """
     if not isinstance(annotation, dict) or not isinstance(n_samples, int) or n_samples < 2:
         return {}
+    fs = _fs(fs_hz)
     phases = annotation.get("phases")
     phases = phases if isinstance(phases, dict) else {}
 
     def to_idx(time_s):
-        return min(max(int(round(time_s * FS_HZ)), 0), n_samples - 1)
+        return min(max(int(round(time_s * fs)), 0), n_samples - 1)
 
     out = {}
     dive = _num(phases.get("dive_start_s"))

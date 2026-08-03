@@ -97,6 +97,22 @@ def _clean(obj):
     return obj
 
 
+def _session_fs(row) -> float:
+    """The session's true sample rate, falling back to annot.FS_HZ (100).
+
+    NULL means the row predates Phase 52 and has no recorded rate — 100 reproduces
+    exactly what those sessions did before, so nothing shifts under un-backfilled data.
+    Any query feeding this MUST select sample_rate_hz; a missing column looks identical
+    to a NULL here and would silently keep the old wrong behavior.
+    """
+    v = (row or {}).get("sample_rate_hz")
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return float(annot.FS_HZ)
+    return f if f > 0 and not (math.isnan(f) or math.isinf(f)) else float(annot.FS_HZ)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -140,7 +156,10 @@ async def process_session(
 
         # ── Signal processing ─────────────────────────────────────────────
         df = vae.load_data(raw_path)
-        t_dec, dist_dec, vel, _accel, _actual_fs = vae.run_pipeline(df, 100.0)
+        # actual_fs is the TRUE rate of the arrays below — decimation is by an integer
+        # factor, so the requested 100.0 is never actually achieved (~89.5 Hz typical).
+        # It is stored on the session row; every consumer must read it, not assume 100.
+        t_dec, dist_dec, vel, _accel, actual_fs = vae.run_pipeline(df, 100.0)
 
         # ── Metrics ──────────────────────────────────────────────────────
         result = m.compute_session_metrics(t_dec, vel, dist_dec, head_waist_m=head_waist_m)
@@ -283,6 +302,7 @@ async def process_session(
                         "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {}), "data_quality": data_quality}),
                         "velocity_profile": _clean(vel.tolist()),
                         "distance_profile": _clean(dist_dec.tolist()),
+                        "sample_rate_hz":   float(actual_fs),
                         "raw_csv_path":     storage_path,
                         "upload_status":    "complete",
                         "name":             name,
@@ -357,7 +377,7 @@ async def export_session_csv(
     try:
         resp = (
             sb_admin.table("sessions")
-            .select("velocity_profile, distance_profile, metrics_json, created_at")
+            .select("velocity_profile, distance_profile, metrics_json, created_at, sample_rate_hz")
             .eq("id", session_id)
             .eq("coach_id", coach_row_id)
             .single()
@@ -374,6 +394,7 @@ async def export_session_csv(
     dist      = data.get("distance_profile") or []
     mj        = data.get("metrics_json") or {}
     n         = len(vel)
+    fs        = _session_fs(data)
 
     if n == 0:
         raise HTTPException(status_code=422, detail="Session has no signal data")
@@ -395,7 +416,7 @@ async def export_session_csv(
         v = vel[i]
         d = dist[i]
         w.writerow([
-            round(i / 100.0, 4),
+            round(i / fs, 4),
             round(float(v), 6) if v is not None else "",
             round(float(d), 6) if d is not None else "",
             cycle_ids[i],
@@ -759,7 +780,7 @@ async def get_annotations(
 
     _, row = _owned_session(
         sb_admin, request.state.user_id, session_id,
-        "metrics_json, velocity_profile, video_path, video_origin_s",
+        "metrics_json, velocity_profile, video_path, video_origin_s, sample_rate_hz",
     )
 
     ann_resp = (
@@ -773,14 +794,16 @@ async def get_annotations(
 
     vel = row.get("velocity_profile") or []
     video_path = row.get("video_path")
+    fs = _session_fs(row)
     return {
         "annotation": annotation,
-        "seed": _clean(annot.build_seed(row.get("metrics_json"))),
+        "seed": _clean(annot.build_seed(row.get("metrics_json"), fs)),
         "video": (
             {"path": video_path, "origin_s": row.get("video_origin_s")}
             if video_path else None
         ),
-        "duration_s": len(vel) / annot.FS_HZ,
+        "duration_s": len(vel) / fs,
+        "sample_rate_hz": fs,
     }
 
 
@@ -806,11 +829,12 @@ async def put_annotations(
 
     coach_row_id, row = _owned_session(
         sb_admin, request.state.user_id, session_id,
-        "velocity_profile, distance_profile, metrics_json, metrics_json_auto",
+        "velocity_profile, distance_profile, metrics_json, metrics_json_auto, sample_rate_hz",
     )
 
     vel_list = row.get("velocity_profile") or []
-    duration_s = len(vel_list) / annot.FS_HZ
+    fs = _session_fs(row)
+    duration_s = len(vel_list) / fs
     errors = annot.validate_annotation(body, duration_s or None)
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
@@ -831,17 +855,17 @@ async def put_annotations(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # ── recompute from the human boundaries (runs on the stored 100 Hz profiles) ──
+    # ── recompute from the human boundaries (on the stored profiles, at their own rate) ──
     recomputed = False
     recompute_error = None
-    manual = annot.annotation_to_overrides(record, len(vel_list))
+    manual = annot.annotation_to_overrides(record, len(vel_list), fs)
     if manual.get("cycle_bounds"):
         try:
             vel_arr  = np.asarray(vel_list, dtype=float)
             dist_arr = np.asarray(row.get("distance_profile") or [], dtype=float)
             if dist_arr.size != vel_arr.size or vel_arr.size < 2:
                 raise ValueError("velocity/distance profiles missing or mismatched")
-            t_arr  = np.arange(vel_arr.size) / annot.FS_HZ
+            t_arr  = np.arange(vel_arr.size) / fs
             result = m.compute_session_metrics(t_arr, vel_arr, dist_arr, manual=manual)
 
             old_mj = row.get("metrics_json") or {}

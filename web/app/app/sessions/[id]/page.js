@@ -35,7 +35,7 @@ export default function ReportCardPage({ params }) {
       const { data: row, error: err } = await supabase
         .from("sessions")
         .select(
-          "metrics_json, velocity_profile, distance_profile, name, notes, is_starred, stroke_type, athlete_id, created_at"
+          "metrics_json, velocity_profile, distance_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz"
         )
         .eq("id", sessionId)
         .single();
@@ -79,9 +79,12 @@ export default function ReportCardPage({ params }) {
 
   const vel = data?.velocity_profile ?? [];
   const dist = data?.distance_profile ?? [];
+  // Sessions store their true decimated rate (~89.5 Hz, not 100) since Phase 52;
+  // older rows have none, and 100 is what they were always displayed at.
+  const fsHz = data?.sample_rate_hz > 0 ? data.sample_rate_hz : 100;
   const time = useMemo(
-    () => Array.from({ length: vel.length }, (_, i) => i / 100),
-    [vel.length]
+    () => Array.from({ length: vel.length }, (_, i) => i / fsHz),
+    [vel.length, fsHz]
   );
 
   if (error)
@@ -240,6 +243,7 @@ export default function ReportCardPage({ params }) {
             markerTimeS={markerTimeS}
             markerLabel={markerLabel}
             cycles={metrics.cycles}
+            fsHz={fsHz}
           />
         </div>
 

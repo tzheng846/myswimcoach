@@ -23,6 +23,10 @@ export default function VelocityChart({
   markerTimeS = null,
   markerLabel = "",
   cycles = [],
+  // The session's true sample rate (sessions.sample_rate_hz). Cycle bounds are stored
+  // as sample indices, so converting them to seconds needs it. Defaults to 100 for
+  // sessions recorded before Phase 52, which have no recorded rate.
+  fsHz = 100,
   height = 320,
 }) {
   const data = useMemo(() => {
@@ -43,9 +47,9 @@ export default function VelocityChart({
   const boundaries = useMemo(
     () =>
       (cycles ?? [])
-        .map((c) => (c.start_idx != null ? c.start_idx / 100 : null))
+        .map((c) => (c.start_idx != null ? c.start_idx / fsHz : null))
         .filter((t) => t != null),
-    [cycles]
+    [cycles, fsHz]
   );
 
   if (data.length === 0) {

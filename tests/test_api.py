@@ -1081,3 +1081,56 @@ def test_mutation_builder_class_lacks_single():
     from postgrest._sync.request_builder import SyncQueryRequestBuilder
 
     assert not hasattr(SyncQueryRequestBuilder, "single")
+
+
+# ── Phase 52: /process persists the TRUE decimated sample rate ────────────────
+# run_pipeline decimates by an integer factor, so the requested 100 Hz is never
+# achieved. api.py used to discard the real value (API-AUDIT F3), leaving every
+# consumer to guess — and guess wrong (F2).
+
+class TestSampleRatePersisted:
+    def _admin_and_post(self, api_client, monkeypatch, csv_bytes):
+        from unittest.mock import MagicMock
+        import api
+        admin = MagicMock()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        monkeypatch.setattr(
+            api, "_get_coach_row",
+            lambda *a, **k: {"id": "coach-1", "device_limit": None,
+                             "monthly_session_limit": None},
+        )
+        resp = api_client.post(
+            "/process",
+            files={"file": ("session.csv", io.BytesIO(csv_bytes), "text/csv")},
+            data={"head_waist_m": "0.0", "athlete_id": "ath-1"},
+            headers={"Authorization": "Bearer fake-token-mocked"},
+        )
+        assert resp.status_code == 200, resp.text
+        return admin.table.return_value.insert.call_args[0][0]
+
+    def test_insert_carries_real_rate(self, api_client, monkeypatch,
+                                      synthetic_csv_bytes):
+        """AC-1: the synthetic fixture is ~270 Hz → factor 3 → ~90 Hz, not 100.
+
+        The exact value comes from the fixture's real timestamp spacing (~269.98 Hz),
+        so this asserts the neighbourhood, not a nominal constant — asserting an exact
+        90.0 would just be re-encoding the same wrong-constant mistake.
+        """
+        row = self._admin_and_post(api_client, monkeypatch, synthetic_csv_bytes)
+        assert "sample_rate_hz" in row
+        assert row["sample_rate_hz"] == pytest.approx(90.0, rel=1e-3)
+        assert row["sample_rate_hz"] != 100
+
+    def test_rate_is_a_plain_float(self, api_client, monkeypatch,
+                                   synthetic_csv_bytes):
+        """A numpy scalar here would break JSON serialization on insert."""
+        row = self._admin_and_post(api_client, monkeypatch, synthetic_csv_bytes)
+        assert type(row["sample_rate_hz"]) is float
+
+    def test_rate_matches_the_returned_profile_length(self, api_client, monkeypatch,
+                                                      synthetic_csv_bytes):
+        """The stored rate must describe the stored profile, not a nominal target."""
+        row = self._admin_and_post(api_client, monkeypatch, synthetic_csv_bytes)
+        from conftest import SYNTHETIC_DURATION_S
+        n = len(row["velocity_profile"])
+        assert n / row["sample_rate_hz"] == pytest.approx(SYNTHETIC_DURATION_S, abs=0.5)

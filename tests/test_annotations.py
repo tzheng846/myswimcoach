@@ -457,3 +457,90 @@ class TestExport:
         import api
         client = TestClient(api.app, raise_server_exceptions=True)
         assert client.get("/annotations/export").status_code == 401
+
+
+# ── Phase 52: per-session sample rate (API-AUDIT F2 + F3) ─────────────────────
+#
+# The stored profiles are ~89.5 Hz, not 100 (decimation is by an integer factor).
+# Everything below pins two properties: times follow the session's OWN rate, and a
+# session with no recorded rate behaves exactly as it did before Phase 52.
+
+FS_REAL = 89.5
+
+
+class TestSampleRatePure:
+    def test_build_seed_uses_supplied_rate(self):
+        seed = annot.build_seed(METRICS_JSON, FS_REAL)
+        assert seed["phases"]["stroke_start_s"] == pytest.approx(450 / FS_REAL)
+        assert seed["phases"]["finish_s"] == pytest.approx(910 / FS_REAL)
+        assert seed["stroke_marks_s"] == pytest.approx([500 / FS_REAL, 700 / FS_REAL])
+
+    def test_build_seed_defaults_to_100(self):
+        assert annot.build_seed(METRICS_JSON) == annot.build_seed(METRICS_JSON, 100)
+
+    @pytest.mark.parametrize("bad", [None, 0, -5, float("nan"), "89.5", True])
+    def test_bad_rate_falls_back_never_raises(self, bad):
+        assert annot.build_seed(METRICS_JSON, bad) == annot.build_seed(METRICS_JSON, 100)
+        assert (annot.annotation_to_overrides(ANNOTATION_ROW, 3000, bad)
+                == annot.annotation_to_overrides(ANNOTATION_ROW, 3000, 100))
+
+    @pytest.mark.parametrize("fs", [89.5, 100, 268.5])
+    def test_index_round_trip_preserved(self, fs):
+        """AC-6: seed at a rate, convert back at the same rate, land on the same sample."""
+        seed = annot.build_seed(METRICS_JSON, fs)
+        manual = annot.annotation_to_overrides(seed, 3000, fs)
+        assert manual["ip_end_idx"] == 450
+        assert [b[0] for b in manual["cycle_bounds"]] == [500, 700]
+
+    def test_overrides_scale_with_rate(self):
+        at_100 = annot.annotation_to_overrides(RECOMPUTE_DOC, 3000, 100)
+        at_real = annot.annotation_to_overrides(RECOMPUTE_DOC, 3000, FS_REAL)
+        assert at_100["cycle_bounds"] == [(500, 620), (620, 940)]
+        assert at_real["cycle_bounds"] == [(448, 555), (555, 841)]
+
+
+class TestSampleRateEndpoints:
+    def test_duration_uses_session_rate(self, api_client, monkeypatch):
+        import api
+        row = {**SESSION_ROW, "sample_rate_hz": FS_REAL}
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _annot_admin(session_row=row))
+        body = api_client.get("/sessions/sess-1/annotations", headers=AUTH).json()
+        assert body["duration_s"] == pytest.approx(3000 / FS_REAL)
+        assert body["sample_rate_hz"] == pytest.approx(FS_REAL)
+        assert body["seed"]["phases"]["finish_s"] == pytest.approx(910 / FS_REAL)
+
+    @pytest.mark.parametrize("stored", [None, 0, "not-a-number"])
+    def test_missing_or_bad_rate_is_pre_phase_52_behavior(self, api_client,
+                                                          monkeypatch, stored):
+        """AC-4: NULL (and anything unusable) must reproduce the old 100 Hz output."""
+        import api
+        row = {**SESSION_ROW, "sample_rate_hz": stored}
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _annot_admin(session_row=row))
+        body = api_client.get("/sessions/sess-1/annotations", headers=AUTH).json()
+        assert body["duration_s"] == pytest.approx(30.0)
+        assert body["seed"] == annot.build_seed(METRICS_JSON, 100)
+
+    def test_session_row_without_the_column_at_all(self, api_client, monkeypatch):
+        """The pre-migration shape — no key present, not even null."""
+        import api
+        assert "sample_rate_hz" not in SESSION_ROW
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _annot_admin())
+        body = api_client.get("/sessions/sess-1/annotations", headers=AUTH).json()
+        assert body["duration_s"] == pytest.approx(30.0)
+
+    def test_recompute_runs_on_the_true_clock(self, api_client, monkeypatch):
+        """AC-3: the boundaries the coach clicked map through the session's own rate."""
+        import api
+        row = {**SESSION_ROW, "sample_rate_hz": FS_REAL}
+        admin = _annot_admin(session_row=row)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["recomputed"] is True
+        new_mj = admin._tables["sessions"].update.call_args[0][0]["metrics_json"]
+        # Same doc at 100 Hz produced (500, 620), (620, 940) — see TestRecomputeOnSave
+        assert [(c["start_idx"], c["end_idx"]) for c in new_mj["cycles"]] == [
+            (448, 555), (555, 841)]
