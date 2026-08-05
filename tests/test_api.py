@@ -591,7 +591,8 @@ def test_team_tools_declared():
     assert "kick" in coach._build_system_prompt("freestyle").lower()
 
 
-def _team_admin(anchor=ANCHOR_ROW, athletes=None, team_sessions=None, coach_id="coach-1", scope_log=None):
+def _team_admin(anchor=ANCHOR_ROW, athletes=None, team_sessions=None, coach_id="coach-1",
+                team_id="team-1", scope_log=None):
     """Fake admin for team tests: serves coaches/athletes/sessions and records eq() filters."""
     from unittest.mock import MagicMock
     log = scope_log if scope_log is not None else []
@@ -623,7 +624,7 @@ def _team_admin(anchor=ANCHOR_ROW, athletes=None, team_sessions=None, coach_id="
             log.append({"table": self.kind, **self.eqs})
             r = MagicMock()
             if self.kind == "coaches":
-                r.data = {"id": coach_id} if coach_id else None
+                r.data = {"id": coach_id, "team_id": team_id} if coach_id else None
             elif self.kind == "athletes":
                 r.data = athletes
             elif self.kind == "sessions":
@@ -664,8 +665,10 @@ class TestCoachChatTeam:
         resp = api_client.post("/coach/chat", json=_chat_body(),
                                headers={"Authorization": "Bearer x"})
         assert resp.status_code == 200, resp.text
-        # Both roster queries filtered by coach_id.
-        assert any(q["table"] == "athletes" and q.get("coach_id") == "coach-1" for q in scope_log)
+        # Roster scoping is split by design (Phase 51-02): athletes has no coach_id column, so the
+        # roster is team-scoped; sessions does have one and stays coach-scoped.
+        assert any(q["table"] == "athletes" and q.get("team_id") == "team-1" for q in scope_log)
+        assert not any(q["table"] == "athletes" and "coach_id" in q for q in scope_log)
         assert any(q["table"] == "sessions" and "id" not in q and q.get("coach_id") == "coach-1" for q in scope_log)
         # Structured data returned; out-of-roster athlete excluded; ascending order correct.
         data = resp.json()["data"]
@@ -875,7 +878,7 @@ class TestSessionRatings:
         speed = next(p for p in data["pillars"] if p["key"] == "speed")
         assert speed["band"] == "good"          # 1.25 ≥ 1.20
         assert speed["trend"] == "improved"      # 1.25 vs 1.05 baseline
-        assert speed["provisional"] is True      # segmentation unreliable
+        assert speed["provisional"] is False     # Phase 54: segmentation no longer gates this
 
     def test_first_session_when_no_prior(self, api_client, monkeypatch):
         import api
@@ -1134,3 +1137,71 @@ class TestSampleRatePersisted:
         from conftest import SYNTHETIC_DURATION_S
         n = len(row["velocity_profile"])
         assert n / row["sample_rate_hz"] == pytest.approx(SYNTHETIC_DURATION_S, abs=0.5)
+
+
+# ── Schema contract ───────────────────────────────────────────────────────────
+# Promoted from tools/schema_contract.py (Phase 51-01) into the suite so the phantom-column
+# bug class cannot silently return. This guards code against a SNAPSHOT, not against the live
+# database — supabase/live_schema.json is point-in-time. After any migration, refresh it with:
+#     python tools/introspect_schema.py
+# A mock-based test cannot cover this: conftest replaces create_client with a MagicMock that
+# answers every attribute, so a chain naming a nonexistent column passes happily. The guard
+# has to be static.
+
+class TestSchemaContract:
+    """Every column api.py names against a table must exist in the live-schema snapshot."""
+
+    @staticmethod
+    def _schema():
+        import json
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        return json.loads((root / "supabase" / "live_schema.json").read_text(encoding="utf-8"))
+
+    def test_api_py_names_no_unknown_columns(self):
+        from pathlib import Path
+        from tools.schema_contract import find_violations
+
+        root = Path(__file__).resolve().parent.parent
+        src = root / "api.py"
+        violations = find_violations(src.read_text(encoding="utf-8"), self._schema())
+
+        assert not violations, "api.py references columns absent from the live schema:\n" + "\n".join(
+            f"  {src}:{v.line}  {v.table}.{v.column}  [{v.kind}]" for v in violations
+        )
+
+    def test_extractor_catches_a_known_bad_reference(self):
+        """Self-check: a silently broken extractor would make the test above pass forever."""
+        from tools.schema_contract import find_violations
+
+        schema = {"athletes": ["id", "team_id", "name"]}
+        bad = 'sb.table("athletes").select("id").eq("coach_id", x).execute()'
+        violations = find_violations(bad, schema)
+
+        assert len(violations) == 1
+        assert violations[0].table == "athletes"
+        assert violations[0].column == "coach_id"
+        assert violations[0].kind == "eq"
+
+    def test_extractor_catches_bad_insert_payload_keys(self):
+        """The live blocker was an insert payload key, not a filter — cover that path too."""
+        from tools.schema_contract import find_violations
+
+        schema = {"athletes": ["id", "team_id", "name"]}
+        bad = 'sb.table("athletes").insert({"team_id": t, "coach_id": c, "name": n}).execute()'
+        violations = find_violations(bad, schema)
+
+        assert [ (v.table, v.column, v.kind) for v in violations ] == [
+            ("athletes", "coach_id", "insert")
+        ]
+
+    def test_extractor_ignores_response_dicts_and_star_selects(self):
+        """The regex version's failure mode: response-dict keys read as column names."""
+        from tools.schema_contract import find_violations
+
+        schema = {"sessions": ["id", "coach_id"]}
+        ok = (
+            'sb.table("sessions").select("*").eq("id", i).execute()\n'
+            'payload = {"session": {}, "cycles": [], "ok": True}\n'
+        )
+        assert find_violations(ok, schema) == []

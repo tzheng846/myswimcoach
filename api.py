@@ -23,6 +23,16 @@ STRIPE_WEBHOOK_SECRET      = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_STARTER_PRICE_ID    = os.getenv("STRIPE_STARTER_PRICE_ID", "")
 STRIPE_ENTERPRISE_PRICE_ID = os.getenv("STRIPE_ENTERPRISE_PRICE_ID", "")
 
+# Master switch for ALL tier enforcement — monthly session limit + device limit (/process) and
+# athlete limit (POST /athletes). DEFAULT OFF (Phase 54): billing isn't being sold yet, and the
+# free-tier caps were blocking real testing. When off the limit-counting queries are skipped
+# entirely, not merely made to pass — that keeps them off the upload path and avoids running the
+# athlete count against the phantom `athletes.coach_id` column.
+# The billing infrastructure is deliberately intact: _TIER_LIMITS, the Stripe webhook writes, and
+# GET /billing/status all still work. Re-enable with ENFORCE_TIER_LIMITS=1; the per-coach
+# NULL-means-unlimited semantics are nested inside and survive.
+ENFORCE_TIER_LIMITS = os.getenv("ENFORCE_TIER_LIMITS", "0").strip().lower() in ("1", "true", "yes")
+
 _supabase: Client | None = None
 _supabase_admin: Client | None = None
 
@@ -210,7 +220,7 @@ async def process_session(
                 )
                 coach_row_id = coach["id"] if coach else None
 
-                if coach:
+                if coach and ENFORCE_TIER_LIMITS:
                     # Monthly session limit
                     if coach.get("monthly_session_limit") is not None:
                         _now = datetime.datetime.utcnow()
@@ -1292,15 +1302,14 @@ async def create_athlete(request: Request, _auth=Depends(require_auth)):
     if not coach:
         raise HTTPException(status_code=403, detail="Coach profile not found")
 
-    coach_id   = coach["id"]
     team_id    = coach["team_id"]
     limit      = coach.get("athlete_limit")
-    if limit is not None:
+    if ENFORCE_TIER_LIMITS and limit is not None:
         try:
             r = (
                 sb_admin.table("athletes")
                 .select("id", count="exact")
-                .eq("coach_id", coach_id)
+                .eq("team_id", team_id)
                 .execute()
             )
             count = r.count or 0
@@ -1322,7 +1331,6 @@ async def create_athlete(request: Request, _auth=Depends(require_auth)):
             sb_admin.table("athletes")
             .insert({
                 "team_id":      team_id,
-                "coach_id":     coach_id,
                 "name":         name,
                 "stroke_type":  stroke_type,
                 "head_waist_m": hw,
@@ -1416,15 +1424,17 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
         raise HTTPException(status_code=503, detail="Storage not configured")
 
     coach_row_id = None
+    coach_team_id = None
     try:
         coach_resp = (
             sb_admin.table("coaches")
-            .select("id")
+            .select("id, team_id")
             .eq("user_id", request.state.user_id)
             .single()
             .execute()
         )
         coach_row_id = coach_resp.data["id"] if coach_resp.data else None
+        coach_team_id = coach_resp.data.get("team_id") if coach_resp.data else None
     except Exception:
         pass
     if not coach_row_id:
@@ -1528,7 +1538,7 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
             _attach_t_peak(mj.get("cycles", []) or []),
         )}
 
-    # ── Team executors — scoped to the coach's whole roster (coach_id), NOT one athlete.
+    # ── Team executors — scoped to the coach's whole roster (team_id), NOT one athlete.
     # One athletes query + one sessions query per turn, cached for the request; aggregation
     # is pure (roster_metrics) so the model only ever sees compact tables, never raw cycles.
     _roster_cache = {}
@@ -1538,8 +1548,10 @@ async def coach_chat(request: Request, _auth=Depends(require_auth)):
             return _roster_cache["rows"]
         # Let query failures propagate — a backend outage must surface as a tool error,
         # not masquerade as an empty roster ("you have no athletes").
+        # athletes has no coach_id column — the roster is team-scoped. sessions stays on
+        # coach_id below; that column exists there and that scoping is correct.
         arows = (sb_admin.table("athletes").select("id, name")
-                 .eq("coach_id", coach_row_id).execute()).data or []
+                 .eq("team_id", coach_team_id).execute()).data or []
         names = {a.get("id"): a.get("name") for a in arows}
         srows = (sb_admin.table("sessions")
                  .select("athlete_id, created_at, metrics_json")
@@ -1794,18 +1806,19 @@ async def billing_status(request: Request, _auth=Depends(require_auth)):
         raise HTTPException(status_code=503, detail="Storage not configured")
     coach = _get_coach_row(
         sb_admin, request.state.user_id,
-        "id, subscription_tier, subscription_status, athlete_limit, device_limit, monthly_session_limit"
+        "id, team_id, subscription_tier, subscription_status, athlete_limit, device_limit, monthly_session_limit"
     )
     if not coach:
         raise HTTPException(status_code=403, detail="Coach profile not found")
 
     coach_id = coach["id"]
+    team_id = coach.get("team_id")
     now = datetime.datetime.utcnow()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
 
     athlete_count, device_count, session_count = 0, 0, 0
     try:
-        r = sb_admin.table("athletes").select("id", count="exact").eq("coach_id", coach_id).execute()
+        r = sb_admin.table("athletes").select("id", count="exact").eq("team_id", team_id).execute()
         athlete_count = r.count or 0
     except Exception:
         pass

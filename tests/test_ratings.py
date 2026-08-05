@@ -93,13 +93,19 @@ class TestTrend:
 
 
 class TestGatingAndSafety:
-    def test_non_breaststroke_unknown_but_trend_computed(self):
+    def test_non_breaststroke_gets_banded_via_fallback(self):
+        # Phase 54: bands apply to every stroke — freestyle borrows the breaststroke table.
         cur = {"mean_vel_ms": 1.30}
         base = {"mean_vel_ms": 1.0}
         r = ratings.rate_session(cur, base, "freestyle")
         sp = _pillar(r, "speed")
-        assert sp["band"] == "unknown" and sp["score"] is None and sp["provisional"] is True
-        assert sp["trend"] == "improved"  # trend-only still works
+        assert sp["band"] != "unknown" and sp["score"] is not None
+        assert sp["provisional"] is False
+        assert sp["trend"] == "improved"  # trend still works
+
+    def test_unrecognised_stroke_also_falls_back(self):
+        r = ratings.rate_session({"mean_vel_ms": 1.30}, None, "butterfly")
+        assert _pillar(r, "speed")["band"] != "unknown"
 
     def test_missing_primary_is_unknown_not_crash(self):
         r = ratings.rate_session({"segmentation_reliable": True}, None, "breaststroke")
@@ -110,11 +116,24 @@ class TestGatingAndSafety:
         r = ratings.rate_session({"mean_vel_ms": float("nan")}, None, "breaststroke")
         assert _pillar(r, "speed")["band"] == "unknown"
 
-    def test_provisional_follows_segmentation_flag(self):
-        prov = ratings.rate_session({"mean_vel_ms": 1.3, "segmentation_reliable": False}, None, "breaststroke")
+    def test_provisional_ignores_segmentation_flag(self):
+        # Phase 54: the segmentation condition was removed. It was False for every auto-segmented
+        # session, so it made every pillar provisional and silenced the needs-attention list.
+        unreliable = ratings.rate_session({"mean_vel_ms": 1.3, "segmentation_reliable": False}, None, "breaststroke")
         trusted = ratings.rate_session({"mean_vel_ms": 1.3, "segmentation_reliable": True}, None, "breaststroke")
-        assert _pillar(prov, "speed")["provisional"] is True
+        assert _pillar(unreliable, "speed")["provisional"] is False
         assert _pillar(trusted, "speed")["provisional"] is False
+
+    def test_provisional_driven_by_missing_threshold(self):
+        # The remaining half of the gate: a pillar whose primary metric has no threshold entry.
+        # cv_isi drives no band, so pin it via a pillar that has one — endurance uses
+        # fatigue_index_pct, which IS in THRESHOLDS, so use a metric-free session instead.
+        r = ratings.rate_session({"mean_vel_ms": 1.3}, None, "breaststroke")
+        assert all(
+            p["provisional"] is False
+            for p in r["pillars"]
+            if p["primary"]["key"] in ratings.THRESHOLDS["breaststroke"]
+        )
 
 
 class TestSelectBaseline:

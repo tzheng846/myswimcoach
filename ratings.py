@@ -2,21 +2,25 @@
 
 Turns a session's metrics into a coach-friendly good / ok / needs-work read across four
 headline pillars — Speed, Stroke length, Consistency, Endurance. Each pillar carries:
-  - band:  "good" | "ok" | "needs_work" | "unknown" (primary metric missing/NaN, or stroke
-           has no validated thresholds)
+  - band:  "good" | "ok" | "needs_work" | "unknown" (primary metric missing/NaN, or the metric
+           has no threshold entry)
   - score: 0–100 position of the primary metric within its band range — drives the meter
            marker. Higher ALWAYS = better (inverted for lower-is-better metrics). None when band
            is "unknown".
   - trend: "improved" | "steady" | "declined" vs a caller-supplied baseline, or "first_session"
            when there's nothing to compare to. Direction-aware, ±5% deadband.
-  - provisional: True when the verdict can't be trusted as absolute (segmentation flagged
-           unreliable, or the stroke has no validated bands).
+  - provisional: True when the pillar's primary metric has no threshold entry. Phase 54 removed
+           the segmentation-reliability condition — see `_rate_pillar`.
   - primary + contributing metrics (value / unit / explanation) for the expand view.
 
 One source of truth shared by api.py (GET /sessions/{id}/ratings), the web + iOS clients, and
 coach.py. Explanation copy and RATING_COLORS live here so every surface agrees on wording AND
-color. Bands are DRAFT — breaststroke only, seeded from app.py's Phase-2 ranges — and owe a coach
-review before they're customer-facing (same posture as drills.py).
+color. Bands are DRAFT — seeded from app.py's Phase-2 breaststroke ranges — and owe a coach review
+before they're customer-facing (same posture as drills.py). Phase 54 applies them to EVERY stroke
+via a fallback, so the DRAFT warning now carries more weight, not less: a freestyle band is a
+breaststroke threshold borrowed, over segmentation that 16-04 measured at 3/8 sessions within
+±5 SPM. Phase 53 replaces this whole absolute-band approach with within-athlete contrast, which
+needs no thresholds at all.
 
 The trend baseline is chosen by `select_baseline()` and passed in; `rate_session()` doesn't care
 how it was picked. That keeps the future "let the coach choose the comparison scope" feature a
@@ -173,7 +177,11 @@ def _rate_pillar(p, metrics, baseline, thr_table, seg_reliable):
     thr = (thr_table or {}).get(pk)
 
     band, score = "unknown", None
-    provisional = (not seg_reliable) or (thr_table is None) or (thr is None)
+    # Phase 54: `seg_reliable` no longer gates this. It was False for every auto-segmented session
+    # (metrics.py sets it only from human annotation bounds), so it made EVERY pillar provisional —
+    # which in turn made summarize_team's needs-attention list emit nothing but stale/never_tested.
+    # The parameter is kept so restoring the gate is a one-line change.
+    provisional = (thr_table is None) or (thr is None)
     if _is_num(pv) and thr is not None:
         band = _band(pv, thr, p["direction"])
         score = _score(pv, thr, p["direction"])
@@ -204,15 +212,21 @@ def rate_session(session_metrics, baseline_metrics=None, stroke="breaststroke"):
     """Rate one session.
 
     session_metrics: flat dict of the session's metrics (metrics.py `session` keys) merged with
-        the `data_quality` flags (so `segmentation_reliable` is visible here). Never client-supplied.
+        the `data_quality` flags. Never client-supplied. `segmentation_reliable` is still read into
+        `seg_reliable` but no longer affects the result (Phase 54) — kept so the gate is one line
+        to restore.
     baseline_metrics: the comparison session's flat metrics, or None for a first/only session.
         Chosen by select_baseline() — rate_session() is agnostic to how.
-    stroke: lowercase stroke name. Only "breaststroke" has validated bands; other strokes get
-        band="unknown"/score=None (trend-only) + provisional=True.
+    stroke: lowercase stroke name. Every stroke gets bands; unrecognised strokes fall back to the
+        breaststroke table. A pillar is band="unknown"/score=None/provisional=True only when its
+        own primary metric has no threshold entry.
     """
     m = session_metrics or {}
     seg_reliable = bool(m.get("segmentation_reliable", False))
-    thr_table = THRESHOLDS.get((stroke or "").lower())
+    # Phase 54: bands apply to EVERY stroke. Unknown strokes borrow the breaststroke table rather
+    # than getting their own copy — the fallback keeps it visible in the code that these bands are
+    # breaststroke-derived and borrowed, which is exactly the caveat a reader needs.
+    thr_table = THRESHOLDS.get((stroke or "").lower()) or THRESHOLDS["breaststroke"]
     return {
         "stroke": stroke,
         "has_baseline": baseline_metrics is not None,
