@@ -1,0 +1,415 @@
+/* ==========================================================================
+   Swimnetics Systems Design — shared lesson stylesheet
+   Tufte-inspired: generous measure, quiet rules, sidenotes, prints cleanly.
+   Every lesson and reference document links this file. Do not inline overrides
+   in lessons — extend here so the course stays visually one thing.
+   ========================================================================== */
+
+:root {
+  --ink:        #16161d;
+  --ink-soft:   #4a4a55;
+  --ink-faint:  #7c7c88;
+  --bg:         #fffef9;
+  --bg-sunk:    #f6f4ec;
+  --rule:       #dedad0;
+
+  /* Semantic accents. Purple ties to the Swimnetics brand. */
+  --accent:     #5b4bc4;
+  --accent-bg:  #efecfc;
+  --good:       #1d7a4c;
+  --good-bg:    #e6f4ec;
+  --warn:       #9a6510;
+  --warn-bg:    #fdf2dd;
+  --bad:        #a32f2f;
+  --bad-bg:     #fbeaea;
+
+  --serif:  "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
+            Georgia, "Times New Roman", serif;
+  --sans:   "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --mono:   "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
+
+  --measure: 38rem;   /* body text column */
+  --gutter:  13rem;   /* sidenote column  */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:       #e8e6df;
+    --ink-soft:  #b4b1a8;
+    --ink-faint: #86837b;
+    --bg:        #16161a;
+    --bg-sunk:   #1e1e24;
+    --rule:      #33333c;
+    --accent:    #a99cf5;
+    --accent-bg: #26233a;
+    --good:      #6bcf9a;
+    --good-bg:   #16281f;
+    --warn:      #e0b062;
+    --warn-bg:   #2b2317;
+    --bad:       #f08a8a;
+    --bad-bg:    #2d1c1c;
+  }
+}
+
+/* --------------------------------------------------------------- skeleton */
+
+html { font-size: 17px; -webkit-text-size-adjust: 100%; }
+
+body {
+  font-family: var(--serif);
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.62;
+  margin: 0;
+  padding: 4rem 2rem 8rem;
+  text-rendering: optimizeLegibility;
+}
+
+.wrap {
+  max-width: calc(var(--measure) + var(--gutter) + 3rem);
+  margin: 0 auto;
+}
+
+/* Body content holds the narrow measure; full-bleed elements opt out. */
+p, ul, ol, blockquote, h1, h2, h3, h4, .note, .callout, .quiz, .steps, figure > figcaption {
+  max-width: var(--measure);
+}
+
+/* ------------------------------------------------------------- typography */
+
+h1 {
+  font-weight: 400;
+  font-size: 2.45rem;
+  line-height: 1.16;
+  letter-spacing: -0.018em;
+  margin: 0 0 0.4rem;
+}
+
+h2 {
+  font-weight: 400;
+  font-size: 1.62rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin: 3.6rem 0 0.9rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--rule);
+  max-width: calc(var(--measure) + var(--gutter));
+}
+
+h3 {
+  font-weight: 600;
+  font-size: 1.12rem;
+  margin: 2.2rem 0 0.5rem;
+  letter-spacing: -0.004em;
+}
+
+h4 {
+  font-family: var(--sans);
+  font-weight: 620;
+  font-size: 0.76rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 1.8rem 0 0.6rem;
+}
+
+p { margin: 0 0 1.15rem; }
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+a:hover { text-decoration-thickness: 2px; }
+
+strong { font-weight: 650; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.845em;
+  background: var(--bg-sunk);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.08em 0.32em;
+  word-break: break-word;
+}
+
+pre {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  background: var(--bg-sunk);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 1rem 1.15rem;
+  overflow-x: auto;
+  max-width: calc(var(--measure) + var(--gutter));
+}
+pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+
+/* -------------------------------------------------------------- lesson head */
+
+.eyebrow {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 1rem;
+}
+
+.subtitle {
+  font-size: 1.16rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 0 0 1.6rem;
+  max-width: var(--measure);
+}
+
+.meta {
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  padding: 0.6rem 0;
+  margin: 0 0 3rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.6rem;
+  max-width: calc(var(--measure) + var(--gutter));
+}
+
+/* --------------------------------------------------------------- sidenotes */
+
+/* Inline by default; promoted into the margin only where there is genuinely room.
+   Progressive enhancement — the float can never overflow a narrow viewport. */
+.sidenote {
+  display: block;
+  max-width: var(--measure);
+  margin: 1.1rem 0;
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--rule);
+  font-family: var(--sans);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.sidenote a { word-break: break-word; }
+
+/* measure (38) + gap (1.5) + gutter (13) + body padding (4) ≈ 56.5rem ≈ 960px */
+@media (min-width: 1020px) {
+  .sidenote {
+    float: right;
+    clear: right;
+    width: var(--gutter);
+    max-width: var(--gutter);
+    /* .wrap already reserves measure + gutter, so the float needs no negative
+       offset — it lands in the reserved column on its own. */
+    margin: 0.35rem 0 1.1rem 2.4rem;
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+/* ---------------------------------------------------------------- callouts */
+
+.callout {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-bg);
+  padding: 1rem 1.2rem;
+  margin: 1.8rem 0;
+  border-radius: 0 5px 5px 0;
+}
+.callout > :last-child { margin-bottom: 0; }
+.callout h4 { margin-top: 0; color: var(--accent); }
+
+.callout.is-warn { border-left-color: var(--warn); background: var(--warn-bg); }
+.callout.is-warn h4 { color: var(--warn); }
+.callout.is-bad  { border-left-color: var(--bad);  background: var(--bad-bg);  }
+.callout.is-bad h4 { color: var(--bad); }
+.callout.is-good { border-left-color: var(--good); background: var(--good-bg); }
+.callout.is-good h4 { color: var(--good); }
+
+/* "You already built this" — the signature move of this course. */
+.callout.is-yours { border-left-color: var(--good); background: var(--good-bg); }
+.callout.is-yours h4 { color: var(--good); }
+
+/* ------------------------------------------------------------------ tables */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: calc(var(--measure) + var(--gutter));
+  font-family: var(--sans);
+  font-size: 0.83rem;
+  margin: 1.6rem 0 2rem;
+}
+caption {
+  font-family: var(--sans);
+  font-size: 0.76rem;
+  color: var(--ink-faint);
+  text-align: left;
+  padding-bottom: 0.5rem;
+}
+th {
+  text-align: left;
+  font-weight: 620;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1.5px solid var(--ink-soft);
+  padding: 0.45rem 0.7rem 0.45rem 0;
+  vertical-align: bottom;
+}
+td {
+  border-bottom: 1px solid var(--rule);
+  padding: 0.6rem 0.7rem 0.6rem 0;
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: 0; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+
+/* ------------------------------------------------------------------ badges */
+
+.tag {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 0.67rem;
+  font-weight: 640;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.14em 0.5em;
+  border-radius: 3px;
+  white-space: nowrap;
+  background: var(--bg-sunk);
+  color: var(--ink-soft);
+  border: 1px solid var(--rule);
+}
+.tag.open   { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.tag.closed { background: var(--good-bg); color: var(--good); border-color: transparent; }
+.tag.bad    { background: var(--bad-bg);  color: var(--bad);  border-color: transparent; }
+.tag.acc    { background: var(--accent-bg); color: var(--accent); border-color: transparent; }
+
+/* ------------------------------------------------------------------ figures */
+
+figure {
+  margin: 2.4rem 0;
+  max-width: calc(var(--measure) + var(--gutter));
+}
+figure svg { width: 100%; height: auto; display: block; }
+figcaption {
+  font-family: var(--sans);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--ink-faint);
+  margin-top: 0.7rem;
+}
+
+/* ------------------------------------------------------------- step lists */
+
+.steps { counter-reset: step; list-style: none; padding: 0; margin: 1.5rem 0; }
+.steps > li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 2.5rem;
+  margin-bottom: 1.1rem;
+}
+.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0; top: 0.06em;
+  width: 1.6rem; height: 1.6rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 0.8rem;
+  font-weight: 640;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* --------------------------------------------------------------- worksheet */
+
+.worksheet {
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  padding: 1.4rem 1.5rem;
+  margin: 2rem 0;
+  background: var(--bg-sunk);
+  max-width: calc(var(--measure) + var(--gutter));
+}
+.worksheet h3 { margin-top: 0; }
+.blank {
+  display: inline-block;
+  min-width: 7rem;
+  border-bottom: 1px solid var(--ink-faint);
+}
+.worksheet textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 0.7rem;
+  resize: vertical;
+}
+
+/* -------------------------------------------------------------- footer nav */
+
+.lesson-nav {
+  margin-top: 4rem;
+  padding-top: 1.3rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--sans);
+  font-size: 0.82rem;
+  max-width: calc(var(--measure) + var(--gutter));
+}
+.lesson-nav ul { list-style: none; padding: 0; margin: 0.6rem 0 0; max-width: none; }
+.lesson-nav li { margin-bottom: 0.35rem; }
+
+.ask {
+  font-family: var(--sans);
+  font-size: 0.86rem;
+  background: var(--accent-bg);
+  border-radius: 6px;
+  padding: 1rem 1.2rem;
+  margin: 2.4rem 0 0;
+  color: var(--ink-soft);
+  max-width: calc(var(--measure) + var(--gutter));
+}
+.ask strong { color: var(--accent); }
+
+/* ------------------------------------------------------------------- print */
+
+@media print {
+  :root {
+    --ink: #000; --ink-soft: #333; --ink-faint: #555;
+    --bg: #fff; --bg-sunk: #f4f4f4; --rule: #ccc;
+    --accent: #000; --accent-bg: #f0f0f0;
+  }
+  body { padding: 0; font-size: 11pt; }
+  h2 { page-break-after: avoid; break-after: avoid; }
+  h3, h4 { page-break-after: avoid; break-after: avoid; }
+  figure, table, .callout, .quiz-item, .worksheet { page-break-inside: avoid; break-inside: avoid; }
+  .quiz-controls, .ask { display: none; }
+  a { text-decoration: none; color: #000; }
+  a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.72em; color: #555; }
+  .sidenote { float: none; width: auto; margin: 0.8rem 0; border-left: 2px solid #ccc; padding-left: 0.8rem; }
+}
+
+/* ------------------------------------------------------------------ mobile */
+
+@media (max-width: 900px) {
+  body { padding: 2rem 1.2rem 5rem; }
+  html { font-size: 16px; }
+  :root { --gutter: 0rem; }
+  h1 { font-size: 2rem; }
+}

@@ -74,9 +74,25 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
+// ── Diagnostic: buffer trace ────────────────────────────────────────────────────
+// Set TRACE_BUFFER to 1 to debug the recorded data. After each recording stops, the
+// firmware prints the RAM buffer (the EXACT recorded samples, before any BLE dump) to
+// Serial as one clean angle_counts value per line, bracketed by "# TRACE n=<N>" and
+// "# END". Open Tools → Serial Plotter @ 115200 to see the recorded session as a chart
+// (the '#' lines are non-numeric → ignored by the plotter). BLE buffer-and-dump still
+// works, so the app can retrieve the SAME session and the two can be compared. DEBUG is
+// forced off in this mode so the plotter shows only the angle trace — not the millis()/
+// heap numbers that otherwise flood it. SET BACK TO 0 FOR THE NORMAL BUILD.
+#define TRACE_BUFFER 1
+#define TRACE_MAX_SAMPLES 4000   // cap the print (~15 s @270 Hz); the startup pulse is early
+
 // ── Debug ─────────────────────────────────────────────────────────────────────
 #define DEBUG 1
-#if DEBUG
+#if TRACE_BUFFER
+  #undef DEBUG
+  #define DEBUG 0      // silence DBG so the Serial Plotter shows only the buffer trace
+#endif
+#if 1
   #define DBG(fmt, ...) Serial.printf("[%7lu] " fmt "\n", millis(), ##__VA_ARGS__)
 #else
   #define DBG(fmt, ...)
@@ -91,7 +107,7 @@
 #define PIN_IN2    26   // DRV8833 IN2
 
 // ── Motor config ──────────────────────────────────────────────────────────────
-#define CW_FORWARD  false   // flip to false if motor turns wrong way
+#define CW_FORWARD  true   // flip to false if motor turns wrong way
 #define MAX_RUN_S  120     // auto-stop timeout (seconds)
 #define BRAKE_MS    80     // brake hold before coast-off
 
@@ -120,6 +136,19 @@
 #define ERROR_DISPLAY_MS   2000
 #define STATUS_INTERVAL_MS 5000
 
+// ── Record-start warmup ─────────────────────────────────────────────────────────
+// The first ~50 ms of angle reads after a record start are a settle transient (observed
+// 3444×12 → 0 → 488 before locking onto the true angle). Discard reads until the angle is
+// stable (or the cap) so the FIRST buffered sample is the true value — otherwise the leading
+// step makes the decimation filter ring (the startup velocity pulse). Cap is the max data
+// lost after a Phase-41 race-start blare, so keep it small.
+#define WARMUP_MIN_MS   150   // ALWAYS discard at least this long — the transient is a STABLE
+                              // plateau (3444×~12) that a stability gate alone settles on, so the
+                              // floor must outlast it before the "settled" break is allowed.
+#define WARMUP_MAX_MS   300   // hard cap on the warmup discard window
+#define WARMUP_STABLE_N 5     // consecutive in-tolerance reads to declare "settled"
+#define WARMUP_TOL_CNT  4     // counts tolerance for "settled"
+
 // ── Buffer ────────────────────────────────────────────────────────────────────
 #define SAMPLE_RATE_HZ     270
 #define BUFFER_SECONDS     60     // upper cap; actual size from largest free block
@@ -128,11 +157,11 @@
 #define MIN_BUFFER_SECONDS 10     // fatal if even this doesn't fit
 
 // ── Dump ──────────────────────────────────────────────────────────────────────
-// 24 samples × 7 = 168 bytes per notify. Any multiple of 7 is valid for all
+// 24 samples × 7 = 168 bytes per indication. Any multiple of 7 is valid for all
 // existing parsers. Requires negotiated MTU ≥ 171 (bleak and iOS both provide).
 // If bench testing shows truncated packets, drop to 4 — correctness over speed.
+// Pacing is handled by the indication ATT-confirm (was a fixed inter-packet delay).
 #define DUMP_SAMPLES_PER_PACKET 24
-#define DUMP_PACKET_DELAY_MS    5     // avoid Bluedroid TX-queue saturation
 #define END_OF_DUMP_MARKER      0xEE  // 1 byte ≠ multiple of 7 → ignored by sample parsers
 
 // ── Diagnostics (STATUS) ───────────────────────────────────────────────────────
@@ -208,12 +237,26 @@ static bool     btnLongFired   = false;  // long-press action already taken this
 static uint32_t lastStatusMs = 0;
 
 // ── AS5600 helpers ────────────────────────────────────────────────────────────
+// Last good raw angle + a per-read success flag. A short/failed I2C read used to
+// be silently encoded as 4095 (0x0FFF, the value of two 0xFF bytes) and recorded
+// as a real sample — the source of the "noisy data" spikes. readAngle() now
+// checks the bus and, on failure, holds the last good value and clears
+// angleReadOk so the caller can flag the sample for the pipeline to drop.
+static uint16_t lastGoodAngle = 0;
+static bool     angleReadOk   = false;
+
 static uint16_t readAngle() {
   Wire.beginTransmission(AS5600_ADDR);
   Wire.write(REG_RAWANGLE_H);
-  Wire.endTransmission(false);
-  Wire.requestFrom(AS5600_ADDR, 2);
-  return ((uint16_t)(Wire.read() & 0x0F) << 8) | Wire.read();
+  if (Wire.endTransmission(false) != 0)      { angleReadOk = false; return lastGoodAngle; }
+  if (Wire.requestFrom(AS5600_ADDR, 2) != 2) { angleReadOk = false; return lastGoodAngle; }
+  // Read both bytes into named locals — a single "Wire.read() << 8 | Wire.read()"
+  // expression has undefined evaluation order and can byte-swap the angle.
+  uint8_t hi = Wire.read();
+  uint8_t lo = Wire.read();
+  lastGoodAngle = ((uint16_t)(hi & 0x0F) << 8) | lo;
+  angleReadOk   = true;
+  return lastGoodAngle;
 }
 
 static uint8_t readMagnetStatus() {
@@ -236,6 +279,21 @@ static uint8_t readAgc() {
   Wire.requestFrom(AS5600_ADDR, 1);
   return Wire.read();
 }
+
+#if TRACE_BUFFER
+// Print the recorded RAM buffer to Serial once, after a recording stops. One
+// angle_counts value per line so the Arduino Serial Plotter charts the exact
+// recorded session (no BLE transport involved). The "# TRACE n=" header carries
+// the full buffered count for firmware↔app reconciliation; '#' lines are ignored
+// by the plotter. Capped at TRACE_MAX_SAMPLES to bound the print time.
+static void traceBuffer() {
+  uint32_t n   = bufCount;
+  uint32_t lim = (n < TRACE_MAX_SAMPLES) ? n : (uint32_t)TRACE_MAX_SAMPLES;
+  Serial.printf("# TRACE n=%lu (printing %lu)\n", (unsigned long)n, (unsigned long)lim);
+  for (uint32_t i = 0; i < lim; i++) Serial.println(sampleBuf[i].angle);
+  Serial.println("# END");
+}
+#endif
 
 // ── LED helpers ───────────────────────────────────────────────────────────────
 static void setLedState(LedState next) {
@@ -313,6 +371,30 @@ static void startRecording(const char *source) {
   dataReady      = false;
   bufCount       = 0;
   sessionStartUs = 0;
+
+  // Warmup: discard reads at the sample rate until the angle settles (or the cap), so the
+  // first buffered sample is the true value (see WARMUP_* above). Bounded blocking loop —
+  // BLE runs on its own task; ≤ WARMUP_MAX_MS.
+  {
+    uint32_t warmStart = millis();
+    uint16_t prev      = readAngle();
+    uint8_t  stable    = 0;
+    uint32_t nextUs    = micros() + SAMPLE_INTERVAL_US;
+    while (millis() - warmStart < WARMUP_MAX_MS) {
+      if ((int32_t)(micros() - nextUs) < 0) continue;
+      nextUs += SAMPLE_INTERVAL_US;
+      uint16_t a = readAngle();
+      uint16_t d = (a > prev) ? (a - prev) : (prev - a);
+      stable = (d <= WARMUP_TOL_CNT) ? (stable + 1) : 0;
+      prev = a;
+      // Require the min-time floor before honoring "settled" — otherwise the stable garbage
+      // plateau passes the stability test and the transient lands in the buffer (the pulse).
+      if (stable >= WARMUP_STABLE_N && (millis() - warmStart) >= WARMUP_MIN_MS) break;
+    }
+    lastGoodAngle = prev;   // seed the glitch-hold with the settled value
+    DBG("[REC] Warmup %lu ms — settled angle=%u", (unsigned long)(millis() - warmStart), prev);
+  }
+
   recording      = true;
   lastSampleUs   = micros();
   syncLed();
@@ -327,6 +409,9 @@ static void stopRecording(const char *source) {
   syncLed();
   DBG("[REC] Stopped (via %s) — %lu samples buffered (%.1f s)",
       source, (unsigned long)bufCount, bufCount / (float)SAMPLE_RATE_HZ);
+#if TRACE_BUFFER
+  if (dataReady) traceBuffer();   // dump the recorded buffer to Serial for the plotter
+#endif
 }
 
 // ── META / DUMP (run from loop() on the main task) ────────────────────────────
@@ -337,7 +422,7 @@ static void sendMeta() {
   memcpy(pkt,     &startUs, 4);
   memcpy(pkt + 4, &nowUs,   4);
   pTxChar->setValue(pkt, 8);
-  pTxChar->notify();
+  pTxChar->notify(false);   // false = indication (acknowledged); see TX char setup
   DBG("[META] session_start_us=%lu device_now_us=%lu (%.2f s ago)",
       (unsigned long)startUs, (unsigned long)nowUs,
       startUs ? (uint32_t)(nowUs - startUs) / 1e6 : 0.0f);
@@ -365,7 +450,7 @@ static void sendStatus() {
   memcpy(pkt + 7,  &bufCount,   4);
   memcpy(pkt + 11, &maxSamples, 4);
   pTxChar->setValue(pkt, STATUS_PACKET_SIZE);
-  pTxChar->notify();
+  pTxChar->notify(false);   // false = indication (acknowledged); see TX char setup
   DBG("[STATUS] mag=0x%02X ok=%d agc=%u angle=%u flags=0x%02X buf=%lu/%lu",
       magStatus, magOk, agc, angle, flags,
       (unsigned long)bufCount, (unsigned long)maxSamples);
@@ -374,7 +459,7 @@ static void sendStatus() {
 static void sendEndOfDumpMarker() {
   uint8_t marker = END_OF_DUMP_MARKER;
   pTxChar->setValue(&marker, 1);
-  pTxChar->notify();
+  pTxChar->notify(false);   // false = indication (acknowledged); see TX char setup
 }
 
 static void dumpBuffer() {
@@ -397,12 +482,15 @@ static void dumpBuffer() {
     if (n > DUMP_SAMPLES_PER_PACKET) n = DUMP_SAMPLES_PER_PACKET;
     // Packed struct → buffer slice is already wire-format bytes
     pTxChar->setValue((uint8_t *)&sampleBuf[sent], n * sizeof(Sample));
-    pTxChar->notify();
+    pTxChar->notify(false);   // indication blocks for the ATT confirm → flow control, no drops
     sent += n;
-    vTaskDelay(pdMS_TO_TICKS(DUMP_PACKET_DELAY_MS));
+    // No vTaskDelay: the indication confirm paces the loop (was DUMP_PACKET_DELAY_MS for notify).
   }
   sendEndOfDumpMarker();
   DBG("[DUMP] Complete: %lu samples", (unsigned long)sent);
+#if TRACE_BUFFER
+  Serial.printf("# DUMP_SENT=%lu\n", (unsigned long)sent);   // firmware-sent count for app reconciliation
+#endif
   bufCount       = 0;
   dataReady      = false;
   sessionStartUs = 0;
@@ -594,8 +682,11 @@ void setup() {
 
   BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  // TX: encoder data → app (notify)
-  pTxChar = pService->createCharacteristic(TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+  // TX: encoder data → app. INDICATE (acknowledged) instead of NOTIFY so the dump can't
+  // outrun the link and silently drop packets — each indication waits for the ATT confirm,
+  // which provides flow control. CoreBluetooth/ble-plx subscribes to indications when the
+  // characteristic is indicate-only. All TX sends go out as indications (notify(false)).
+  pTxChar = pService->createCharacteristic(TX_UUID, BLECharacteristic::PROPERTY_INDICATE);
   pTxChar->addDescriptor(new BLE2902());
 
   // RX: commands from app (write)
@@ -674,7 +765,11 @@ void loop() {
         DBG("[REC] Buffer full — recording stopped at %lu samples (truncated)",
             (unsigned long)bufCount);
       } else {
-        Sample s = { now, readAngle(), readMagnetOk() };
+        uint16_t angle = readAngle();
+        // A failed angle read holds the last value but is flagged magnet_ok=0 so
+        // vel_acc_extraction.py drops it instead of treating garbage as signal.
+        uint8_t  mag   = angleReadOk ? readMagnetOk() : 0;
+        Sample s = { now, angle, mag };
         if (bufCount == 0) sessionStartUs = s.ts;
         sampleBuf[bufCount++] = s;
 

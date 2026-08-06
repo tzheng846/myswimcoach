@@ -49,6 +49,13 @@
 !/ESP_32_V5
 !/supabase
 
+# .paul/ — phase plans, STATE, ROADMAP. Untracked planning docs were being edited
+# concurrently from two environments with no conflict protection. Needs BOTH lines:
+# the directory un-ignore, plus the *.md un-ignore (line 16 would otherwise swallow
+# every file inside it).
+!/.paul
+!/.paul/**/*.md
+
 # Cache dirs at any depth (the /__pycache__/ rule above only matches the repo root)
 __pycache__/
 .pytest_cache/

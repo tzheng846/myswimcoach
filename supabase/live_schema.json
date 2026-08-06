@@ -1,0 +1,84 @@
+{
+  "athletes": {
+    "created_at": "timestamp with time zone",
+    "dob": "date",
+    "head_waist_m": "double precision",
+    "id": "uuid",
+    "name": "text",
+    "parent_email": "text",
+    "parent_name": "text",
+    "stroke_type": "text",
+    "team_id": "uuid"
+  },
+  "coaches": {
+    "athlete_limit": "integer",
+    "created_at": "timestamp with time zone",
+    "device_limit": "integer",
+    "email": "text",
+    "id": "uuid",
+    "monthly_session_limit": "integer",
+    "role": "text",
+    "stripe_customer_id": "text",
+    "subscription_status": "text",
+    "subscription_tier": "text",
+    "team_id": "uuid",
+    "user_id": "uuid"
+  },
+  "devices": {
+    "chip_id": "text",
+    "coach_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "firmware_version": "text",
+    "last_seen_at": "timestamp with time zone",
+    "name": "text"
+  },
+  "reports": {
+    "athlete_id": "uuid",
+    "coach_id": "uuid",
+    "config_json": "jsonb",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "sent_at": "timestamp with time zone",
+    "token": "text"
+  },
+  "session_annotations": {
+    "created_at": "timestamp with time zone",
+    "phases": "jsonb",
+    "session_id": "uuid",
+    "source": "text",
+    "stroke_marks_s": "jsonb",
+    "updated_at": "timestamp with time zone",
+    "updated_by": "uuid"
+  },
+  "sessions": {
+    "athlete_id": "uuid",
+    "coach_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "device_id": "text",
+    "distance_profile": "jsonb",
+    "id": "uuid",
+    "is_starred": "boolean",
+    "metrics_json": "jsonb",
+    "metrics_json_auto": "jsonb",
+    "name": "text",
+    "notes": "text",
+    "raw_csv_path": "text",
+    "recorded_at": "timestamp with time zone",
+    "sample_rate_hz": "double precision",
+    "stroke_type": "text",
+    "upload_status": "text",
+    "velocity_profile": "jsonb",
+    "video_origin_s": "double precision",
+    "video_path": "text"
+  },
+  "teams": {
+    "coach_limit": "integer",
+    "created_at": "timestamp with time zone",
+    "device_limit": "integer",
+    "id": "uuid",
+    "name": "text",
+    "stripe_customer_id": "text",
+    "subscription_tier": "text",
+    "swimmer_limit": "integer"
+  }
+}
