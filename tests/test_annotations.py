@@ -544,3 +544,201 @@ class TestSampleRateEndpoints:
         # Same doc at 100 Hz produced (500, 620), (620, 940) — see TestRecomputeOnSave
         assert [(c["start_idx"], c["end_idx"]) for c in new_mj["cycles"]] == [
             (448, 555), (555, 841)]
+
+
+# ── Phase 57: arm-entry marks + authoritative swim window ─────────────────────
+#
+# One mark is one ARM ENTRY, not one cycle. Free/back alternate arms (2 entries per
+# cycle); fly/breast move both together (1). Everything not in MARKS_PER_CYCLE must
+# behave exactly as it did before Phase 57 — that is the safe default this pins.
+
+# 5 arm entries at 100 Hz → idx 200/260/320/380/440. finish == the last mark, so the
+# k == 1 finish-append does not fire and the two conventions differ ONLY by pairing.
+DOC_5_MARKS = {
+    "phases": {"stroke_start_s": 2.0, "finish_s": 4.4},
+    "stroke_marks_s": [2.0, 2.6, 3.2, 3.8, 4.4],
+}
+
+# finish beyond the last mark — isolates the k == 1 finish-append asymmetry.
+DOC_FINISH_BEYOND = {
+    "phases": {"stroke_start_s": 2.0, "finish_s": 5.0},
+    "stroke_marks_s": [2.0, 2.6, 3.2, 3.8],
+}
+
+LEGACY_STROKES = ["butterfly", "breaststroke", "im", "udk", None, "", "nonsense"]
+
+
+class TestMarksPerCycle:
+    @pytest.mark.parametrize("stroke,expected", [
+        ("freestyle", 2), ("backstroke", 2),
+        ("butterfly", 1), ("breaststroke", 1), ("im", 1), ("udk", 1),
+        (None, 1), ("", 1), ("Freestyle", 1),  # case-sensitive: stored values are lowercase
+    ])
+    def test_factor(self, stroke, expected):
+        assert annot.marks_per_cycle(stroke) == expected
+
+
+class TestArmEntryPairing:
+    def test_freestyle_pairs_marks_into_cycles(self):
+        out = annot.annotation_to_overrides(DOC_5_MARKS, 3000, 100, "freestyle")
+        # boundaries at marks 0/2/4 → idx 200/320/440
+        assert out["cycle_bounds"] == [(200, 320), (320, 440)]
+
+    def test_backstroke_pairs_too(self):
+        assert (annot.annotation_to_overrides(DOC_5_MARKS, 3000, 100, "backstroke")
+                == annot.annotation_to_overrides(DOC_5_MARKS, 3000, 100, "freestyle"))
+
+    def test_butterfly_is_one_mark_one_cycle(self):
+        out = annot.annotation_to_overrides(DOC_5_MARKS, 3000, 100, "butterfly")
+        assert out["cycle_bounds"] == [(200, 260), (260, 320), (320, 380), (380, 440)]
+
+    def test_trailing_odd_arm_entry_makes_no_cycle(self):
+        """5 entries = 2 complete cycles; the 5th dangles. It must not become a cycle,
+        but it stays in the caller's stored stroke_marks_s (this function never edits it)."""
+        out = annot.annotation_to_overrides(DOC_5_MARKS, 3000, 100, "freestyle")
+        assert len(out["cycle_bounds"]) == 2
+        assert DOC_5_MARKS["stroke_marks_s"][-1] == 4.4  # untouched
+
+    def test_finish_closes_the_last_cycle_only_when_one_mark_is_one_cycle(self):
+        """At k == 1 the wall legitimately ends the last cycle. At k == 2 a boundary is a
+        SAME-SIDE arm entry and finish_s is a wall touch — appending it would manufacture
+        a half-populated cycle that skews stroke_rate_spm."""
+        k1 = annot.annotation_to_overrides(DOC_FINISH_BEYOND, 3000, 100, "butterfly")
+        k2 = annot.annotation_to_overrides(DOC_FINISH_BEYOND, 3000, 100, "freestyle")
+        assert k1["cycle_bounds"] == [(200, 260), (260, 320), (320, 380), (380, 500)]
+        assert k2["cycle_bounds"] == [(200, 320)]  # NOT (320, 500)
+
+    def test_too_few_marks_to_pair(self):
+        doc = {"phases": {"stroke_start_s": 2.0, "finish_s": 2.6},
+               "stroke_marks_s": [2.0, 2.6]}
+        # 2 arm entries = 1 cycle for free, but only one boundary survives pairing
+        assert "cycle_bounds" not in annot.annotation_to_overrides(
+            doc, 3000, 100, "freestyle")
+
+    @pytest.mark.parametrize("stroke", LEGACY_STROKES)
+    @pytest.mark.parametrize("doc", [DOC_5_MARKS, DOC_FINISH_BEYOND,
+                                     ANNOTATION_ROW, RECOMPUTE_DOC])
+    def test_non_alternating_strokes_are_byte_identical_to_pre_phase_57(self, stroke, doc):
+        """The safe default: anything outside MARKS_PER_CYCLE must produce exactly what
+        the three-argument call produced before this parameter existed."""
+        assert (annot.annotation_to_overrides(doc, 3000, 100, stroke)
+                == annot.annotation_to_overrides(doc, 3000, 100))
+
+
+class TestSwimWindowEnforcement:
+    def test_mark_before_stroke_start_rejected(self):
+        doc = {"phases": {"stroke_start_s": 4.0, "finish_s": 9.0},
+               "stroke_marks_s": [3.5, 5.0]}
+        errs = annot.validate_annotation(doc, 30.0)
+        assert any("before stroke_start_s" in e for e in errs)
+        assert any("stroke_marks_s[0]" in e for e in errs)
+
+    def test_mark_after_finish_rejected(self):
+        """The dead-tail case: before Phase 57 this silently became a cycle."""
+        doc = {"phases": {"stroke_start_s": 4.0, "finish_s": 9.0},
+               "stroke_marks_s": [5.0, 21.5]}
+        errs = annot.validate_annotation(doc, 30.0)
+        assert any("after finish_s" in e for e in errs)
+        assert any("stroke_marks_s[1]" in e for e in errs)
+
+    def test_marks_exactly_on_the_bounds_are_accepted(self):
+        doc = {"phases": {"stroke_start_s": 4.0, "finish_s": 9.0},
+               "stroke_marks_s": [4.0, 6.0, 9.0]}
+        assert annot.validate_annotation(doc, 30.0) == []
+
+    def test_bounds_enforced_independently(self):
+        only_finish = {"phases": {"finish_s": 9.0}, "stroke_marks_s": [1.0, 9.5]}
+        errs = annot.validate_annotation(only_finish, 30.0)
+        assert any("after finish_s" in e for e in errs)
+        assert not any("before stroke_start_s" in e for e in errs)
+
+        only_start = {"phases": {"stroke_start_s": 4.0}, "stroke_marks_s": [1.0, 9.5]}
+        errs = annot.validate_annotation(only_start, 30.0)
+        assert any("before stroke_start_s" in e for e in errs)
+        assert not any("after finish_s" in e for e in errs)
+
+    def test_unbounded_doc_is_unenforced(self):
+        """No window annotated → nothing to enforce (a partial draft must stay saveable)."""
+        assert annot.validate_annotation({"stroke_marks_s": [1.0, 20.0]}, 30.0) == []
+
+    def test_malformed_bound_degrades_to_unenforced(self):
+        doc = {"phases": {"stroke_start_s": "abc"}, "stroke_marks_s": [1.0]}
+        errs = annot.validate_annotation(doc, 30.0)
+        assert any("must be a number" in e for e in errs)
+        assert not any("before stroke_start_s" in e for e in errs)
+
+
+class TestStrokeTypeReachesTheEndpoints:
+    """stroke_type must be SELECTED, not just referenced — the Phase-52 lesson: an
+    un-widened .select() makes the fallback hide the fix instead of applying it."""
+
+    def test_get_select_includes_stroke_type(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        api_client.get("/sessions/sess-1/annotations", headers=AUTH)
+        assert "stroke_type" in admin._tables["sessions"].select.call_args[0][0]
+
+    def test_put_select_includes_stroke_type(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC, headers=AUTH)
+        assert "stroke_type" in admin._tables["sessions"].select.call_args[0][0]
+
+    @pytest.mark.parametrize("stroke,expected", [
+        ("freestyle", 2), ("backstroke", 2), ("breaststroke", 1), ("butterfly", 1),
+        ("im", 1), (None, 1),
+    ])
+    def test_get_publishes_marks_per_cycle(self, api_client, monkeypatch,
+                                           stroke, expected):
+        import api
+        row = {**SESSION_ROW, "stroke_type": stroke}
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _annot_admin(session_row=row))
+        body = api_client.get("/sessions/sess-1/annotations", headers=AUTH).json()
+        assert body["marks_per_cycle"] == expected
+
+    def test_put_pairs_freestyle_marks_and_reports_the_count(self, api_client,
+                                                             monkeypatch):
+        import api
+        row = {**SESSION_ROW, "stroke_type": "freestyle"}
+        admin = _annot_admin(session_row=row)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=DOC_5_MARKS,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["marks_per_cycle"] == 2
+        assert body["cycles_derived"] == 2          # 5 arm entries → 2 complete cycles
+        assert body["recomputed"] is True
+        new_mj = admin._tables["sessions"].update.call_args[0][0]["metrics_json"]
+        assert [(c["start_idx"], c["end_idx"]) for c in new_mj["cycles"]] == [
+            (200, 320), (320, 440)]
+
+    def test_same_doc_on_breaststroke_is_one_mark_one_cycle(self, api_client,
+                                                            monkeypatch):
+        """Identical marks, different stroke → different cycle count. This is the
+        failure a wrong (unpatchable) stroke_type would cause, made visible."""
+        import api
+        admin = _annot_admin()  # SESSION_ROW is breaststroke
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        body = api_client.put("/sessions/sess-1/annotations", json=DOC_5_MARKS,
+                              headers=AUTH).json()
+        assert body["marks_per_cycle"] == 1
+        assert body["cycles_derived"] == 4
+
+    def test_mark_past_finish_is_422_and_writes_nothing(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        doc = {"phases": {"stroke_start_s": 4.0, "finish_s": 9.0},
+               "stroke_marks_s": [5.0, 21.5]}
+        resp = api_client.put("/sessions/sess-1/annotations", json=doc, headers=AUTH)
+        assert resp.status_code == 422, resp.text
+        errs = resp.json()["detail"]["errors"]
+        assert any("after finish_s" in e for e in errs)
+        # The annotations table is never even reached — validation rejects first.
+        # (_annot_admin creates table handles lazily, so absence IS the assertion.)
+        assert "session_annotations" not in admin._tables
+        admin._tables["sessions"].update.assert_not_called()

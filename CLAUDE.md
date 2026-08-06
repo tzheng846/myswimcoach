@@ -137,6 +137,33 @@ All functions are pure (no I/O, no plots).
 
 **Known limitation:** kick-related metrics are unreliable — `kick_metrics_reliable = False` is always set. Difficulty resolving arm-pull and kick as two distinct velocity peaks when biomechanically close in time.
 
+## v95 is swim-windowed, not full-trace (Phase 57)
+
+`v95` — the 95th percentile of `|vel|` that every velocity threshold in `metrics.py` is scaled by —
+is computed over the **swim window**, via `_window_v95(vel, start, end)`:
+
+- `compute_session_metrics` → `vel[baseline_end : swim_end]`. The statement sits *below* the
+  phase-detection and manual-override blocks because those produce its bounds — do not hoist it back
+  up next to `fs`.
+- `extract_cycle_peaks` → the span the cycles cover, `vel[cycles[0].start_idx : cycles[-1].end_idx]`.
+- An empty window falls back to the full trace rather than raising.
+
+Before Phase 57 both took the percentile over the **entire** trace. A recording keeps running after
+the swimmer touches, so a long near-zero tail dragged the percentile down. Measured on real CSVs
+(`raw/leo1`, `raw/carlos_fr_1`): v95 rises **+1.5–2%** on traces with no tail and **+6–12%** with the
+~45% tail typical of the 2026-08-05 sessions.
+
+**What actually changed, and what didn't** (measured, not assumed):
+- `dead_spot_s` shifts — `_DEAD_SPOT_THRESH × v95`. Observed +0.6% (no tail) to +3.7% (45% tail).
+- Arm/kick peak **detection** shifts — `_PEAK_MIN_PROM_FRAC × v95` is a prominence floor, so this
+  can in principle add or drop a peak. Cycle counts were unchanged on every file tested.
+- `coast_fraction` does **not** change. It is scaled by each cycle's own `arm_peak_vel`, not v95.
+- `stroke_rate_spm` and segmentation do not change.
+
+Consequence to keep in view: `dead_spot_s` computed before this change is not comparable with one
+computed after. Two other `v95` sites are deliberately untouched — `segment_cycles_trough` (the
+never-called backup) and `detect_initial_phase` (already windowed on `vel_search`).
+
 **Segmentation: wavelet ridge, placeholder quality (Phase 16-05).** `segment_cycles_wavelet` is the live segmenter for all four strokes — `segmentation_reliable = False` is set for every wavelet-segmented session (it flips True only when metrics are recomputed from human annotation boundaries via `manual=`, Phase 47), because the 16-04 breaststroke cross-check was weak (3/8 sessions within ±5 SPM of the trusted trough rate; some ridges rail the 120-SPM ceiling). It is shipped deliberately as a placeholder per user decision ("not enough data; ship as placeholder; wavelet only, no fallback") — the trough segmenter is the breaststroke-validated method but is retained only as never-called backup. The open tuning work (rate accuracy, boundary placement, ceiling-railing) is a future plan; see `.paul/phases/16-freestyle-support/16-04-SUMMARY.md`. HMM-based sub-phase labeling (arm-pull vs. kick, left-arm vs. right-arm) is a separate, later effort — the pose pipeline (`merge_streams.py`) would supply its training labels.
 
 ## api.py — FastAPI endpoints

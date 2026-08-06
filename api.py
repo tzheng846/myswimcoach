@@ -790,7 +790,8 @@ async def get_annotations(
 
     _, row = _owned_session(
         sb_admin, request.state.user_id, session_id,
-        "metrics_json, velocity_profile, video_path, video_origin_s, sample_rate_hz",
+        "metrics_json, velocity_profile, video_path, video_origin_s, sample_rate_hz, "
+        "stroke_type",
     )
 
     ann_resp = (
@@ -814,6 +815,9 @@ async def get_annotations(
         ),
         "duration_s": len(vel) / fs,
         "sample_rate_hz": fs,
+        # Arm entries per cycle for this stroke (Phase 57). Published so the web reads
+        # the pairing rule from the contract instead of keeping its own copy in JS.
+        "marks_per_cycle": annot.marks_per_cycle(row.get("stroke_type")),
     }
 
 
@@ -839,7 +843,8 @@ async def put_annotations(
 
     coach_row_id, row = _owned_session(
         sb_admin, request.state.user_id, session_id,
-        "velocity_profile, distance_profile, metrics_json, metrics_json_auto, sample_rate_hz",
+        "velocity_profile, distance_profile, metrics_json, metrics_json_auto, "
+        "sample_rate_hz, stroke_type",
     )
 
     vel_list = row.get("velocity_profile") or []
@@ -868,7 +873,11 @@ async def put_annotations(
     # ── recompute from the human boundaries (on the stored profiles, at their own rate) ──
     recomputed = False
     recompute_error = None
-    manual = annot.annotation_to_overrides(record, len(vel_list), fs)
+    # stroke_type decides how many marks make a cycle (Phase 57) — free/back pair, the
+    # rest are 1:1. A missing or unknown value degrades to 1, the pre-Phase-57 behavior.
+    manual = annot.annotation_to_overrides(
+        record, len(vel_list), fs, row.get("stroke_type")
+    )
     if manual.get("cycle_bounds"):
         try:
             vel_arr  = np.asarray(vel_list, dtype=float)
@@ -909,6 +918,12 @@ async def put_annotations(
         "stroke_marks_s": record["stroke_marks_s"],
         "source":         record["source"],
         "recomputed":     recomputed,
+        # What the server actually built from the marks. Lets the client confirm
+        # "18 marks → 9 cycles" and makes a wrong stroke_type visible immediately —
+        # it is NOT patchable, so a wrong value cannot be corrected through the API
+        # and would otherwise silently halve the stroke rate.
+        "cycles_derived": len(manual.get("cycle_bounds") or []),
+        "marks_per_cycle": annot.marks_per_cycle(row.get("stroke_type")),
     }
     if recompute_error:
         resp["recompute_error"] = recompute_error

@@ -22,6 +22,12 @@ may be annotated; present times must be non-decreasing in canonical order.
 Times are seconds on the session's own clock (sample index / sample rate). The rate is
 per session — `sessions.sample_rate_hz`, written by /process from the pipeline's real
 decimated rate (Phase 52). Callers pass it as `fs_hz`; it is NOT 100 in practice.
+
+Stroke-mark model (user decision, 2026-08-05, Phase 57): one mark is one ARM ENTRY, not
+one cycle. Freestyle and backstroke alternate arms, so a cycle spans TWO entries;
+butterfly and breaststroke move both arms together, so one entry IS one cycle. See
+MARKS_PER_CYCLE. The swim window [stroke_start_s, finish_s] is authoritative — marks
+outside it are rejected rather than silently turned into cycles.
 """
 
 # Fallback rate only, for sessions recorded before Phase 52 that have no
@@ -38,6 +44,18 @@ PHASE_KEYS = [
 ]
 
 SOURCES = ("manual", "seeded")
+
+# Arm entries per stroke cycle, keyed by sessions.stroke_type (Phase 57).
+# Only the alternating-arm strokes are listed; EVERY other value — butterfly,
+# breaststroke, the mobile picker's "im" and "udk", an unknown string, or None —
+# falls through to 1, which reproduces the pre-Phase-57 "one mark = one cycle"
+# behavior exactly. Keep it that way: the default path must stay byte-identical.
+MARKS_PER_CYCLE = {"freestyle": 2, "backstroke": 2}
+
+
+def marks_per_cycle(stroke_type):
+    """Arm entries per cycle for a stroke_type. Unknown/None → 1 (legacy behavior)."""
+    return MARKS_PER_CYCLE.get(stroke_type, 1)
 
 
 def _num(v):
@@ -127,16 +145,22 @@ def build_seed(metrics_json, fs_hz=FS_HZ):
     return {"phases": phases, "stroke_marks_s": marks, "source": "seeded"}
 
 
-def annotation_to_overrides(annotation, n_samples, fs_hz=FS_HZ):
+def annotation_to_overrides(annotation, n_samples, fs_hz=FS_HZ, stroke_type=None):
     """Map an annotation doc to compute_session_metrics(manual=...) overrides (Phase 47).
 
     fs_hz must be the SAME rate build_seed used and the same one the UI displayed against,
     or marks land on a different sample than the coach clicked (Phase 52).
 
+    stroke_type (Phase 57) selects how many arm entries make a cycle — see
+    MARKS_PER_CYCLE. Omitted/unknown → 1, i.e. the pre-Phase-57 behavior.
+
     Index convention: idx = round(time_s × fs_hz), clamped to [0, n_samples−1];
-    swim_end_idx is an exclusive slice end (finish idx + 1). Cycle boundaries =
-    stroke_marks_s plus finish_s when it lies beyond the last mark; consecutive
-    boundary pairs become cycle_bounds — fewer than 2 boundaries → no cycle_bounds.
+    swim_end_idx is an exclusive slice end (finish idx + 1). Cycle boundaries = every
+    k-th stroke mark (k = arm entries per cycle), plus finish_s when k == 1 and it lies
+    beyond the last boundary; consecutive boundary pairs become cycle_bounds — fewer
+    than 2 boundaries → no cycle_bounds. Marks that do not land on a boundary (the
+    trailing odd arm entry of an incomplete final cycle) contribute no cycle but remain
+    in the stored stroke_marks_s as ground truth.
     Pure, never raises; malformed input yields {} or a partial dict.
     """
     if not isinstance(annotation, dict) or not isinstance(n_samples, int) or n_samples < 2:
@@ -164,8 +188,15 @@ def annotation_to_overrides(annotation, n_samples, fs_hz=FS_HZ):
         m for m in (_num(v) for v in (raw_marks if isinstance(raw_marks, list) else []))
         if m is not None
     )
-    boundaries = list(marks)
-    if finish is not None and (not boundaries or finish > boundaries[-1]):
+    # One mark is one ARM ENTRY (Phase 57): a cycle boundary is every k-th mark.
+    k = marks_per_cycle(stroke_type)
+    boundaries = marks[0::k]
+    # finish_s closes the final cycle ONLY at k == 1, where a mark IS a cycle start and
+    # the wall legitimately ends the last one (pre-Phase-57 behavior, preserved exactly).
+    # At k > 1 a boundary is a SAME-SIDE arm entry; finish_s is a wall touch, not an arm
+    # entry, so appending it would manufacture a cycle containing one arm entry instead
+    # of two — silently skewing stroke_rate_spm and mean_dps_m. Do not "simplify" this.
+    if k == 1 and finish is not None and (not boundaries or finish > boundaries[-1]):
         boundaries.append(finish)
 
     idxs = []
@@ -186,10 +217,14 @@ def annotation_to_overrides(annotation, n_samples, fs_hz=FS_HZ):
 def validate_annotation(doc, duration_s=None):
     """Validate an annotation doc. Returns a list of error strings (empty = valid).
 
-    Light-touch by design: any subset of phases is fine, stroke marks are not
-    required to sit inside the stroke phase span. Rejects only structural problems —
-    unknown phase keys, non-numeric/negative/out-of-range times, phases out of
-    canonical order, unsorted stroke marks, bad source.
+    Light-touch about COMPLETENESS — any subset of phases is fine — but strict about
+    the swim window: a stroke mark outside [stroke_start_s, finish_s] is REJECTED
+    (Phase 57). Before Phase 57 such marks were accepted and silently became cycles
+    spanning the breakout or the post-swim dead tail, contaminating stroke_rate_spm
+    and mean_dps_m. Each bound is enforced only when present.
+
+    Otherwise rejects structural problems — unknown phase keys, non-numeric/negative/
+    out-of-range times, phases out of canonical order, unsorted stroke marks, bad source.
     """
     errors = []
     if not isinstance(doc, dict):
@@ -232,6 +267,12 @@ def validate_annotation(doc, duration_s=None):
     if not isinstance(marks, list):
         errors.append("stroke_marks_s must be an array")
         marks = []
+    # Swim window (Phase 57) — authoritative when annotated. Bounds are read straight
+    # from the doc rather than the loop above so a malformed phase value degrades to
+    # "unenforced" instead of raising; the bad value already produced its own error.
+    win_start = _num(phases.get("stroke_start_s"))
+    win_end = _num(phases.get("finish_s"))
+
     prev_mark = None
     for i, v in enumerate(marks):
         f = check_time(f"stroke_marks_s[{i}]", v)
@@ -239,6 +280,15 @@ def validate_annotation(doc, duration_s=None):
             continue
         if prev_mark is not None and f < prev_mark:
             errors.append(f"stroke_marks_s[{i}] is out of order")
+        if win_start is not None and f < win_start:
+            errors.append(
+                f"stroke_marks_s[{i}] ({f:.2f} s) is before stroke_start_s "
+                f"({win_start:.2f} s)"
+            )
+        if win_end is not None and f > win_end:
+            errors.append(
+                f"stroke_marks_s[{i}] ({f:.2f} s) is after finish_s ({win_end:.2f} s)"
+            )
         prev_mark = f
 
     source = doc.get("source", "manual")

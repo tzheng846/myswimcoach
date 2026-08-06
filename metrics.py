@@ -29,6 +29,23 @@ _DEAD_SPOT_THRESH    = 0.10   # |vel| below this × v95 → dead spot
 _COAST_FRAC_THRESH   = 0.50   # |vel| below this × arm_peak_vel → coasting (per cycle)
 
 
+def _window_v95(vel, start, end):
+    """95th percentile of |vel| over the half-open window [start, end) — Phase 57.
+
+    v95 is the scale every velocity threshold in this module is expressed in. It used
+    to be taken over the FULL trace, but a recording keeps running after the swimmer
+    touches, so a long near-zero tail dragged the percentile down and with it every
+    threshold scaled by it. Windowing removes that bias.
+
+    An empty window falls back to the full trace: a pure metric function must degrade
+    rather than raise on a degenerate annotation.
+    """
+    seg = vel[start:end]
+    if len(seg) == 0:
+        return float(np.percentile(np.abs(vel), 95))
+    return float(np.percentile(np.abs(seg), 95))
+
+
 # ── SEGMENTATION ─────────────────────────────────────────────────────────────
 
 def detect_phases(t, vel):
@@ -370,7 +387,11 @@ def extract_cycle_peaks(vel, cycles):
     Also updates peak_idx to match arm_peak_idx.
     Returns the same list for convenience.
     """
-    v95      = float(np.percentile(np.abs(vel), 95))
+    # v95 over the span the cycles actually cover, not the full trace (Phase 57) — a
+    # post-swim dead tail would otherwise lower this and with it the peak-prominence
+    # floor, which is a DETECTION threshold, not just a reported number.
+    v95      = (_window_v95(vel, cycles[0]["start_idx"], cycles[-1]["end_idx"])
+                if cycles else float(np.percentile(np.abs(vel), 95)))
     min_prom = _PEAK_MIN_PROM_FRAC * v95
 
     for cyc in cycles:
@@ -428,7 +449,6 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None):
     """
     manual = manual or {}
     fs  = _compute_fs(t)
-    v95 = float(np.percentile(np.abs(vel), 95))
 
     # ── phase detection ────────────────────────────────────────────────────
     phases   = detect_phases(t, vel)
@@ -444,6 +464,11 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None):
     ip_end = initial_phase["initial_phase_end_idx"]
     if manual.get("ip_end_idx") is not None:
         ip_end = min(max(int(manual["ip_end_idx"]), b_end), swim_end - 1)
+
+    # v95 over the SWIM WINDOW (Phase 57) — must come after b_end/swim_end are final,
+    # which is why it is here and not at the top with fs. Its only consumer in this
+    # function is the dead-spot threshold in the per-cycle loop below.
+    v95 = _window_v95(vel, b_end, swim_end)
 
     # ── segmentation (from initial-phase end to swim_end) ──────────────────
     t_seg    = t[ip_end:swim_end]
@@ -513,7 +538,8 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None):
         cyc["mean_vel_ms"]    = float(np.mean(seg_v))
         cyc["trough_vel_ms"]  = float(np.min(seg_v))  # minimum velocity at recovery
 
-        # Dead spot: |vel| < 10% of v95 (global threshold, matches swim_metrics.ipynb)
+        # Dead spot: |vel| < 10% of v95. v95 is session-wide but SWIM-WINDOWED since
+        # Phase 57 — it was a full-trace percentile here and in swim_metrics.ipynb.
         dead_mask = np.abs(seg_v) < _DEAD_SPOT_THRESH * v95
         cyc["dead_spot_s"]    = float(dead_mask.sum() / fs)
 
