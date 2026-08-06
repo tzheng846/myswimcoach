@@ -210,9 +210,20 @@ starts blank, because seeding from the segmenter that 16-06 exists to evaluate i
   `extract_cycle_peaks`, which drives peak DETECTION thresholds); `api.py` threads `stroke_type` onto
   both annotation selects and publishes `marks_per_cycle` + `cycles_derived` so the pairing rule is
   never duplicated in JS and a wrong (unpatchable) `stroke_type` is visible immediately.
-- [ ] 57-02 (next): Annotate page v2 — blank start (D6), window-fit chart + full-trace toggle, explicit
-  phase-interval display, `dive_start_s` captioned as a lower bound, undo/drag/keyboard-nudge, live
-  marks→cycles readout.
+- [ ] 57-02: Annotate page v2 — PLAN created 2026-08-05, awaiting approval (web only, 3 files;
+  3 tasks + 1 human-verify checkpoint; autonomous:false, depends_on 57-01). Blank start (D6 — the
+  seed is still returned by the API but never applied); view fitted by SLICING the data rather than
+  setting an XAxis domain, because the existing `<Brush>` also controls the domain and the two fight
+  — slicing additionally re-spreads the 2000-point decimation over the shorter span, which is the
+  precision win; fit range is **[0, finish+margin]**, lower bound never `stroke_start`, because the
+  leading region is the reaction-time measurement; `ReferenceArea` bands make "phases tile and never
+  overlap" visible instead of asserted; phase rows become intervals with a persistent tag saying
+  whether each moves a number (UW kick + Breakout do not); Dive captioned as a lower bound; live
+  "N marks → M cycles" derived exactly as `annotation_to_overrides` does, k==1-only finish-append
+  included; undo stack held in a ref (state would re-render the chart on every one of ~500 clicks);
+  drag + arrow-key nudge; client-side out-of-window guard mirroring the server rule; DELETE wiring
+  so the old-convention 20:24 annotation can be discarded and redone. "Reset to auto" is REMOVED —
+  under D6 it contradicts the point of the phase.
 - [ ] 57-03 (next): Annotation queue page + prev/next navigation (D8).
 
 ### Phase 52: Sample-Rate Contract

@@ -392,6 +392,88 @@
     naming against an unwritten contract plus a stored-`metrics_json` migration.
   NOT committed (user runs git). REMAINING: push api.py + ratings.py → Railway, then the checkpoint.
 
+## Loop Position (57-02)
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ◐        ○     [57-02 APPLIED 2026-08-05 — all 3 auto tasks done; **PAUSED AT THE
+                          human-verify CHECKPOINT** (needs a logged-in browser; the annotate page
+                          sits behind coach auth).
+                          VERIFIED SO FAR: `npm run build` exit 0 (18 routes, /app/annotate/[id]
+                          compiles); dev server serves the route 200 then correctly redirects to
+                          /login; zero console errors, zero compile errors; `pytest tests/ -q` still
+                          236 (proves no backend file was touched); `git status` shows EXACTLY the 3
+                          planned web files.
+                          ⭐ RISKIEST PIECE VERIFIED WITHOUT AUTH: the editor's `deriveCycles`
+                          mirrors annotation_to_overrides, and a drift there would make the readout
+                          LIE about what the server builds. Extracted the SHIPPED function (not a
+                          reimplementation) into an .mjs, ran 10 cases through node, ran the same 10
+                          through Python → **[2,4,1,4,0,0,0,3,1,3] both sides, exact match**,
+                          including k=2-with-finish-beyond-last-mark (1 cycle, NOT appended), the
+                          k=1 twin (4 cycles, appended), empty marks, and a sub-2-sample pair both
+                          sides filter.
+                          DEVIATION (1, found while wiring T3): the plan said selection is "set by
+                          clicking an existing mark", but recharts fires onClick AFTER mouseup, so a
+                          select-click would ALSO place a new mark on top of the one being targeted.
+                          Fix: the chart sets suppressClickRef on any mousedown that HITS a mark, so
+                          a press on an existing mark selects/drags and never places. Renamed from
+                          didDragRef — it now covers the zero-movement case too.
+                          ALSO: 57-01 was committed as `71d7012` and **PUSHED TO PRODUCTION
+                          2026-08-05** (dedac17..71d7012 → Railway auto-deploy) at user direction.
+                          WHY IT HAD TO GO FIRST: web/.env.local points the dev server at the
+                          PRODUCTION Railway API, so a pre-57-01 backend returns no
+                          `marks_per_cycle`; the page falls back to `?? 1` and a freestyle session
+                          would read "18 marks → 17 cycles" instead of 9 — and PUT would build 17
+                          server-side too. Testing against the old API would have verified the exact
+                          bug this phase exists to prevent.
+                          I recommended running the API locally and pushing only after the
+                          checkpoint passed (prod then carries a contract nobody has exercised);
+                          user chose to push first. Their call, recorded.
+                          Backward-compatible, so the still-deployed OLD Vercel page is unaffected:
+                          new optional 4th arg, new response keys, k=1 path byte-identical. The only
+                          behavior change for existing clients is the intended 422 on out-of-window
+                          marks.
+                          NOTE: no unauthenticated way exists to confirm the new code is live —
+                          checkpoint step 5 doubles as the deploy check (a freestyle readout of N/2
+                          proves `marks_per_cycle` arrived; N-1 means the deploy has not landed).
+                          Original plan record follows.
+                          57-02 created 2026-08-05 — annotate page v2. WEB ONLY (3 files):
+                          page.js + AnnotationChart.js + AnnotationEditor.js. 3 tasks + 1
+                          human-verify checkpoint (it is a UI — pytest cannot judge it).
+                          autonomous:false, depends_on ["57-01"] (consumes marks_per_cycle,
+                          cycles_derived, and the 422 error shape).
+                          T1 chart — fit the view by SLICING THE DATA, not via XAxis domain: the
+                            existing <Brush> also controls the domain and the two fight. Slicing
+                            also re-spreads MAX_POINTS decimation over the shorter span, which is
+                            where the precision win comes from. ReferenceArea bands between
+                            consecutive markers make "phases tile, never overlap" VISIBLE rather
+                            than asserted. Drag = nearest-mark grab within 1% of the visible span,
+                            with cursor:grab so the affordance is discoverable.
+                          T2 editor — phases rendered as INTERVALS (start → next marker + duration),
+                            unplaced visibly ≠ placed; a persistent tag on each row saying whether
+                            it moves a number (UW kick + Breakout do NOT — api.py:896 carries
+                            initial_phase over from the auto result); Dive captioned as a LOWER
+                            BOUND (170-400 ms of BLE + warmup latency, D4, no metric); live
+                            "N marks → M cycles" derived EXACTLY as annotation_to_overrides does,
+                            including the k==1-only finish-append — a readout that disagrees with
+                            what the server will build is worse than none. "Reset to auto" REMOVED
+                            (under D6 it contradicts the whole point) → "Undo" + "Discard saved
+                            annotation".
+                          T3 page — blank start (`annRes.annotation` only, seed still read but never
+                            applied); viewRange lower bound is **0, never stroke_start** — the
+                            leading region IS the reaction-time measurement; undo stack in a REF not
+                            state (snapshotting into state would re-render the chart on every one of
+                            ~500 clicks); arrow-key nudge by 1 sample / shift by 10; client-side
+                            out-of-window guard mirroring 57-01's server rule; DELETE wiring for the
+                            20:24 discard; cycles_derived surfaced in the saved message so a wrong
+                            (unpatchable) stroke_type shows up.
+                          BLANK-START CONSEQUENCE worth knowing: with no marks there is no finish_s,
+                            so the chart opens on the FULL trace and auto-fits once Finish is placed.
+                          BOUNDARY: annotations.py / metrics.py / api.py are OFF LIMITS — if this
+                            plan seems to need a backend change, STOP and report. VideoPane also off
+                            limits (zero video on the 19 → no way to verify a change).
+                          Plan: 57-annotation-workflow/57-02-PLAN.md. DO NOT APPLY until user says so.]
+```
+
 ## Loop Position (57-01)
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
@@ -441,11 +523,45 @@ PLAN ──▶ APPLY ──▶ UNIFY
                           REDUCED FROM PLAN (recorded at plan time, held): no separate
                             "relink stroke_start_s to first mark" mechanism — window rejection
                             already guarantees marks[0] >= stroke_start_s, the only real overlap.
-                          ⚠ OPEN FOR UNIFY / 57-02: whether stroke_type is present and CORRECT on
-                            the 19 collected sessions is UNVERIFIED — it needs a live DB read this
-                            plan did not perform. It is not patchable through the API, so a wrong
-                            value silently halves a freestyle stroke rate. cycles_derived in the PUT
-                            response exists to make that visible, but someone must look.
+                          ✓ RESOLVED 2026-08-05 by a read-only Supabase query (user-authorized).
+                            stroke_type is correct on all 19 (user entered them). FOUR further
+                            findings, all bearing on 57-02:
+                            (a) sample_rate_hz = **89.9928** on all 23 post-Phase-52 rows, NOT NULL
+                                and NOT 100 → **Phase 52 is confirmed working in production**, which
+                                its own AC-2/AC-3 never verified. The 19 will annotate on the right
+                                clock. (7 older rows are NULL → 100 Hz fallback, as designed.)
+                                Footnote: CLAUDE.md's illustrative "~89.5 Hz (268.5/3)" is from an
+                                older trace; the live device reports ~269.98/3 = 89.993. The point
+                                (never 100) stands; not worth churning the doc.
+                            (b) **THE 19-BATCH IS THE CONTIGUOUS BLOCK 19:50:50 → 20:59:25** — that
+                                window contains exactly 10 fr / 4 br / 4 fly / 1 back. But there are
+                                THREE MORE 2026-08-05 uploads BEFORE it (14:31 fr, 18:22 br,
+                                18:24 fr), so a queue filtered on "sessions from 2026-08-05" would
+                                sweep in 22 and contaminate the Phase-53 repeatability series.
+                                57-03's queue must not use a date filter alone.
+                            (c) **ZERO video on any of the 19** (the only video in the last 30 rows
+                                is a 2026-07-20 session). R1's "no video" is ABSOLUTE for this
+                                batch, not "only a few" — every arm entry is inferred from the trace.
+                            (d) **All 30 rows have name = None.** A queue that lists sessions by
+                                timestamp alone will be miserable to navigate across 19 items;
+                                57-03 needs athlete + stroke + index, or naming on arrival.
+                          ⚠ ONE OF THE 19 IS ALREADY ANNOTATED UNDER THE OLD CONVENTION:
+                            2026-08-05T20:24:03 freestyle, 11 marks, saved 20:28 (before this
+                            phase). Its marks are all INSIDE the window, so 57-01's rejection does
+                            not touch it — but they were placed when 1 mark = 1 cycle, and freestyle
+                            now PAIRS. Re-saving it would reinterpret 11 marks as 5 cycles instead
+                            of 10, and its stored metrics_json was already recomputed at the old
+                            reading. **DECIDED (user, 2026-08-05): RE-ANNOTATE IT FROM SCRATCH.**
+                            57-02 must DELETE that annotation first — DELETE /annotations restores
+                            metrics_json from metrics_json_auto, and that backup exists because the
+                            47-04 recompute ran — then it gets marked again under the arm-entry
+                            convention like the other 18. NO migration path and NO convention-
+                            mismatch warning are built: after the delete, no old-convention
+                            annotation remains in the batch. Rationale: one session, and its 11
+                            marks came off a wavelet seed that D6 already rejects as ground truth.
+                            The other 2 annotated rows are older sessions outside the
+                            batch (both rate=NULL → 100 Hz fallback, i.e. ~11% mis-timed; that is
+                            Phase 52-02 territory, and they are 16-06 ground truth).
                           NOT committed (user runs git). Web untouched by this plan (the Footer/Nav/
                           blog entries in git status predate this session).
                           Original plan record follows.
