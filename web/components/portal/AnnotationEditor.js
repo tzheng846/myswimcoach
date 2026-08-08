@@ -133,9 +133,17 @@ export default function AnnotationEditor({
         <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
           Click tool
         </p>
-        <p className="mb-3 text-xs leading-relaxed text-muted">
+        <p className="mb-2 text-xs leading-relaxed text-muted">
           Pick a tool, then click the trace to place it. Drag an existing mark to move
           it; click one to select, then ←/→ to nudge (shift = ×10).
+        </p>
+        {/* The arrows are modal — say so, or the mode switch reads as a bug. */}
+        <p className="mb-3 text-[11px] leading-relaxed text-muted">
+          <span className="text-subtle">Keys:</span> with nothing selected ←/→ step the
+          video one frame (shift = ×10); with a mark selected they nudge it instead, and{" "}
+          <span className="text-subtle">Esc</span> deselects.{" "}
+          <span className="text-subtle">M</span> drops a stroke mark at the video
+          playhead. <span className="text-subtle">Ctrl+Z</span> undoes.
         </p>
         <div className="flex flex-wrap gap-1.5">
           {tools.map((t) => (
@@ -223,6 +231,13 @@ export default function AnnotationEditor({
                     encoder warmup). Not a calibrated measurement.
                   </p>
                 )}
+                {m.key === "underwater_start_s" && t != null && (
+                  <p className="ml-[18px] mt-1 text-[10px] leading-relaxed text-muted">
+                    This span runs <span className="text-subtle">through the breakout</span> —
+                    there is no separate Breakout marker. Recorded for the tuning export;
+                    moves no metric.
+                  </p>
+                )}
               </div>
             );
           })}
@@ -250,6 +265,11 @@ export default function AnnotationEditor({
         </p>
         <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
           {CONVENTION[marksPerCycle] ?? CONVENTION[1]}
+        </p>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted">
+          The <span className="text-subtle">first cycle contains the breakout</span> and is
+          expected to be atypical. Mark it anyway — it is recorded as-is, and no metric
+          excludes it.
         </p>
         {unpaired > 0 && (
           <p className="mt-1 text-[11px] text-warning/80">

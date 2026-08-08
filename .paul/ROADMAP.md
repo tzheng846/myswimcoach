@@ -176,12 +176,198 @@ An end-to-end pipeline with velocity tracking and analysis for stroke analysis f
 | 50 | Demo Team & Synthetic History | ⏸ **PAUSED 2026-08-03** (Phase-53 discussion) — the demo now runs on a REAL 10-session series, not the synthetic team. Seeder source CSVs are the pre-fix `raw/` corpus (all dated 2026-05-13→06-10, predating BOTH encoder-integrity fixes of 2026-06-22); user trusts 2-3 of 43, and 50-01's "24/43 usable" was a structural check, not a data-integrity one. NOT cancelled — reseed from clean sessions if a team-scale demo is wanted later (source swap, not a rewrite). ⚠ seed_demo_team.py still UNTRACKED, only copy — commit it. Prior status: Planning (50-01 created 2026-07-27 — demo can't show long-term tracking because no history exists. Replay + perturb real raw CSVs through the real pipeline into a demo coach account: 12 athletes × 12 sessions over 6 months, backdated. NEW seed_demo_team.py only — no product/schema/web changes. 50-01 = seeder core + Stage-1 archetype ingest; 50-02 = generate + propagate annotations + tune) |
 | 51 | API Correctness & Audit | ✅ **Complete (2/2 plans) 2026-08-05** — 51-02 shipped `dedac17`: the phantom `athletes.coach_id` is gone from all four sites, `POST /athletes` works in production (AC-1 verified live), and `tests/test_api.py::TestSchemaContract` now fails the suite if any api.py column reference leaves the live schema (mutation-tested). Suite 172→176; schema violations 4→0. Task 2 was STRUCK before apply as superseded by 54-01's `ENFORCE_TIER_LIMITS`. ⚠ AC-3 (team-wide coach chat) + AC-4 (/billing/status athlete_count) UNVERIFIED — exercising AC-3 is what surfaced the wrong-athlete defect in row 56. Prior status: Planning (2026-07-30 — LIVE BUG: phantom `athletes.coach_id` referenced at 4 sites; POST /athletes 500s PGRST204, athlete limits never enforced, coach-chat team tools broken since 33-02, billing athlete_count always 0. AUDIT-FIRST per user 2026-07-30: 51-01 ✅ COMPLETE 2026-07-30 — API-AUDIT.md (11 findings, 24-endpoint inventory, ownership rule) + tools/introspect_schema.py + supabase/live_schema.json + tools/schema_contract.py; api.py untouched, suite 149. Escalations found: the true sample rate is DISCARDED at write time (api.py:143) and `teams` is read by iOS but never by api.py; 51-02 = fixes (four sites → team_id, athlete-limit behind ENFORCE_ATHLETE_LIMIT default OFF, AST schema-contract test), depends_on 51-01) |
 | 52 | Sample-Rate Contract | ✅ **Complete (1/1 plans) 2026-08-03, closed 2026-08-05** — shipped `89205ca`, patch_09 applied live; suite 149→170. AC-1 (new session stores ~89 Hz, not 100) and AC-4 (pre-migration NULL-rate rows render byte-identically) verified live. ⚠ AC-2 (annotate-page duration) + AC-3 (recompute plausibility) still UNVERIFIED — both need a swim recorded after the migration. 52-02 (measure + backfill existing rows) remains a future plan. Prior status: Planning (52-01 created 2026-08-03 — API-AUDIT F2+F3. `run_pipeline` decimates by an integer factor so stored profiles are ~89.5 Hz, never 100, and api.py:143 discards the real value; 6 backend + 3 web consumers assume 100 → annotate page shows a 47.1 s swim as 42.2 s and recompute-from-annotation shifts every time-derived metric ~11.7%. FIX (user Option A, 2026-08-03): persist `sessions.sample_rate_hz` (patch_09, nullable, no default) and read it everywhere; NULL → 100 keeps existing rows byte-identical. 52-02 = measure + backfill existing rows. Lands BEFORE 50-02, whose annotation propagation would bake the error into ~144 sessions) |
-| 54 | Gate Removal (tier enforcement + stroke gating) | ✅ **Complete (1/1 plans) 2026-08-05** — backend shipped in `dedac17` (could not be split from 51-02's commit); the mobile half sat uncommitted and unbuilt for two days, was folded into Phase 55-01, and freestyle analytics were VERIFIED ON DEVICE 2026-08-05. `ENFORCE_TIER_LIMITS` default OFF now covers all three limits, superseding 51-02's planned `ENFORCE_ATHLETE_LIMIT`. ⚠ Accepted consequence now LIVE: the team dashboard needs-attention list, inert since Phase 37, populates using breaststroke-derived bands applied to all strokes over segmentation flagged unreliable — Phase 53 decides whether those bands should exist. Prior status: Planning (54-01 created 2026-08-03 — remove every account-level restriction and the breaststroke-only analytics gate, both reversibly. TRIGGER: free-tier `device_limit`=1 blocked a live test, and `monthly_session_limit`=20 would 402 partway through the Phase-53 pool day. (T1) single module-level `ENFORCE_TIER_LIMITS` env kill switch, DEFAULT OFF, gating all three limit sites (session api.py:215, device :242, athlete :1291) so the count queries never run; SUPERSEDES 51-02's `ENFORCE_ATHLETE_LIMIT` — one switch, not two. Billing infrastructure (`_TIER_LIMITS`, Stripe webhook writes, /billing/status, schema columns) explicitly PRESERVED. (T2) ratings.py: bands fall back to the breaststroke table for every stroke + drop `(not seg_reliable)` from `provisional`; 2 contradicted tests INVERTED not deleted. (T3) mobile ReportCardScreen.js:192 `isAnalyticsReady` → true. KNOWN CONSEQUENCE, accepted by user: the team dashboard needs-attention list has been inert since Phase 37 because every pillar was provisional — it now POPULATES, driven by breaststroke-derived bands applied to all strokes over segmentation flagged unreliable. autonomous:false (human-verify after Railway deploy), depends_on 51-02) |
+| 54 | Gate Removal (tier enforcement + stroke gating) | ⚠ **RECORD CORRECTED 2026-08-07 (Phase 58-03): this row's claim that "Web has NO stroke gate (already unrestricted); the stroke gate is ratings.py:176 + mobile ReportCardScreen.js:192 only" was FALSE.** `web/app/app/sessions/[id]/page.js:99` carried `isAnalyticsReady = !strokeType \|\| strokeType === "breaststroke"` from Phase 23 until 58-03 removed it, gating five surfaces (view toggle, PillarCards/MetricGrid, TimeToX, per-cycle breakdown, CoachChat). The mobile half shipped in the Phase-55 build; the web stayed breaststroke-only for two more days because the audit said there was nothing to touch. HOW IT SURVIVED: both copies use the SAME identifier `isAnalyticsReady`, so a grep would have found it — the miss was in the reading, not the search. A SECOND consequence surfaced at the same time: dropping `(not seg_reliable)` from `provisional` also silenced the "Provisional — stroke segmentation is still being validated" banner for EVERY stroke (`ratings.py:229` always falls back to the breaststroke table, so `thr_table` is never None and `provisional` became stroke-independent). Borrowed bands now display with no on-screen caveat — accepted by the user 2026-08-07, owned by Phase 53. ✅ **Complete (1/1 plans) 2026-08-05** — backend shipped in `dedac17` (could not be split from 51-02's commit); the mobile half sat uncommitted and unbuilt for two days, was folded into Phase 55-01, and freestyle analytics were VERIFIED ON DEVICE 2026-08-05. `ENFORCE_TIER_LIMITS` default OFF now covers all three limits, superseding 51-02's planned `ENFORCE_ATHLETE_LIMIT`. ⚠ Accepted consequence now LIVE: the team dashboard needs-attention list, inert since Phase 37, populates using breaststroke-derived bands applied to all strokes over segmentation flagged unreliable — Phase 53 decides whether those bands should exist. Prior status: Planning (54-01 created 2026-08-03 — remove every account-level restriction and the breaststroke-only analytics gate, both reversibly. TRIGGER: free-tier `device_limit`=1 blocked a live test, and `monthly_session_limit`=20 would 402 partway through the Phase-53 pool day. (T1) single module-level `ENFORCE_TIER_LIMITS` env kill switch, DEFAULT OFF, gating all three limit sites (session api.py:215, device :242, athlete :1291) so the count queries never run; SUPERSEDES 51-02's `ENFORCE_ATHLETE_LIMIT` — one switch, not two. Billing infrastructure (`_TIER_LIMITS`, Stripe webhook writes, /billing/status, schema columns) explicitly PRESERVED. (T2) ratings.py: bands fall back to the breaststroke table for every stroke + drop `(not seg_reliable)` from `provisional`; 2 contradicted tests INVERTED not deleted. (T3) mobile ReportCardScreen.js:192 `isAnalyticsReady` → true. KNOWN CONSEQUENCE, accepted by user: the team dashboard needs-attention list has been inert since Phase 37 because every pillar was provisional — it now POPULATES, driven by breaststroke-derived bands applied to all strokes over segmentation flagged unreliable. autonomous:false (human-verify after Railway deploy), depends_on 51-02) |
 | 53 | Attention Allocation (SPC detection engine) | Planning (53-01 created 2026-08-03 — the instrument before the experiment: Track-A5 repeatability/saturation analyzer + pool-day protocol, requires NO collected data. NEW repeatability.py (pure: sigma_mr = mean(moving_range)/1.128, minimum detectable change, rails DERIVED from metrics._PERIOD_MIN_S/_MAX_S, usability ranking, zero-variance flagged suspect) + tools/analyze_repeatability.py (offline CLI; captures `actual_fs` from run_pipeline so it answers Phase 52's "does fs vary?" without touching Phase-52 files) + tests + COLLECTION-PROTOCOL.md. autonomous:true, depends_on []). Discussed 2026-08-03, CONTEXT.md written. PRODUCT REFRAME: the tool is not a magnifying glass — a head coach cannot track 30 swimmers across a 2-hour practice daily (~90 s attention per athlete per week), so the core value is ALERTING when something goes wrong OR RIGHT. Layer contract: measurement gate → contrast → persistence → co-occurrence → synthesis; HARD BOUNDARY at co-occurrence (no causal claims, no drill prescription). Framing = statistical process control, NOT anomaly detection; LLMs in the phrasing layer ONLY, detection deterministic. Verified: the shipped needs-attention list is INERT (provisional gate) and has been a calendar reminder since Phase 37; `_trend` is ±5% vs one session with no noise model; σ never measured. Roadmap: Track A (blocking) hardware gate → Phase 52 fs contract → collect 10 freestyle sessions in one day with injected perturbations → annotate all (Phase-47 tool) → saturation + repeatability = GO/NO-GO; Track B engine; Track C 90-second surface; Track D real weekly spacing + 16-06 + pilot. Supersedes the Phase-48 "freestyle unlock" (porting breaststroke thresholds is the wrong unlock — within-athlete contrast needs none) |
 | 56 | Coach Chat Athlete Scoping (OPEN DEFECT, unscheduled) | Found 2026-08-05 during live use; user chose document-only, no plan. Asking the AI coach "give me info on Sid specifically" returned a DIFFERENT athlete's history under Sid's name — claimed a most-recent swim of Aug 5 when Sid has only two swims, both in May. ROOT CAUSE: `list_athlete_sessions` exposes no athlete parameter (schema is `limit` + `stroke` only, coach.py:141-142) and its executor is bound to the athlete of the session the chat was opened from (api.py:1494, `.eq("athlete_id", athlete_id)` closing over the anchor session). Naming another athlete cannot re-scope the tool, so the model receives the anchor athlete's rows and attributes them to whoever was named; `get_session_metrics` inherits the same anchor scope. This is cross-athlete data attribution, not merely an inaccurate answer. NOT caused by 51-02 (that path filters athlete_id + coach_id, untouched), though 51-02's repair of the team tools makes the chat sound more authoritative while still mis-attributing. Fix direction: either add an athlete_name/athlete_id parameter resolved against the coach's roster, or make the system prompt state that athlete tools are locked to the anchor swimmer so the model declines rather than substitutes |
 | 55 | Athlete Flow Fixes (mobile) | ✅ **Complete (1/1 plans) 2026-08-05** — checkpoint approved on the EAS build. All three symptoms traced to ONE fact: `RecordingConfig` is a tab screen that mounts once per app launch and never remounts, so `useEffect(…,[])` ran once ever (frozen roster), `useState()` initializers ran once ever (params ignored), and it sits under `Tabs` not Root (unreachable by bare name). Fixes: `useFocusEffect` roster refetch; nested `navigate('Tabs', {screen, params})` from AthleteDetail; a params effect that applies AND clears (clearing is required — on a never-unmounting screen params persist, so a later plain tab press would inherit the previous athlete). `RootTabs.js:21`'s comment, which had asserted cross-screen navigation "keeps working" and was the assumption that produced the bug, now documents the Root→Tab rule and warns it fails SILENTLY. Phase 54-01's `isAnalyticsReady` one-liner rode the same build → **freestyle analytics verified on device**, clearing 54-01's last outstanding piece. Build also cleared six deferred iOS checks (47-03/41/42/44-03/21-02/34-01). AC-2/3/4 pass; AC-1 partial. ⚠ KNOWN GAP (user: note only, not fixed): deleting the CURRENTLY SELECTED athlete clears them from the dropdown but leaves them in the selection bar — `athlete` state is independent of `athletes` and the focus refetch never revalidates the selection. Matters beyond cosmetics: recording against that stale selection would submit a deleted `athlete_id`. One-line fix recorded in 55-01-SUMMARY.md. Prior status: Planning Found while verifying the 51-02 checkpoint — athlete creation works now, and exercising the unblocked flow surfaced two defects in `swimnetics-mobile`. (B1) A new athlete is missing from the record screen until the app restarts: `RecordingConfigScreen.js:42` fetches the roster in a mount-only `useEffect`, but it is a TAB screen so it mounts once per launch; the three sibling data-bearing tab screens already use `useFocusEffect` and this is the only one missed. (B2) The Record button on the athlete screen is a silent no-op: Phase 38-03 moved `AthleteDetail` to the Root stack (`RootTabs.js:46`) while `RecordingConfig` is a tab child (`:29`), and `navigate()` only bubbles UP to parents — never down into a child navigator — so nothing handles the action; needs `navigate('Tabs', { screen: 'RecordingConfig', params })`. The comment at `RootTabs.js:21-23` asserting cross-screen navigation "keeps working" went stale in the same commit. Verified as the only Root→Tab navigate call in the app — not a bug class. OUT OF SCOPE by user decision: delete-athlete is unchanged (it exists behind a `⋯` glyph at `AthleteDetailScreen.js:96`; user had never noticed it, tested it, judged it fine — the Team list having no delete while sessions have swipe-to-delete is recorded for a later UX pass, along with the fact that athlete delete writes direct via supabase-js on RLS rather than through the API); a dev-time guard for silently-unhandled navigate calls was offered and declined. Mobile repo only. Verification = a new EAS build the user runs right after apply, which should batch the iOS checks deferred from 54-01/47-03/41/42/44/21-02/34-01. UPDATED 2026-08-05 after live use: B1's symptom is broader than first reported — the roster is frozen at app launch in BOTH directions, so a DELETED athlete also stays on the record screen until restart; same cause, one fix. B3 FOLDED IN by user decision: freestyle analytics still blocked on the iPhone, which is NOT a bug — `ratings.py`'s threshold fallback shipped live in `dedac17`, but 54-01's `isAnalyticsReady = true` is uncommitted in the mobile working tree and has never been built (mobile HEAD 1296494 still carries the breaststroke-only gate at ReportCardScreen.js:169). 55-01 commits it so one paid build carries everything; no new code |
 | 49 | Security Hardening (backend) | Planning (49-01 created 2026-07-20 — bang-for-buck fixes from a full-surface security review: redact 14 internal-error leaks, CORS `["*"]`→env allowlist, memory-safe upload size caps, athlete-ownership check on /process; api.py+tests only; autonomous:false, human-verify. Deferred: rate limiting, report-token expiry, full dep pinning) |
 | 57 | Annotation Workflow (annotate-tool v2) | Planning (57-01 created 2026-08-05 — backend contract + pipeline, awaiting approval; 57-02 web page + 57-03 queue to follow). Discussed 2026-08-05 via /paul:discuss; CONTEXT.md written. TRIGGER: 19 trustworthy sessions collected 2026-08-05 (10 free / 4 br / 4 fly / 1 back) — the first corpus postdating the encoder-integrity fixes, and the blocking input to Phase 53 Track A4 and Phase 16-06. The Phase-47 tool works but was verified at n≈1; 19 in a sitting exposes throughput, precision and semantic gaps. REPO-VERIFIED (contradicts the request's framing): trailing trim ALREADY works via `finish_s`→`swim_end_idx` — what is missing is feedback, not mechanism; non-overlap is ALREADY guaranteed by `validate_annotation`'s ordering check — the UI just never says so, showing a bare "Dive 1.31 s" that reads as a duration. REAL HOLES: stroke marks are not constrained to the swim window (a stray mark in the dead tail becomes a garbage cycle feeding stroke_rate/DPS), `stroke_start_s` and the first mark can silently diverge, only 3 of 5 markers reach the metrics (`initial_phase` is carried over from the auto result at api.py:896), and `v95` (metrics.py:431) is computed over the FULL trace so the dead tail biases every session's dead-spot threshold. DECISIONS (user, AskUserQuestion ×4 rounds): view-fit chart + the swim window made AUTHORITATIVE (out-of-window marks rejected; v95 windowed) with profiles never truncated; the v95 fix applies pipeline-wide, accepting that dead_spot_s/coast_fraction stop being comparable with previously computed sessions; ONE MARK PER ARM ENTRY everywhere, cycles derived by pairing (2 marks/cycle free+back, 1 fly+breast — physiology, not a user choice), pairing factor derived from stroke_type with NO new column; NO PRELOADED MARKS — the editor starts blank (user: "in annotation, it should not have any preloaded"), which is methodologically stronger than what was offered since seeding ground truth from the segmenter being evaluated is circular; no auto-assist; UW kick + Breakout stay ground-truth-only and the UI says so; batch queue + prev/next IN scope. REACTION TIME: `useStartSequence.run()` resolves AT the blare and START is written after it, so t=0 IS cue-anchored (confirmed enabled on all 19) — but the BLE round trip plus the firmware's VARIABLE 150–300 ms warmup discard (ESP_32_V5.ino:383-392) understate true reaction time by 25–50%, differently each trial, and no firmware change can retroactively fix the 19 already collected. So: record `dive_start_s`, caption it a lower bound, ship NO reaction_time_s metric. ACCEPTED RISK: ~500 hand-placed marks on a trace with no video, where each freestyle cycle shows ~2 peaks that cannot be attributed to a specific arm — per-session and per-cycle-only alternatives were offered and declined; the marks record alternation timing, not verified arm identity, and the UI must say so. Context: .paul/phases/57-annotation-workflow/CONTEXT.md |
+
+| 58 | Video Ground Truth (solo capture + annotate-from-video) | Planning — discussed 2026-08-05 via /paul:discuss, CONTEXT.md written. TRIGGER: labeling the 19-session batch proved the Phase-57 tool's core assumption false for alternating strokes — freestyle/backstroke arm entries are not reliably discernible from the velocity trace (3-4 of 10 freestyle sessions unlabelable), while fly/breast trough-labeling is fine. The 19 have ZERO video and none can be added retroactively. Tripod + video test scheduled 2026-08-06, run SOLO (the swimmer is the operator). REPO-VERIFIED, mostly in the user's favour: the camera is already built, shipped and device-verified (RecordScreen.js:473-580 one-tap video + videoUploadQueue background FIFO, 47-03 verified in the Phase-55 build) — the 19 have no video because the mode wasn't used; web annotation ALREADY reaches iOS for metrics (PUT /annotations rewrites metrics_json, ReportCardScreen.js:94 reads it fresh) so item 3 needs no code; chart↔video scrubbing ALREADY works both directions (page.js:128 seek, playheadS marker) — the missing direction is MARKING, since marks land where you click the chart and there is no "mark at the video's current time"; buffer-and-dump makes the swim BLE-free (ESP_32_V5.ino:520-529 explicitly keeps recording through a disconnect; dumpBuffer retains the buffer; buffer-full truncates, never wraps). REAL GAPS: `video_origin_s` only reaches the server from VideoOverlayScreen (the background upload sends the file only) so an unopened session arrives at origin=0, silently unsynced; and a failed `writeCmd('STOP')` is caught non-fatal while the device keeps recording, inflating deviceDuration and therefore the auto-posted end-anchored origin — silent corruption of the same shape as Phases 51/52/57, which auto-stop removes by firing camera-stop and STOP off one timer. DECISIONS: auto-stop default **20 s** (user: "trust me" — confirmed against their own traces, 18.93 s and 16.53 s end to end with velocity back to zero before each recording ended, so 20 s clears both; 15 s would have clipped both finishes), editable with a live countdown since a too-early stop genuinely loses the swim's end; capture via the existing one-tap mode but HELD PROVISIONAL because it structurally pins the tripod near the block (BLE range) = the shallow ~4° rear angle most exposed to glare and occlusion; lab-now/product-later; annotate what's legible and flag the rest; no IMU. OPTICS VERIFIED: distance is NOT the constraint (~70° HFOV → 55 px/m at 1080p / 111 at 4K at 25 m; a 0.4 m splash is 22-44 px, left-vs-right separation 25-50 px) — angle, glare and occlusion are, and they are untested. Context: .paul/phases/58-video-ground-truth/CONTEXT.md |
+
+### Phase 58: Video Ground Truth (solo capture + annotate-from-video)
+**Goal:** Make tomorrow's tripod + video test produce usable ground truth, and make the footage
+actually usable for annotation once it exists. Four asks, of which two turned out to be already
+built: (1) solo capture — the swimmer must not have to swim back to stop the recording; (2) video
+sync that lands without a per-session detour and without depending on a promptly delivered STOP;
+(3) annotation driven by the footage rather than by the chart; (4) whether a tripod angle is legible
+at all, which is the phase's one genuine unknown and is answerable with no encoder, no BLE and no
+app — film one 25 from three positions and try to mark entries off it.
+**Blocking on entry:** 57-02's human-verify checkpoint is still open and 57-02 is already deployed.
+Phase 58 edits the same annotate page; starting first makes any checkpoint defect indistinguishable
+from a 58 regression.
+**Plans:**
+- [x] 58-01 ✅ **COMPLETE 2026-08-07** (applied 2026-08-05). ⚠⚠ **CHECKPOINT APPROVED ON ASSUMPTION,
+  NOT ON DEVICE EVIDENCE** — user: *"assume 58-01 is working. approve it."* No on-device
+  verification was reported, so every AC rests on static evidence (`npx expo export` exit 0,
+  1075→1076 modules; `clampAutoStopS` extracted and run in node; 5/5 cleanup parity by grep) plus
+  that approval. **Auto-stop has never fired against real hardware**, and a too-early stop is the
+  one failure mode here that destroys data rather than annoying.
+  ⚠ **R1 IS NOW UNANSWERED ACROSS THREE CONSECUTIVE CHECKPOINTS** (57-02, 58-02, 58-01) — this
+  checkpoint doubled as the tripod legibility test and it was not reported. It gates Phase 53 Track
+  A4 and 16-06.
+  ⚠ DEVIATION, and a real latent bug: the plan named 4 cleanup sites; there are **5**. `reset()`
+  (`RecordScreen.js:626`) was missed and is the worst one — it sets `isStoppingRef.current = false`,
+  so a surviving deadline would pass the double-stop guard and fire a real STOP + retrieval into an
+  abandoned session. The plan's RULE was right, its COUNT was wrong.
+  ⚠ SCOPE ADDED at the checkpoint, user-authorized, crossing 58-01's own "DO NOT CHANGE
+  VideoOverlayScreen.js" boundary: **video was viewable in exactly one place, once** — VideoOverlay
+  is reachable only from the just-recorded results state, hard-gates on a LOCAL `videoUri`, nothing
+  on mobile calls `/video-url`, and `expo-media-library` was not a dependency, so navigating away
+  made footage unviewable on the phone forever. Fixed with the library dep + a write-only save, plus
+  `aspectRatio: 3/4` → `flex: 1` so portrait footage stops burying the chart. `Info.plist` edited
+  DIRECTLY — expo-doctor confirms app.json `plugins` are inert in bare workflow. 7 files, not 3.
+  ⚠ MOBILE REPO ONLY, separate user-owned git — NOT in the myswimcoach push, still uncommitted.
+  SUMMARY: 58-01-SUMMARY.md. Original scope follows.
+- [ ] ~~58-01: iOS auto-stop — PLAN created 2026-08-05, awaiting approval~~. MOBILE REPO ONLY (3 files:
+  new `src/lib/autoStopPrefs.js`, `RecordingConfigScreen.js`, `RecordScreen.js`); 3 tasks + 1
+  human-verify checkpoint; autonomous:false, depends_on []. Default **20 s**, editable, 0 = disabled,
+  with a live countdown. Armed at the two points where the elapsed timer already starts — immediately
+  after `writeCmd('START')` resolves, which is the blare in both paths, so the countdown and the
+  deadline share one clock; arming earlier (in `beginPlain`/`startVideoRecording`) would include the
+  race sequence's deliberately random hold. Fires the right stop per path via a new `stopPlainRef`
+  mirroring the existing `stopVideoRef`, because both stop callbacks are defined after their start
+  functions. Cleared at all four sites that already clear `elapsedTimerRef`. SECOND-ORDER BENEFIT:
+  it repairs the end-anchor's weakest premise — `deviceDuration − videoDuration` assumes camera and
+  device stop together, and today a failed STOP is caught non-fatal while the device keeps recording,
+  silently inflating the auto-posted origin; one timer firing both stops is exactly that guarantee.
+  Setting lives on RecordingConfigScreen next to the race-start toggle (the only other recording pref)
+  and rides the existing nav-params channel to RecordScreen. Checkpoint doubles as the CONTEXT-R1
+  legibility test, which needs no encoder, no BLE and no app.
+- [x] 58-02 ✅ **COMPLETE 2026-08-07** — all 6 ACs pass, checkpoint approved. Suite 236 → **237**,
+  web build exit 0, zero console errors. Shipped: Breakout retired from the contract
+  (`LEGACY_PHASE_KEYS` tolerated on read, stripped on write) with **no metric moved on any
+  session** — `annotation_to_overrides` only ever read dive/stroke/finish, and a new test pins it;
+  video height-capped and the whole editor made viewport-responsive (measured at two viewports:
+  ~671 px used of 720, ~934 of 1000); frame-step + 0.25×/0.5×/1× playback; mark-at-playhead on `M`
+  sharing ONE swim-window guard with chart clicks; arrows modal on selection with `Escape` as the
+  exit. ⚠ **LESSON WORTH KEEPING: `npm run build` exited 0 on a file the dev server could not
+  parse** — a `//` comment between `return (` and the JSX, reported by SWC at the closing brace
+  ~90 lines away. Browser load caught it; the build did not. Web verification is a clean browser
+  load, not a clean build. ⚠ **R1 STILL UNANSWERED for the second consecutive plan** (57-02 also
+  could not record it) — whether ~40 arm-entry marks are placeable from footage gates Phase 53
+  Track A4 and 16-06. ⚠ The `VideoPane` end-anchor was REMOVED from this plan's scope (the D8
+  option the user declined bundled it) → future 58 plan; until then every record-with-video session
+  still needs one Video Overlay tap on the phone. SUMMARY: 58-02-SUMMARY.md. Original scope follows.
+  3 auto tasks + 1 human-verify checkpoint; `autonomous:false`, `depends_on []`.
+  6 files: `annotations.py`, `tests/test_annotations.py`, `VideoPane.js`, `AnnotationChart.js`,
+  `AnnotationEditor.js`, `annotate/[id]/page.js`. Suite 236 → **237**.
+  Mark-at-playhead on the annotate page (scrub the video to an arm entry, keybinding drops a mark at
+  `playheadS` — both halves already existed in the page, the wiring did not). Deliberately NOT
+  bundled with 58-01: different repo, different deploy path (Vercel push vs. a build on the phone),
+  and it is needed when annotating, not when recording. ~~Gated on 57-02's human-verify
+  checkpoint~~ — **gate LIFTED 2026-08-05, that checkpoint was approved.**
+  ⚠ **The `VideoPane` end-anchor moved OUT to a future 58-03** — the option the user declined at D8
+  was precisely the one bundling it. Until 58-03 lands, every record-with-video session must still be
+  opened once in Video Overlay on the phone or it arrives at `origin_s = 0`, silently unsynced.
+  ⚠ **DISTINGUISHING PROPERTY vs 57-01: nothing recomputes.** `annotation_to_overrides` only ever
+  read dive/stroke/finish, so removing Breakout cannot move a metric — no re-baselined assertion, no
+  comparability break, no `CLAUDE.md` note owed. If a metric moves during apply, stop and report.
+  **SCOPE AMENDED 2026-08-07** (`/paul:discuss`, AskUserQuestion ×7 — see CONTEXT.md "Amendment"),
+  after the first real attempt to annotate with video open. Two additions, both web-only:
+    • **D6 — the video is unbounded and pushes the chart off-screen.** Verified structural, not a
+      style nit: `page.js:337` is `max-w-5xl` split `[1fr_300px]` → a ~700 px chart column, and
+      `VideoPane.js:143` renders the `<video>` `w-full` with **no height constraint**, so 16:9
+      footage is ~394 px tall and **portrait 9:16 is ~1244 px** (portrait is the expected case —
+      58-01 was directed to "assume portrait"), above a fixed 340 px chart. FIX: cap the video at
+      ~35 vh with `object-contain` and widen the page to `max-w-7xl`. Side-by-side, sidebar-video and
+      a drag-resizable panel were all offered and declined — at ~40 marks per freestyle 25 the
+      chart's horizontal pixels ARE the precision budget, so halving its width to seat the video
+      beside it would roughly double the error the video exists to reduce.
+    • **D7 — Breakout removed from the phase model, SUPERSEDING Phase 57 D5** for that marker (D5
+      still holds for UW kick). Small verified surface: `annotations.py:41` PHASE_KEYS,
+      `AnnotationChart.js:38` PHASE_META, 3 test assertions, 2 SQL comments — **`api.py` never names
+      it and `phases` is free-form JSONB, so NO SQL patch**. Removed from the contract rather than
+      hidden. The ONE hazard is `validate_annotation:238-240` rejecting unknown phase keys, so
+      already-stored values are **stripped silently on read** (permissive read, strict write;
+      accepted cost = that time is lost on the next save). User's framing: "what used to be breakout
+      is absorbed into dolphin kick or pulldown for respective strokes" — the UW kick / Pulldown band
+      now runs to `stroke_start_s`, covering kick AND breakout, and the UI must say so. **No metric
+      moves:** `annotation_to_overrides` only ever read dive/stroke/finish, `stroke_start_s` keeps its
+      meaning, and "the first stroke cycle contains breakout" is **documentation only** — flagging the
+      breakout cycle in the export, and excluding the first cycle from cycle averages, were both
+      offered and declined (the latter would have shifted `mean_dps_m`/`cv_isi`/`mean_coast_fraction`
+      on every session, paying the 57-01 comparability cost a second time). So unlike 57-01 this
+      amendment recomputes nothing.
+    • **D8 — frame-step (~1/30 s) + 0.25×/0.5×/1× speed ship WITH mark-at-playhead, not after.** The
+      native HTML5 player has no frame step, so scrubbing lands within ~±0.3 s; mark-at-playhead built
+      on that would be *coarser than clicking the chart* — shipping the feature while defeating it.
+      ⚠ `page.js:230` already binds ←/→ to nudging the selected mark; the collision needs an explicit
+      rule at plan time.
+    • **DEPLOY ORDER — CORRECTED 2026-08-07: EITHER ORDER IS SAFE.** `LEGACY_PHASE_KEYS` (D7b) is
+      exactly what removes the constraint — a new backend tolerates `breakout_start_s` from a stale
+      page, so no 422 is possible. Superseded text follows; it predates the tolerance.
+      `page.js:14-18` `normalizePhases` already filters to PHASE_KEYS, so dropping the PHASE_META
+      entry stops the client sending the key for free; backend-first would 422 a stale open tab.
+    • ⚠ CONTENTION: 57-03 (queue + prev/next) and this plan both edit
+      `web/app/app/annotate/[id]/page.js`. Do not apply them concurrently from two PAUL environments.
+
+- [x] 58-03 ✅ **COMPLETE 2026-08-07** — all 3 ACs pass, checkpoint approved. ONE file, no backend
+  deploy; suite still 237 (proving no backend file was touched); build exit 0; zero console errors.
+  Shipped: the web stroke gate removed (every stroke now renders the toggle, pillar cards,
+  Time-to-Distance, per-cycle breakdown and Coach Chat); the mount-only fetch extracted into
+  `load()` and also fired on `pageshow`/`persisted` + window `focus`, which is the bfcache case
+  `router.refresh()` cannot reach; and `data_quality.recomputed_from_annotation` — set by api.py:899
+  since Phase 47 and rendered by nothing — finally surfaced as a provenance marker.
+  ⚠ **THE PLAN'S VERIFICATION REQUIREMENT CAME BACK NEGATIVE.** The "Provisional" banner fires for
+  **no stroke** (measured: breaststroke/freestyle/backstroke/butterfly all `any_provisional=False`).
+  `ratings.py:229` always falls back to the breaststroke table so `thr_table` is never None, making
+  `provisional` (:184) stroke-independent. 54-01 dropped the `seg_reliable` condition and this was
+  the collateral — unnoticed because the web gate was believed not to exist, so nobody looked at
+  what the web would show once it lifted. **Live consequence:** freestyle bands/scores/verdicts now
+  display with nothing on screen saying they are breaststroke-derived and unvalidated, over
+  segmentation 16-04 measured at 3/8 within ±5 SPM. Shown to the user at the checkpoint and
+  **approved** — accepted and recorded, not an oversight. Phase 53 owns whether those bands should
+  exist. ⚠ AUTO-FIX: `load({resetEditable})` — a plain refetch on focus would have silently
+  replaced notes typed before an alt-tab. ⚠ Whether the original staleness was ever real is STILL
+  UNKNOWN; the refetch hardens against an unconfirmed cause. SUMMARY: 58-03-SUMMARY.md.
+  Original scope follows.
+- [ ] ~~58-03 PLAN created 2026-08-07, awaiting approval~~ — report-card visibility.
+  `autonomous:false`, `depends_on []`, **ONE file** (`web/app/app/sessions/[id]/page.js`), no
+  backend deploy. 2 tasks + 1 human-verify.
+  ⚠ **SCOPE REVISED the same day, before apply.** The plan originally opened with a diagnosis task
+  for the user's report that saved annotations were not reflected on the report card. The user then
+  observed them updating correctly. Since **58-02 touched nothing on the report-card path** (its six
+  files were annotations.py, tests, VideoPane, AnnotationChart, AnnotationEditor and the *annotate*
+  page), that improvement CANNOT be attributed to a code change — leaving two readings: the bug is
+  cache-dependent and between appearances, or what looked stale was `initial_phase` carried over by
+  design (api.py:905). User chose **confirm-and-harden** over a diagnosis campaign: one Back-button
+  observation (recorded, non-blocking), then a `pageshow`/`focus` refetch that removes the class
+  regardless. Dropping the diagnosis also dropped the `api.py` and annotate-page edits, which is
+  what removed the file contention and the dependency on 58-02.
+  ⚠ **CORRECTS A FALSE FINDING IN THE PHASE 54 RECORD.** 54-01's verified surface says "Web has NO
+  stroke gate (already unrestricted); the stroke gate is ratings.py:176 + mobile
+  ReportCardScreen.js:192 only." **False** — `web/app/app/sessions/[id]/page.js:99` has carried
+  `isAnalyticsReady = !strokeType || strokeType === "breaststroke"` since Phase 23, gating five
+  surfaces (view toggle, PillarCards/MetricGrid, TimeToX, per-cycle breakdown, CoachChat). The
+  mobile half shipped in the Phase-55 build; the web half was never touched because the audit said
+  there was nothing to touch. Both copies use the SAME identifier, so a grep would have found it —
+  the miss was in the reading, not the search.
+  T1 = the one-line gate removal (54-01's mobile pattern: restorable, dead branch kept) + **verify
+  the "Provisional" banner still fires for freestyle** — 54-01 dropped `(not seg_reliable)` from
+  that flag in ratings.py, so it is genuinely unclear whether `PillarCards.js:141` still renders
+  the only thing telling a coach those bands are breaststroke-derived. Check, do not assume, and do
+  NOT silently substitute a replacement caption if it is gone (that is Phase 53's question).
+  T2 = extract the mount-only fetch (`:33-59`) into a `load()` callback and also call it on
+  `pageshow`/`persisted` and window `focus`. **The bfcache case is the one `router.refresh()` cannot
+  reach** — on a bfcache restore the component never re-runs, so nothing React-side fires at all.
+  Plus surface `data_quality.recomputed_from_annotation` (set by api.py:899, rendered by nothing) —
+  worth doing on its own merits: without it the coach cannot tell "the annotation did nothing" from
+  "it worked and the numbers barely moved", the exact ambiguity that produced the report.
+  ORDER IS THE POINT: you cannot verify an annotation reached a **freestyle** report card while the
+  freestyle report card renders "coming soon" instead of any metric.
+
+- [ ] 58-04 (owed, not yet written): **`VideoPane` end-anchor** — compute the origin client-side when
+  none is stored (the pane has the video element's `duration`; the page has `duration_s` from
+  `GET /annotations`), retiring the per-session Video Overlay tap that is currently the ONLY thing
+  posting `video_origin_s`. Split out of 58-02 because the D8 option the user declined bundled it.
+  **Until this lands, every record-with-video session must be opened once in Video Overlay on the
+  phone or it arrives on the web at `origin_s = 0`, silently unsynced.**
+  ⚠ **PHASE 58 IS NOT COMPLETE.** 58-01/02/03 are closed and all three have SUMMARYs, so the
+  mechanical "PLAN count == SUMMARY count" rule WOULD fire a phase transition — do NOT. This plan is
+  owed, and **CONTEXT R1 is unanswered after three consecutive checkpoints** (57-02, 58-02, 58-01):
+  nobody has yet reported whether arm entries are placeable from tripod footage, which is the one
+  genuine unknown the whole phase was built around.
 
 ### Phase 57: Annotation Workflow (annotate-tool v2)
 **Goal:** Make the Phase-47 annotation tool survive its first real batch — 19 sessions, ~500 marks —
@@ -210,7 +396,18 @@ starts blank, because seeding from the segmenter that 16-06 exists to evaluate i
   `extract_cycle_peaks`, which drives peak DETECTION thresholds); `api.py` threads `stroke_type` onto
   both annotation selects and publishes `marks_per_cycle` + `cycles_derived` so the pairing rule is
   never duplicated in JS and a wrong (unpatchable) `stroke_type` is visible immediately.
-- [ ] 57-02: Annotate page v2 — PLAN created 2026-08-05, awaiting approval (web only, 3 files;
+- [x] 57-02 ✅ **COMPLETE 2026-08-05** — all 7 ACs pass, checkpoint approved on the deployed portal,
+  shipped `16c1d92`. Build exit 0; backend suite still 236 (proves no backend file was touched).
+  ⭐ The riskiest piece was machine-verified rather than eyeballed: the shipped `deriveCycles` was
+  extracted and run in node against `annotation_to_overrides` over 10 cases →
+  `[2,4,1,4,0,0,0,3,1,3]` both sides, exact match, including k=2-with-finish-beyond-last-mark and
+  its k=1 twin. TWO AUTO-FIXES: recharts fires `onClick` AFTER `mouseup`, so a select-click would
+  have placed a stray mark on top of the one being targeted (fixed by suppressing the click on any
+  mousedown that hits a mark); and dragging a mark past its neighbour left `stroke_marks_s` unsorted,
+  which `validate_annotation` rejects (re-sort once per gesture on window mouseup). ⚠ R1 UNANSWERED:
+  whether ~40 arm-entry marks are placeable from the trace alone was not reported at the checkpoint —
+  recorded as unknown, and 57-03 must not assume it. SUMMARY: 57-02-SUMMARY.md. Original scope:
+  (web only, 3 files;
   3 tasks + 1 human-verify checkpoint; autonomous:false, depends_on 57-01). Blank start (D6 — the
   seed is still returned by the API but never applied); view fitted by SLICING the data rather than
   setting an XAxis domain, because the existing `<Brush>` also controls the domain and the two fight

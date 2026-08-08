@@ -24,8 +24,14 @@ const GRAB_FRAC = 0.01;
 // "underwater" displays as "Pulldown" for breaststroke (display concern only).
 // `drivesMetrics` records which markers reach compute_session_metrics via
 // annotations.annotation_to_overrides — dive → baseline_end_idx, stroke → ip_end_idx,
-// finish → swim_end_idx. UW kick and Breakout feed the 16-06 export and nothing else
-// (api.py carries initial_phase over from the auto result unchanged on recompute).
+// finish → swim_end_idx. UW kick is the only marker that feeds the 16-06 export and
+// nothing else (api.py carries initial_phase over from the auto result unchanged on
+// recompute).
+//
+// Breakout was REMOVED in Phase 58 (superseding 57 D5 for that marker). The UW kick span
+// now runs through the breakout, and the first stroke cycle contains it. This array is the
+// single source: the tool palette, the phase rows, the band tiling and the page's
+// normalizePhases all derive from it, so nothing else needed editing.
 export const PHASE_META = [
   { key: "dive_start_s", label: "Dive", color: "#fb923c", drivesMetrics: true },
   {
@@ -35,7 +41,6 @@ export const PHASE_META = [
     color: "#c084fc",
     drivesMetrics: false,
   },
-  { key: "breakout_start_s", label: "Breakout", color: "#22d3ee", drivesMetrics: false },
   { key: "stroke_start_s", label: "Stroke", color: "#4ade80", drivesMetrics: true },
   { key: "finish_s", label: "Finish", color: "#f87171", drivesMetrics: true },
 ];
@@ -60,7 +65,10 @@ export default function AnnotationChart({
   onMarkSelect,
   selected = null,
   viewRange = null, // [lo, hi] in seconds, or null for the full trace
-  height = 340,
+  // Any CSS length. Default scales with the viewport and is clamped at both ends, so
+  // the trace gets the vertical room a tall screen offers without collapsing on a short
+  // one. A plain number still works (React appends px) for any caller that passes one.
+  height = "clamp(220px,30vh,480px)",
 }) {
   const containerRef = useRef(null);
   const dragRef = useRef(null); // {kind, index} while a drag is in flight
@@ -212,7 +220,10 @@ export default function AnnotationChart({
       <ResponsiveContainer
         width="100%"
         height="100%"
-        initialDimension={{ width: 520, height }}
+        // Pre-measurement guess only — must stay a NUMBER. `height` is now a CSS length
+        // (clamp(...)), which recharts cannot use here; the real height comes from the
+        // parent div's style below.
+        initialDimension={{ width: 520, height: 320 }}
       >
         <LineChart
           data={data}

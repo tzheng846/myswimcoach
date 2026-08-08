@@ -8,7 +8,6 @@ of truth for the annotation contract served by api.py:
       "phases": {
         "dive_start_s":       float | null,
         "underwater_start_s": float | null,   # displayed as "pulldown" for breaststroke
-        "breakout_start_s":   float | null,
         "stroke_start_s":     float | null,
         "finish_s":           float | null,
       },
@@ -16,9 +15,16 @@ of truth for the annotation contract served by api.py:
       "source": "manual" | "seeded",
     }
 
-Phase model (user decision, 2026-07-11): a trial is a SINGLE ORDERED PASS —
-dive → underwater kick/pulldown → breakout → stroke → finish. Any subset of phases
-may be annotated; present times must be non-decreasing in canonical order.
+Phase model (user decision, 2026-07-11; revised 2026-08-07, Phase 58): a trial is a
+SINGLE ORDERED PASS — dive → underwater kick/pulldown → stroke → finish. Any subset of
+phases may be annotated; present times must be non-decreasing in canonical order.
+
+The underwater phase runs THROUGH the breakout — there is no separate breakout marker.
+It was removed in Phase 58 (superseding Phase 57 D5 for that marker only) because the
+surfacing instant is not reliably readable and the coach had already stopped placing it.
+Consequence for anyone consuming this as ground truth: THE FIRST STROKE CYCLE CONTAINS
+THE BREAKOUT and is expected to be atypical — shorter, faster, differently shaped than
+steady-state cycles. It is recorded as-is; no metric excludes or downweights it.
 Times are seconds on the session's own clock (sample index / sample rate). The rate is
 per session — `sessions.sample_rate_hz`, written by /process from the pipeline's real
 decimated rate (Phase 52). Callers pass it as `fs_hz`; it is NOT 100 in practice.
@@ -38,10 +44,16 @@ FS_HZ = 100
 PHASE_KEYS = [
     "dive_start_s",
     "underwater_start_s",
-    "breakout_start_s",
     "stroke_start_s",
     "finish_s",
 ]
+
+# Retired phase keys, TOLERATED on read and NEVER written (Phase 58 D7b).
+# validate_annotation ignores these instead of rejecting them as unknown, so an
+# annotation stored under the old contract still loads and still saves. It is not
+# enforced against the ordering rule — a legacy value is ignored, not honored — and
+# api.py rebuilds `phases` from PHASE_KEYS, so the key drops out on the next write.
+LEGACY_PHASE_KEYS = ("breakout_start_s",)
 
 SOURCES = ("manual", "seeded")
 
@@ -87,7 +99,6 @@ def build_seed(metrics_json, fs_hz=FS_HZ):
     Sources (all optional — anything undetected stays null, never raises):
       dive_start_s       ← session.baseline_end_s (swim motion begins)
       underwater_start_s ← dive peak (baseline_end_s + initial_phase.dive_duration_s)
-      breakout_start_s   ← null (no automatic detection exists)
       stroke_start_s     ← initial_phase.initial_phase_end_idx / fs, else first cycle start
       finish_s           ← last cycle end_idx / fs
       stroke_marks_s     ← each cycle's start_idx / fs (the 39-05 overlay convention)
@@ -236,7 +247,10 @@ def validate_annotation(doc, duration_s=None):
         phases = {}
 
     for key in phases:
-        if key not in PHASE_KEYS:
+        # LEGACY_PHASE_KEYS are tolerated silently — an annotation written under an older
+        # contract must still load and still save (Phase 58 D7b). They are deliberately
+        # NOT added to the ordering walk below: the value is ignored, not honored.
+        if key not in PHASE_KEYS and key not in LEGACY_PHASE_KEYS:
             errors.append(f"unknown phase key: {key}")
 
     def check_time(label, v):

@@ -47,6 +47,7 @@ export default function AnnotatePage({ params }) {
   const [video, setVideo] = useState(null); // {path, origin_s} | null
   const [playheadS, setPlayheadS] = useState(null);
   const seekRef = useRef(null);
+  const frameStepRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -121,6 +122,32 @@ export default function AnnotatePage({ params }) {
     setHint(null);
   }, []);
 
+  // Place one stroke mark. The swim-window guard mirrors the server rule (57-01) so a
+  // mark that PUT would reject is never placed in the first place; 422 strings still
+  // render below as belt-and-braces. This lives in ONE place and is shared by chart
+  // clicks and mark-at-playhead — a second copy is exactly how the client rule drifts
+  // from the server's, and the server would then reject a mark the UI accepted.
+  const placeStrokeMark = useCallback(
+    (t) => {
+      const tt = Math.round(t * 100) / 100;
+      const lo = phases.stroke_start_s;
+      const hi = phases.finish_s;
+      if (lo != null && tt < lo) {
+        setHint(`Outside the swim: ${tt.toFixed(2)} s is before Stroke (${lo.toFixed(2)} s).`);
+        return;
+      }
+      if (hi != null && tt > hi) {
+        setHint(`Outside the swim: ${tt.toFixed(2)} s is after Finish (${hi.toFixed(2)} s).`);
+        return;
+      }
+      pushUndo();
+      setHint(null);
+      setStrokeMarks((prev) => [...prev, tt].sort((a, b) => a - b));
+      setDirty(true);
+    },
+    [phases, pushUndo]
+  );
+
   const handleChartClick = useCallback(
     (t) => {
       const tt = Math.round(t * 100) / 100;
@@ -129,22 +156,7 @@ export default function AnnotatePage({ params }) {
         return;
       }
       if (activeTool === "stroke") {
-        // Mirror the server rule (57-01) so a mark that PUT would reject is never
-        // placed in the first place. Belt-and-braces: 422 strings still render below.
-        const lo = phases.stroke_start_s;
-        const hi = phases.finish_s;
-        if (lo != null && tt < lo) {
-          setHint(`Outside the swim: ${tt.toFixed(2)} s is before Stroke (${lo.toFixed(2)} s).`);
-          return;
-        }
-        if (hi != null && tt > hi) {
-          setHint(`Outside the swim: ${tt.toFixed(2)} s is after Finish (${hi.toFixed(2)} s).`);
-          return;
-        }
-        pushUndo();
-        setHint(null);
-        setStrokeMarks((prev) => [...prev, tt].sort((a, b) => a - b));
-        setDirty(true);
+        placeStrokeMark(tt);
         return;
       }
       // Phase tool: place / move that boundary
@@ -153,7 +165,7 @@ export default function AnnotatePage({ params }) {
       setPhases((prev) => ({ ...prev, [activeTool]: tt }));
       setDirty(true);
     },
-    [activeTool, phases, pushUndo]
+    [activeTool, placeStrokeMark, pushUndo]
   );
 
   // Drag from the chart. Snapshot only on the FIRST move of a gesture, otherwise a
@@ -214,7 +226,10 @@ export default function AnnotatePage({ params }) {
     setDirty(true);
   }, [pushUndo]);
 
-  // Keyboard: nudge / delete the selected mark, undo.
+  // Keyboard. Two modes, switched by whether a mark is selected:
+  //   nothing selected → ←/→ step the VIDEO a frame
+  //   mark selected    → ←/→ nudge that mark (pre-58 behavior, unchanged)
+  // Esc is the way back out of nudge mode; M drops a mark at the video playhead.
   useEffect(() => {
     const onKey = (e) => {
       const tag = e.target?.tagName;
@@ -225,9 +240,41 @@ export default function AnnotatePage({ params }) {
         undo();
         return;
       }
-      if (!selected) return;
 
-      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      // Mark at the video's current time. Deliberately does NOT select the new mark:
+      // selecting it would flip the arrows into nudge mode, so the
+      // step → mark → step → mark loop this exists to enable would break on its
+      // second iteration.
+      if (e.key.toLowerCase() === "m" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (playheadS == null) {
+          setHint("No video playhead yet — attach a video and scrub it, or click the trace.");
+        } else {
+          placeStrokeMark(playheadS);
+        }
+        return;
+      }
+
+      if (e.key === "Escape") {
+        setSelected(null);
+        return;
+      }
+
+      const isArrow = e.key === "ArrowLeft" || e.key === "ArrowRight";
+
+      if (!selected) {
+        // preventDefault is load-bearing, not hygiene: when the <video controls>
+        // element has focus, Chrome's native handler seeks ±5 s on these keys and
+        // would fight the frame step.
+        if (isArrow) {
+          e.preventDefault();
+          const dir = e.key === "ArrowLeft" ? -1 : 1;
+          frameStepRef.current?.(dir * (e.shiftKey ? 10 : 1));
+        }
+        return;
+      }
+
+      if (isArrow) {
         e.preventDefault();
         const step = (e.shiftKey ? 10 : 1) / fsHz;
         const delta = e.key === "ArrowLeft" ? -step : step;
@@ -256,7 +303,16 @@ export default function AnnotatePage({ params }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selected, fsHz, undo, pushUndo, removeMark, clearPhase]);
+  }, [
+    selected,
+    fsHz,
+    undo,
+    pushUndo,
+    removeMark,
+    clearPhase,
+    placeStrokeMark,
+    playheadS,
+  ]);
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -333,8 +389,13 @@ export default function AnnotatePage({ params }) {
     return <p className="mt-10 text-center text-danger">{loadError}</p>;
   if (!row || !ann) return <p className="text-muted">Loading…</p>;
 
+  // max-w-7xl, not 5xl: the chart column goes ~700px → ~980px, and AnnotationChart
+  // re-spreads its MAX_POINTS budget across it. Horizontal pixels are the precision
+  // budget when placing ~40 marks on a freestyle 25.
+  // (Comment lives ABOVE the return: a // comment between `return (` and the JSX makes
+  // SWC report a parse error at the closing brace, ~90 lines away.)
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="mx-auto max-w-7xl">
       <div className="flex items-center justify-between">
         <Link
           href={`/app/sessions/${sessionId}`}
@@ -358,13 +419,16 @@ export default function AnnotatePage({ params }) {
         make are the ground truth the segmenter gets measured against.
       </p>
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_300px]">
+      {/* Sidebar width scales with the viewport (clamped) instead of a fixed 300px, so a
+          wide screen gives the trace the extra pixels rather than the control panel. */}
+      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_clamp(260px,20vw,360px)]">
         <div className="min-w-0 space-y-3">
           <VideoPane
             sessionId={sessionId}
             video={video}
             onPlayhead={setPlayheadS}
             seekRef={seekRef}
+            frameStepRef={frameStepRef}
             onVideoChange={setVideo}
           />
           <AnnotationChart
@@ -381,6 +445,10 @@ export default function AnnotatePage({ params }) {
             viewRange={viewRange}
           />
         </div>
+        {/* The tools panel is taller than the trace on most screens. Sticking it and
+            giving it its own scroll keeps Save/Undo reachable without scrolling the
+            chart out of view — the whole point of fitting both on one screen. */}
+        <div className="lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:pr-1">
         <AnnotationEditor
           strokeType={row.stroke_type}
           activeTool={activeTool}
@@ -407,6 +475,7 @@ export default function AnnotatePage({ params }) {
           onSave={save}
           seekEnabled={!!video?.path}
         />
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,412 @@
 # Project State
 
-**NEW FOCUS: Phase 57 (Annotation Workflow — annotate-tool v2)** — discussed 2026-08-05 via
+**NEW FOCUS: Phase 58 (Video Ground Truth — solo capture + annotate-from-video)** — discussed
+  2026-08-05 via /paul:discuss; CONTEXT.md written; **58-01 PLAN created, awaiting approval**.
+  **58-02 PLAN created 2026-08-07, awaiting approval** — see Loop Position (58-02) below.
+  TRIGGER: labeling the 19-session batch proved the Phase-57 tool's core assumption FALSE for
+  alternating strokes. User: *"freestyle and backstroke — it's almost impossible to discern when does
+  one stroke start and ends… for 3-4 of the freestyle swims, it's extremely jumbled together."*
+  Fly/breast trough-labeling is fine. The 19 have ZERO video and none can be added retroactively.
+  Tripod + video test scheduled **2026-08-06, run SOLO** — the swimmer IS the operator, which is why
+  auto-stop is the blocker: today they must swim back to press Stop.
+  ⚠ TWO OF THE FOUR ASKS WERE ALREADY BUILT — verified in code before planning:
+    • **Web annotation already reaches iOS.** `PUT /annotations` rewrites `sessions.metrics_json`
+      (47-04); `ReportCardScreen.js:94-95` selects it fresh on every open. NO CODE. Only the numbers
+      cross over — marks are never drawn on the phone (no stated consumer → out of scope).
+    • **Chart↔video scrubbing already works both directions.** `page.js:128` chart-click → video
+      seek; `onPlayhead` → `playheadS` → chart marker. The missing direction is MARKING — marks land
+      where you click the CHART, and there is no "mark at the video's current time." Both halves
+      already exist in the page; only the wiring is absent. → 58-02.
+    • The CAMERA itself was already shipped and device-verified (RecordScreen.js:473-580 one-tap
+      video, `videoUploadQueue` background FIFO; 47-03 verified in the Phase-55 build). The 19 have
+      no video because the mode wasn't used that day.
+  REAL GAPS FOUND:
+    • `video_origin_s` reaches the server ONLY from `VideoOverlayScreen.js:92-125` — the background
+      upload sends the FILE ONLY. A record-with-video session never opened in Video Overlay arrives
+      on the web at `origin_s = 0`, silently unsynced. Until 58-02, every video session needs that
+      tap; it is an explicit checkpoint step in 58-01.
+    • A failed `writeCmd('STOP')` is caught NON-FATAL while the device keeps recording, inflating
+      `deviceDuration` and therefore the auto-posted end-anchored origin. Silent, plausible-looking
+      corruption of the same shape as Phases 51/52/57. **Auto-stop removes it** by firing camera-stop
+      and STOP off one timer — which is precisely the premise the end-anchor rests on.
+  USER'S RECOLLECTION CONFIRMED (buffer-and-dump makes the swim BLE-free): `ESP_32_V5.ino:520-529`
+    `onDisconnect` cancels pending meta/dump/status, restarts advertising, and deliberately leaves
+    `recording` alone — *"Recording is independent of the connection in buffer mode — keep going."*
+    `dumpBuffer` aborts on disconnect but RETAINS the buffer (:474-480). Buffer-full truncates and
+    keeps the data, never wraps (:759-766) — you lose the tail, never the start. BLE is needed at
+    exactly two moments: START, and STOP + dump. NO FIRMWARE CHANGE NEEDED.
+  DECISIONS (user, 2026-08-05, AskUserQuestion ×4 + direct):
+    • D1 auto-stop default **20 s** ("trust me") — CONFIRMED against their own data rather than taken
+      on faith: the two supplied traces run 18.93 s and 16.53 s end to end with velocity back to zero
+      before each recording ended, so 20 s clears both with ~1 s and ~3.5 s margin. My earlier 15 s
+      warning stands; my 30 s suggestion was over-cautious and was withdrawn. Editable + live
+      countdown, because unlike buffer-full (which truncates safely) a too-early stop genuinely
+      loses the end of the swim.
+    • D2 capture via the EXISTING one-tap video mode, **held provisional** — it structurally pins the
+      tripod near the block (BLE range to the block-mounted encoder), i.e. the shallow ~4° rear angle
+      most exposed to glare and occlusion.
+    • D3 lab-now / product-later. NAMED COST: with the phone as camera a coach holds it every trial —
+      a real burden against Phase 53's 30-swimmers-in-an-hour target.
+    • D4 the 19: annotate what's legible, FLAG the rest. Needs vocabulary that does not exist —
+      absence of an annotation currently conflates *not yet done* with *cannot be done*, the same
+      failure mode 57's CONTEXT named for null markers. Must be exportable so 16-06 can exclude it.
+    • D5 no IMU / no on-swimmer sensor — second device, second clock, sync protocol, waterproofing,
+      and it contradicts PROJECT.md's "swimmer just swims."
+  OPTICS, COMPUTED NOT ASSUMED: distance is NOT the constraint. ~70° HFOV → frame width ≈ 1.4×d, so
+    at 25 m that is ~35 m: 55 px/m at 1080p, 111 at 4K. A 0.4 m hand-entry splash is 22-44 px;
+    left-vs-right entry separation (~0.45 m) is 25-50 px. **Angle, glare and occlusion are the risks**
+    — a deck tripod sits ~1.8 m above the water, so the depression angle at 25 m is ~4°. UNTESTED;
+    this is the phase's one genuine unknown (R1), and it is answerable with NO encoder, NO BLE and NO
+    app — film one 25 from three positions and try to mark entries off the footage.
+  R2 (why R1 may not matter much): 57's CONTEXT already states the marks record **alternation timing,
+    not verified arm identity**. Footage only has to show THAT an entry happened and WHEN.
+  ⚠ SCHEDULING UNKNOWN, decides whether 58-01 lands before the pool: `expo-dev-client` is installed
+    but `expo-updates` is NOT. A dev build loads JS off Metro with no EAS round trip; a TestFlight
+    build needs a paid EAS build plus queue. **Confirm which is on the phone before starting.**
+  ⚠ BLOCKING ON 58-02 (not on 58-01): **57-02's human-verify checkpoint is still open on an
+    already-deployed page.** 58-02 edits that same page; starting first makes any defect found at the
+    checkpoint indistinguishable from a 58 regression.
+  OUT OF SCOPE: IMU; retroactive video for the 19; rendering marks on iOS; product-grade capture UX;
+    pose estimation / auto-labeling (also barred by 57 D7); multi-angle; BLE auto-reconnect
+    (`BleContext.js:94-98` has none — real, but not triggered by a stationary tripod setup); firmware.
+  ⚠ **58-02 SCOPE AMENDED 2026-08-07** (/paul:discuss, AskUserQuestion ×7 — CONTEXT.md "Amendment").
+    Two additions from the first real attempt to annotate with video open, both web-only:
+    • D6 the video is UNBOUNDED and pushes the chart off-screen — verified structural, not styling:
+      `VideoPane.js:143` renders `<video className="w-full …">` with NO height constraint inside
+      `page.js:337`'s `max-w-5xl` `[1fr_300px]` (~700 px column), so 16:9 = ~394 px tall and
+      **portrait 9:16 = ~1244 px** (portrait IS the expected case — 58-01 was told "assume
+      portrait"), above a fixed 340 px chart. FIX: ~35 vh cap + `object-contain` + page to
+      `max-w-7xl`. Side-by-side/sidebar/resizable all DECLINED — at ~40 marks per freestyle 25 the
+      chart's horizontal pixels are the precision budget.
+    • D7 **Breakout removed from the contract — SUPERSEDES Phase 57 D5** for that marker only (D5
+      still holds for UW kick, which stays). Surface is small and verified: `annotations.py:41`,
+      `AnnotationChart.js:38`, 3 tests, 2 SQL comments — **api.py never names it, `phases` is
+      free-form JSONB → NO SQL patch.** ONE hazard: `validate_annotation:238-240` rejects unknown
+      phase keys → legacy values are **stripped silently on read** (accepted cost: that time is lost
+      on the next save). User: "what used to be breakout is absorbed into dolphin kick or pulldown
+      for respective strokes" — the UW/Pulldown band now runs to `stroke_start_s` and the UI must say
+      so. **NOTHING RECOMPUTES**: `annotation_to_overrides` only ever read dive/stroke/finish,
+      `stroke_start_s` keeps its meaning, and "first cycle contains breakout" is DOCUMENTATION ONLY
+      (export-flagging and excluding cycle 1 from averages both offered, both declined — the latter
+      would have shifted mean_dps_m/cv_isi/mean_coast_fraction on every session, paying 57-01's
+      comparability cost twice).
+    • D8 frame-step (~1/30 s) + 0.25×/0.5×/1× ship WITH mark-at-playhead: native HTML5 has no frame
+      step, so ±0.3 s scrubbing would make mark-at-playhead COARSER than clicking the chart.
+      ⚠ `page.js:230` already binds ←/→ to nudge-selected-mark — collision needs a rule at plan time.
+    • ⚠ DEPLOY ORDER — **CORRECTED 2026-08-07, EITHER ORDER IS SAFE.** The rule below was derived
+      before `LEGACY_PHASE_KEYS` existed and was not re-derived afterwards. With the tolerance in
+      place a NEW backend accepts `breakout_start_s` from an OLD page (validate_annotation skips
+      it, api.py:857 drops it on write), so the 422 this guarded against cannot occur; the only
+      effect of a backend-first window is that a Breakout mark placed on a stale tab silently does
+      not persist — cosmetic, and that marker is being abandoned anyway. New-web/old-backend is
+      also fine (the client stops sending the key; the old backend writes it as null).
+      SUPERSEDED TEXT: web before backend, or together. NEVER backend first — `page.js:14-18`
+      `normalizePhases` already filters to PHASE_KEYS so the client stops sending the key for free,
+      but a backend-first deploy 422s a stale open tab.
+    • 57-02's checkpoint gate on 58-02 is **LIFTED** (approved 2026-08-05). Remaining contention:
+      57-03 and 58-02 both edit `web/app/app/annotate/[id]/page.js` — do not apply concurrently.
+  Context: .paul/phases/58-video-ground-truth/CONTEXT.md
+  Plan: 58-video-ground-truth/58-01-PLAN.md. DO NOT APPLY until user says so.
+  ⚠ CONCURRENCY: ROADMAP.md was modified on disk mid-session by another PAUL environment (the edit
+    still applied cleanly). Commit `.paul/` between sessions so this surfaces as a merge conflict.
+
+## Loop Position (58-03)
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [58-03 CLOSED 2026-08-07 — SUMMARY written. Checkpoint APPROVED.
+                          ONE file (`web/app/app/sessions/[id]/page.js`), no backend deploy.
+                          Suite still 237 (proves no backend file touched); build exit 0; route
+                          200 → /login with zero console errors.
+                          ⚠ **THE PLAN'S ONE VERIFICATION REQUIREMENT CAME BACK NEGATIVE.** The
+                            "Provisional — stroke segmentation is still being validated" banner
+                            fires for **NO stroke**, verified by running ratings.rate_session:
+                            breaststroke/freestyle/backstroke/butterfly all any_provisional=False.
+                            MECHANISM: ratings.py:229 always falls back to the breaststroke table
+                            so `thr_table` is never None, making `provisional` (:184) depend only
+                            on whether a pillar's own metric has a threshold — stroke-independent.
+                            54-01 dropped the seg_reliable condition and this was the collateral,
+                            unnoticed because the WEB gate was believed not to exist so nobody
+                            looked at what the web would show once lifted.
+                            LIVE CONSEQUENCE: freestyle pillar bands/scores/verdicts now display
+                            with NOTHING on screen saying they are breaststroke-derived and
+                            unvalidated, over segmentation 16-04 measured at 3/8 within ±5 SPM.
+                            **User was shown this at the checkpoint and approved.** Accepted and
+                            recorded, NOT an oversight. Phase 53 owns whether those bands should
+                            exist. STILL OPEN.
+                          ⚠ AUTO-FIX that prevented a real regression: the mount effect also
+                            assigns sessionName/notes/isStarred. Firing it on every window focus
+                            would mean type notes → alt-tab → return → unsaved notes silently
+                            replaced. `load({resetEditable})` is true only on first load.
+                          ⚠ Whether the original staleness was EVER real is still unknown — the
+                            Back-button observation was never reported. The pageshow/focus refetch
+                            is hardening against an UNCONFIRMED cause; do not describe it as a
+                            diagnosed bug fix.
+                          ⚠ PHASE 54's RECORD IS WRONG — see below; ROADMAP row corrected.
+                          Prior detail: created 2026-08-07 from two items raised at 58-02's
+                          checkpoint; originally 3 tasks with a diagnosis bisect.
+                          ⚠ **PHASE 54's RECORD IS WRONG AND THIS PLAN CORRECTS IT.** 54-01's
+                            verified-surface note says "Web has NO stroke gate (already
+                            unrestricted); the stroke gate is ratings.py:176 + mobile
+                            ReportCardScreen.js:192 only." FALSE — `web/app/app/sessions/[id]/
+                            page.js:99` has carried `isAnalyticsReady = !strokeType || strokeType
+                            === "breaststroke"` since Phase 23, gating 5 sites (view toggle,
+                            PillarCards/MetricGrid, TimeToX, per-cycle breakdown, CoachChat).
+                            The mobile half shipped in the Phase-55 build; the web half was never
+                            touched because the audit said there was nothing to touch. HOW IT
+                            SURVIVED: both copies use the SAME identifier `isAnalyticsReady`, so a
+                            grep would have found it — the miss was in the reading, not the search.
+                            ROADMAP's Phase 54 row needs the correction at UNIFY.
+                          T1 gate → true (one line, restorable, dead branch kept — 54-01's mobile
+                            pattern). Accepted consequence now applies to web too: breaststroke-
+                            derived bands over segmentation flagged unreliable. PillarCards.js:141
+                            already renders the "Provisional" banner off `p.provisional` — VERIFY
+                            it does rather than assume.
+                          ⚠ **SCOPE REVISED SAME DAY, BEFORE APPLY.** Originally opened with a
+                            diagnosis task for "saved annotation not reflected on the report card".
+                            The user then observed it updating correctly. **58-02 touched NOTHING
+                            on the report-card path** (its six files were annotations.py, tests,
+                            VideoPane, AnnotationChart, AnnotationEditor and the *annotate* page),
+                            so that improvement cannot be credited to a code change — leaving
+                            either a cache-dependent bug between appearances, or `initial_phase`
+                            carried over by design (api.py:905) being mistaken for staleness.
+                            User chose CONFIRM-AND-HARDEN over a diagnosis campaign. Dropping the
+                            diagnosis also dropped the api.py and annotate-page edits → no file
+                            contention, `depends_on []`, ONE file, no backend deploy.
+                          T2 extract the mount-only fetch (`:33-59`) into `load()`; also call it on
+                            `pageshow`/`persisted` and window `focus`. ⚠ **The bfcache case is the
+                            one `router.refresh()` CANNOT reach** — on a bfcache restore the
+                            component never re-runs, so nothing React-side fires at all.
+                            Records (non-blocking) whether a Back-button return actually reproduced
+                            the staleness — the last cheap chance to catch the original report in
+                            the act. If it does NOT reproduce, the SUMMARY must say the refetch is
+                            hardening against an unconfirmed cause, not a diagnosed one.
+                            Also surfaces `data_quality.recomputed_from_annotation` (api.py:899
+                            sets it; NOTHING renders it) — worth doing regardless: without it the
+                            coach cannot tell "annotation had no effect" from "annotation worked
+                            and the numbers barely moved", the ambiguity that produced the report.
+                          ⚠ T1 must VERIFY the "Provisional" banner still fires for freestyle —
+                            54-01 dropped `(not seg_reliable)` from that flag, so it is unclear
+                            whether PillarCards.js:141 still renders the only warning that those
+                            bands are breaststroke-derived. Check, don't assume; don't substitute.
+                          Plan: 58-video-ground-truth/58-03-PLAN.md. DO NOT APPLY until user says so.]
+```
+
+## Loop Position (58-02)
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [58-02 CLOSED 2026-08-07 — SUMMARY written (58-02-SUMMARY.md).
+                          **CHECKPOINT APPROVED** by the user. All 6 ACs pass.
+                          ⚠ PHASE 58 IS **1 of 3** PLANS CLOSED, NOT COMPLETE. 58-01 is still
+                            paused at its own checkpoint (iOS auto-stop) and 58-03 is created but
+                            unapplied. Do NOT fire a phase transition.
+                          ⚠ **R1 STILL UNANSWERED — SECOND CONSECUTIVE PLAN.** 57-02's SUMMARY had
+                            to record it unknown; 58-02's checkpoint was approved without a report
+                            on it either. Whether ~40 arm-entry marks are placeable from footage,
+                            and whether the ~4° tripod angle is legible, remain OPEN. It gates
+                            Phase 53 Track A4 and 16-06, and both 58-03 and 57-03 are being
+                            designed without it. One freestyle session end to end answers it.
+                          ⚠ AC-3 (legacy breakout annotation) was verified at UNIT level only —
+                            never against a real stored row. Confirm whether one exists.
+                          ⚠ DEPLOY ORDER — **CORRECTED 2026-08-07: EITHER ORDER IS SAFE.** The
+                            "never backend first" rule was derived before `LEGACY_PHASE_KEYS`
+                            existed and not re-derived after. The tolerance makes a new backend
+                            accept `breakout_start_s` from a stale page, so the 422 it guarded
+                            against cannot happen. Both directions verified by reading the paths.
+                          Prior detail: APPLIED 2026-08-07 — all 3 auto tasks + a checkpoint scope
+                          addition.
+                          VERIFIED: pytest 236 → **237 passed**; `npm run build` exit 0, 18 routes;
+                          route serves 200 → /login with **zero console errors on a clean tab**;
+                          the swim-window guard exists EXACTLY ONCE in page.js; git shows exactly
+                          the 6 planned files.
+                          ⚠ **`npm run build` EXIT 0 IS NOT PROOF THE PAGE WORKS.** A `//` comment
+                            placed between `return (` and the JSX made SWC fail to parse
+                            annotate/[id]/page.js — reporting it at the CLOSING BRACE ~90 lines
+                            below the real cause — and `next build` exited 0 anyway while the dev
+                            server 500'd. Only loading the route in a browser caught it. Comment
+                            now sits ABOVE the return, with a note. **Every future web plan must
+                            treat "loads in a browser" as the verification, not the build.**
+                          ⚠ SCOPE ADDED BY USER AT THE CHECKPOINT: dynamic sizing for chart, video
+                            and tools (the fixed `max-h-[34vh]` from T2 was a magic number).
+                            Replaced with viewport-relative clamps, MEASURED in a real browser at
+                            two viewports rather than eyeballed:
+                              video   `max-h-[clamp(140px,26vh,420px)]`   720h→187px  1000h→260px
+                              chart   `height="clamp(220px,30vh,480px)"`  720h→220px  1000h→300px
+                              sidebar `clamp(260px,20vw,360px)` (was a fixed 300px) 1440w→288px
+                              sidebar `lg:sticky` + `lg:max-h-[calc(100dvh-2rem)]` + own scroll,
+                                so Save/Undo stay reachable without scrolling the chart away.
+                            Vertical budget fits at BOTH ends: ~671px used of 720, ~934 of 1000.
+                            ⚠ AnnotationChart's `height` prop is now a CSS STRING, so
+                              `initialDimension` had to be pinned to a literal 320 — recharts needs
+                              a NUMBER there. A string would have silently zeroed the chart.
+                            ⚠ The chart clamp is an INLINE STYLE, not a Tailwind class, so it does
+                              NOT appear in the CSS bundle — verified instead via the live CSSOM
+                              (accepted verbatim, computed correctly, floor honored at 720h).
+                          DEVIATIONS (3, all minor): (1) `annotations.py:234` still contains the
+                            word "breakout" in validate_annotation's docstring — an accurate
+                            historical note on why the swim-window check exists; kept deliberately
+                            over satisfying the plan's grep. (2) keyboard help text went into
+                            AnnotationEditor.js, where the "Pick a tool…" copy lives, not page.js
+                            as Task 3's <files> said — the task's own <action> pointed there.
+                            (3) `test_round_trip_upsert`'s breakout assertion was carrying the
+                            "absent keys normalized" coverage, so it was SPLIT into two assertions
+                            rather than replaced — a straight swap would have silently dropped it.
+                          Original plan record follows.
+                          58-02 created 2026-08-07 — annotate page usable with video + Breakout
+                          removed. autonomous:false, depends_on []. 3 auto tasks + 1 human-verify.
+                          6 files: annotations.py, tests/test_annotations.py, VideoPane.js,
+                          AnnotationChart.js, AnnotationEditor.js, annotate/[id]/page.js.
+                          Suite 236 → 237 (one added legacy-tolerance test).
+                          T1 Breakout removal as a VERTICAL SLICE (contract + tests + UI in one
+                            task — the key is meaningless in isolation and the deploy-order rule is
+                            only checkable across both halves). `LEGACY_PHASE_KEYS` tolerated by
+                            validate_annotation but NOT added to the ordering walk — ignored, not
+                            enforced. Deleting the single `PHASE_META` entry removes the marker from
+                            the palette, the phase rows, the band tiling and `normalizePhases`,
+                            because all four are derived; do not hand-edit consumers.
+                          T2 VideoPane: `max-h-[34vh]` + **`object-contain`** (without it the cap
+                            CROPS instead of letterboxing); frame-step pauses BEFORE seeking and
+                            calls `onPlayhead` explicitly (`timeupdate` is throttled and misses
+                            sub-100 ms seeks, leaving the chart playhead stale exactly when
+                            precision matters); playbackRate applied in an effect AND
+                            `onLoadedMetadata`, because a new `src` resets it to 1.
+                          T3 page.js: `max-w-7xl`; `placeStrokeMark(t)` extracted so the
+                            swim-window guard exists ONCE and cannot drift from the 57-01 server
+                            rule; arrows step frames with nothing selected / nudge with something
+                            selected, `preventDefault()` LOAD-BEARING (a focused `<video controls>`
+                            seeks ±5 s on those keys in Chrome); Escape deselects; `M` marks at the
+                            playhead and deliberately does NOT select the new mark, or the
+                            step-mark-step loop breaks on its second iteration.
+                          ⚠ NOTHING RECOMPUTES — the distinguishing property vs 57-01.
+                            `annotation_to_overrides` only ever read dive/stroke/finish. If a metric
+                            moves during apply, STOP and report; do not adjust a threshold.
+                          ⚠ api.py deliberately UNTOUCHED — :857 rebuilds `phases` from PHASE_KEYS,
+                            so the endpoint follows the contract change with no edit. Keeps this plan
+                            off the Railway critical path.
+                          ⚠ patch_07 comments naming Breakout are LEFT ALONE — rewriting the
+                            comments of an APPLIED migration falsifies history.
+                          ⚠ END-ANCHOR IS OUT (→ future 58-03): the D8 option the user declined was
+                            the one bundling it. Until 58-03, every record-with-video session still
+                            needs the Video Overlay tap on the phone or it arrives at origin_s = 0.
+                          ⚠ CHECKPOINT NEEDS A SESSION WITH VIDEO — per 57-02's close, NONE of the
+                            19 have one; only the 2026-07-20 session does. Use 2026-08-06 tripod
+                            footage if it exists, else VideoPane's "Attach video" input.
+                          ⭐ Checkpoint is also the first real chance to close **57-02's R1**, still
+                            formally UNKNOWN — whether arm entries are placeable from footage. The
+                            SUMMARY is required to record the answer; 57-02's could not.
+                          Plan: 58-video-ground-truth/58-02-PLAN.md. DO NOT APPLY until user says so.]
+```
+
+## Loop Position (58-01)
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [58-01 CLOSED 2026-08-07 — SUMMARY written (58-01-SUMMARY.md).
+                          ⚠⚠ **CHECKPOINT APPROVED ON ASSUMPTION, NOT ON DEVICE EVIDENCE.** User:
+                            "assume 58-01 is working. approve it." NO on-device verification was
+                            reported. Every AC rests on static evidence (export, grep, extracted-
+                            function testing) plus that approval. THREE THINGS REMAIN GENUINELY
+                            UNVERIFIED:
+                              1. Auto-stop has NEVER fired against real hardware. A too-early stop
+                                 is the one failure mode here that DESTROYS data rather than
+                                 annoying — it loses the end of the swim.
+                              2. The checkpoint doubled as CONTEXT-R1's legibility test (film one
+                                 25 from three tripod positions). Not reported. **R1 IS NOW
+                                 UNANSWERED ACROSS THREE CONSECUTIVE CHECKPOINTS** — 57-02, 58-02,
+                                 58-01. It gates Phase 53 Track A4 and 16-06.
+                              3. `video_origin_s` still needs the Video Overlay tap until 58-04.
+                          ⚠ MOBILE REPO ONLY (`swimnetics-mobile`, separate, user-owned git).
+                            NOT part of the myswimcoach push. 7 files changed there, uncommitted.
+                          Prior detail: APPLIED 2026-08-05 — all 3 auto tasks done, **PAUSED AT THE
+                          human-verify CHECKPOINT** (iOS behavior on a hardware flow; neither
+                          export nor grep can judge it).
+                          VERIFIED SO FAR: `npx expo export --platform ios` exit 0, **1076 modules**
+                          (was 1075 — the one new module is autoStopPrefs.js); `git status` in
+                          swimnetics-mobile shows EXACTLY the 3 planned files; `git status` in
+                          myswimcoach shows NO new changes from this plan (the web/blog entries and
+                          57-02-SUMMARY.md predate it / come from the other environment).
+                          `clampAutoStopS` was extracted and run through node: 999→300, -5→0, 0→0,
+                          20→20, 2→5, "30"→30, "abc"/null/undefined→0, 300.7→300.
+                          ⚠ DEVIATION (1, and it was a real latent bug): **the plan said 4 cleanup
+                          sites; there are 5.** `reset()` (RecordScreen.js:626) also clears
+                          `elapsedTimerRef` and was missed at plan time. It is the WORST one to miss:
+                          reset() sets `isStoppingRef.current = false`, so a surviving deadline would
+                          pass the double-stop guard and fire a real STOP + retrieval into an
+                          abandoned session. Now cleared there too — parity is 5/5, asserted by grep
+                          count. The plan's RULE ("every place that stops the elapsed tick must also
+                          disarm this") was right; only its COUNT was wrong.
+                          IMPLEMENTATION NOTE beyond the plan: the config field keeps the raw text in
+                          `autoStopText` and commits on blur/submit, not per keystroke. Without that,
+                          typing "20" passes through "2" → clamped up to the 5 s floor mid-typing, and
+                          an empty field reads as 0 → silently switches auto-stop OFF. The clamp
+                          itself is unchanged; this is purely about when it is applied.
+                          Countdown renders in BOTH record states (plain :746, video :702).
+                          ⚠ SCOPE ADDED BY USER AT THE CHECKPOINT (2026-08-05) — 3 more files,
+                          explicitly authorized, and it CROSSES 58-01's "DO NOT CHANGE
+                          VideoOverlayScreen.js" boundary by direction. Trigger: user reported "I
+                          can't view video on mobile."
+                          ROOT CAUSE FOUND (two, the second worse than the first):
+                            (a) `video: { aspectRatio: 3/4 }` (VideoOverlayScreen.js:207) is a
+                                WIDTH-locked box. Portrait 9:16 footage in it is ~693pt tall on a
+                                390pt screen — it buries the 170pt chart. FIX: `flex: 1` instead,
+                                so the video takes what the fixed rows below leave and
+                                contentFit="contain" pillarboxes inside. No hardcoded aspect →
+                                adapts to any screen or clip shape. User directed "assume portrait"
+                                and "keep video separate from trace + playhead" (i.e. NOT the
+                                HUD-overlay option) — stacked flex regions satisfy both.
+                            (b) **Video was viewable in exactly ONE place, once.** VideoOverlay is
+                                reachable only from RecordScreen.js:936 (the just-recorded results
+                                state) and hard-gates on a LOCAL `videoUri`; nothing on mobile calls
+                                `/sessions/{id}/video-url`; `expo-media-library` was not a
+                                dependency, so the clip never reached the camera roll. Navigate away
+                                → that footage is unviewable on the phone forever. Compounds with
+                                the sync gap, since that same screen is the only thing that POSTs
+                                `video_origin_s`. FIX: NEW dep `expo-media-library ~56.0.10` +
+                                `saveVideoToLibrary()` called after recordAsync resolves.
+                                Write-only grant (`requestPermissionsAsync(true)`) → needs only
+                                NSPhotoLibraryAddUsageDescription, not full-library read. Every
+                                failure path swallowed — a denied library permission must never cost
+                                a session.
+                          ⚠ Info.plist edited DIRECTLY, and expo-doctor confirms that was the only
+                            working path: "native project folders but also native configuration
+                            properties in app.json … EAS Build will not sync: scheme, orientation,
+                            userInterfaceStyle, ios, **plugins**, android." Adding the plugin to
+                            app.json would have been INERT. (Matches the standing bare-workflow note.)
+                          ⚠ expo-doctor: 4 packages out of date — expo 56.0.12 vs ~56.0.18,
+                            expo-audio, expo-dev-client, react-native-screens 4.25.2 vs ~4.26.0.
+                            **PRE-EXISTING, NOT introduced here** (expo-media-library installed AT
+                            the SDK-matched version). This exact combination is what the Phase-55
+                            build shipped and it was verified on device 2026-08-05. RECOMMENDED
+                            AGAINST running `expo install --check` before this build: upgrading 4
+                            packages the night before a pool session is a bigger risk than a
+                            device-proven skew, and SDK-56 version skew is precisely the failure that
+                            builds clean then dyld-crashes at launch.
+                          `npx expo export --platform ios` exit 0, bundle 3.2MB → 3.3MB
+                          (expo-media-library). 7 files now changed in the mobile repo, not 3.
+                          NOT committed (user runs git).
+                          Original plan record follows.
+                          58-01 created 2026-08-05 — iOS auto-stop, default 20 s. MOBILE REPO
+                          ONLY (new src/lib/autoStopPrefs.js + RecordingConfigScreen.js +
+                          RecordScreen.js). 3 tasks + 1 human-verify checkpoint; autonomous:false,
+                          depends_on []. Nothing in myswimcoach/ is touched — that is an explicit
+                          boundary and a verification item.
+                          KEY DESIGN POINTS: armed immediately after `writeCmd('START')` resolves
+                          (the blare) at the two sites where `elapsedTimerRef` already starts, so
+                          countdown and deadline share one clock — arming in `beginPlain` /
+                          `startVideoRecording` would fold in the race sequence's deliberately
+                          RANDOM hold; fires the correct stop per path via a new `stopPlainRef`
+                          mirroring the existing `stopVideoRef` (both stop callbacks are defined
+                          AFTER their start functions, so neither is in scope at arm time);
+                          cleared at all four sites that already clear `elapsedTimerRef`;
+                          0 = disabled, so AC-6 falls out of the same `autoStopS > 0` guard and no
+                          second SecureStore key is needed; route-param default is 0 so any caller
+                          that omits it — including a stale never-unmounted params object on that
+                          tab screen — behaves exactly as today.
+                          CHECKPOINT DOUBLES AS THE R1 LEGIBILITY TEST (no encoder/BLE/app needed)
+                          and carries the standing reminder that Video Overlay must be opened once
+                          per video session or `video_origin_s` never posts.
+                          Awaiting approval.]
+```
+
+**Prior focus: Phase 57 (Annotation Workflow — annotate-tool v2)** — discussed 2026-08-05 via
   /paul:discuss; CONTEXT.md written, NOT yet planned.
   TRIGGER: **19 trustworthy sessions collected 2026-08-05** — 10 freestyle, 4 breaststroke, 4 fly,
   1 backstroke. First corpus postdating the 2026-06-22 encoder-integrity fixes (every CSV in `raw/`
@@ -395,9 +801,17 @@
 ## Loop Position (57-02)
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ◐        ○     [57-02 APPLIED 2026-08-05 — all 3 auto tasks done; **PAUSED AT THE
-                          human-verify CHECKPOINT** (needs a logged-in browser; the annotate page
-                          sits behind coach auth).
+  ✓        ✓        ✓     [57-02 CLOSED 2026-08-05 — SUMMARY written (57-02-SUMMARY.md).
+                          **CHECKPOINT APPROVED** by the user on the deployed portal. All 7 ACs pass.
+                          ⚠ PHASE 57 IS **2 of 3** PLANS, NOT COMPLETE — the mechanical
+                          "PLAN count == SUMMARY count" rule (2 and 2) would fire a phase transition
+                          again; do NOT. 57-03 (queue + prev/next) is in ROADMAP and still owed.
+                          ⚠ R1 STILL UNANSWERED — the plan asked the SUMMARY to record whether ~40
+                          arm-entry marks are genuinely placeable from the velocity trace alone. The
+                          checkpoint was approved without a report on that point, so it is recorded
+                          as UNKNOWN, not settled. 57-03's queue design must not assume the answer;
+                          annotating one real freestyle session end to end is what resolves it.
+                          57-02 APPLIED 2026-08-05 — all 3 auto tasks done, then the checkpoint.
                           VERIFIED SO FAR: `npm run build` exit 0 (18 routes, /app/annotate/[id]
                           compiles); dev server serves the route 200 then correctly redirects to
                           /login; zero console errors, zero compile errors; `pytest tests/ -q` still
@@ -432,6 +846,25 @@ PLAN ──▶ APPLY ──▶ UNIFY
                           new optional 4th arg, new response keys, k=1 path byte-identical. The only
                           behavior change for existing clients is the intended 422 on out-of-window
                           marks.
+                          **57-02 ALSO COMMITTED + DEPLOYED 2026-08-05 at user direction, BEFORE
+                          the checkpoint ran** — `16c1d92` (web) + `de35c0d` (tooling/firmware),
+                          pushed 71d7012..de35c0d → Vercel + Railway. I flagged twice that the
+                          checkpoint is the gate and that this ships a page nobody has opened in a
+                          browser; user chose to deploy anyway. Their call. Revert is one commit if
+                          the checkpoint finds problems. **THE CHECKPOINT IS STILL OPEN** —
+                          deploying verified nothing; it only moved where verification happens.
+                          `de35c0d` also finally commits the long-flagged "untracked, only copy"
+                          files: ESP_32_V5.ino warmup work, tools/introspect_schema.py +
+                          schema_contract.py, supabase/live_schema.json, patch_06,
+                          as5600_diagnostic/, assets/, .mcp.json, .gitignore. None deploy anywhere.
+                          ⚠ DELIBERATELY HELD BACK from "commit and deploy everything": the BLOG —
+                          `web/app/blog/`, `web/lib/blog.js` (7 posts) and the Footer/Nav links,
+                          which are purely blog entry points. Committing those PUBLISHES founder-
+                          journal posts to the public marketing site. That is outward-facing
+                          publication, not internal tooling, and it was not part of anything asked
+                          for in this session — so it needs an explicit yes rather than being swept
+                          in. Phase 46 built it; it has never been committed. `.mcp.json` was
+                          checked for credentials before committing (clean — shadcn npx only).
                           NOTE: no unauthenticated way exists to confirm the new code is live —
                           checkpoint step 5 doubles as the deploy check (a freestyle readout of N/2
                           proves `marks_per_cycle` arrived; N-1 means the deploy has not landed).

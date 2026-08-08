@@ -95,7 +95,7 @@ class TestBuildSeed:
         p = seed["phases"]
         assert p["dive_start_s"] == pytest.approx(1.2)
         assert p["underwater_start_s"] == pytest.approx(2.0)  # baseline + dive duration
-        assert p["breakout_start_s"] is None  # no automatic detection
+        assert "breakout_start_s" not in p  # retired from the contract (Phase 58 D7a)
         assert p["stroke_start_s"] == pytest.approx(4.5)  # initial_phase_end_idx / 100
         assert p["finish_s"] == pytest.approx(9.1)  # last cycle end_idx / 100
         assert seed["stroke_marks_s"] == [5.0, 7.0]
@@ -133,6 +133,8 @@ class TestBuildSeed:
 
 class TestValidateAnnotation:
     def test_valid_full_doc(self):
+        # Deliberately still carries breakout_start_s: after Phase 58 retired that key this
+        # doubles as the "a doc written under the old contract still validates" case.
         doc = {
             "phases": {"dive_start_s": 1.0, "underwater_start_s": 2.0,
                        "breakout_start_s": 3.0, "stroke_start_s": 4.0, "finish_s": 9.0},
@@ -140,6 +142,21 @@ class TestValidateAnnotation:
             "source": "manual",
         }
         assert annot.validate_annotation(doc, 30.0) == []
+
+    def test_legacy_breakout_key_tolerated(self):
+        # Phase 58 D7b: retired keys are ignored on read, never rejected and never honored.
+        doc = {"phases": {"breakout_start_s": 3.0}}
+        assert annot.validate_annotation(doc, 30.0) == []
+        # ...and it reaches no metric boundary — the proof that D7 recomputes nothing.
+        overrides = annot.annotation_to_overrides(doc, 1000, 100.0)
+        assert "baseline_end_idx" not in overrides
+        assert "ip_end_idx" not in overrides
+        assert "swim_end_idx" not in overrides
+        assert overrides == {}
+        # An out-of-order legacy value is ignored rather than enforced against.
+        assert annot.validate_annotation(
+            {"phases": {"breakout_start_s": 99.0, "dive_start_s": 1.0}}, 30.0
+        ) == []
 
     def test_valid_partial_doc(self):
         assert annot.validate_annotation({"phases": {"finish_s": 9.0}}, 30.0) == []
@@ -236,7 +253,10 @@ class TestPutAnnotations:
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["phases"]["stroke_start_s"] == pytest.approx(4.2)
-        assert data["phases"]["breakout_start_s"] is None  # absent keys normalized
+        assert data["phases"]["underwater_start_s"] is None  # absent keys normalized
+        # api.py rebuilds `phases` from PHASE_KEYS, so a retired key never reaches the row.
+        # This is the strict-write half of Phase 58 D7b.
+        assert "breakout_start_s" not in data["phases"]
         assert data["stroke_marks_s"] == [5.0, 6.2]
         assert data["source"] == "manual"
         record, kwargs = (admin._tables["session_annotations"].upsert.call_args[0][0],

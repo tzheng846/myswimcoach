@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiUpload } from "@/lib/api";
+
+// One frame, assumed. HTML5 video exposes no frame rate — requestVideoFrameCallback
+// would, and is deliberately not used: reading true frame timing is a bigger change than
+// stepping needs. At 60 fps footage this steps two frames, which is still far finer than
+// the ~±0.3 s a scrub lands within.
+const FRAME_S = 1 / 30;
+
+const RATES = [0.25, 0.5, 1];
 
 // Session video: signed-URL playback synced to the velocity trace.
 // sessionTime = originS + videoTime (44-03 end-anchor convention).
@@ -11,6 +19,7 @@ export default function VideoPane({
   video, // {path, origin_s} | null
   onPlayhead, // (sessionTimeS | null) => void
   seekRef, // ref; pane assigns seekRef.current = (sessionTimeS) => void
+  frameStepRef, // ref; pane assigns frameStepRef.current = (frames) => void
   onVideoChange, // ({path, origin_s}) => void
 }) {
   const videoRef = useRef(null);
@@ -19,6 +28,7 @@ export default function VideoPane({
   const [savedOrigin, setSavedOrigin] = useState(video?.origin_s ?? 0);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [rate, setRate] = useState(1);
 
   // Signed URL expires (3600 s) — always refetched on mount, never persisted.
   useEffect(() => {
@@ -59,6 +69,39 @@ export default function VideoPane({
       seekRef.current = null;
     };
   }, [seekRef, originS, url, onPlayhead]);
+
+  // Frame step. Pause FIRST — stepping while playing fights the playhead — and push the
+  // new time to the chart explicitly: `timeupdate` is throttled to ~4 Hz and does not
+  // fire for a sub-100 ms seek, which would leave the chart marker stale exactly when
+  // precision matters.
+  const step = useCallback(
+    (frames) => {
+      const v = videoRef.current;
+      if (!v) return;
+      v.pause();
+      const dur = Number.isFinite(v.duration) ? v.duration : 0;
+      v.currentTime = Math.min(Math.max(v.currentTime + frames * FRAME_S, 0), dur);
+      onPlayhead?.(originS + v.currentTime);
+    },
+    [originS, onPlayhead]
+  );
+
+  // Expose frame stepping to the page, mirroring the seekRef contract above — the
+  // keyboard shortcut must work when the <video> element does not have focus.
+  useEffect(() => {
+    if (!frameStepRef) return;
+    frameStepRef.current = step;
+    return () => {
+      frameStepRef.current = null;
+    };
+  }, [frameStepRef, step]);
+
+  // Loading a new src resets playbackRate to 1, so setting it once on click would
+  // silently revert. Applied here AND in onLoadedMetadata.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (v) v.playbackRate = rate;
+  }, [url, rate]);
 
   const nudge = (d) => {
     const next = Math.round((originS + d) * 100) / 100;
@@ -140,7 +183,14 @@ export default function VideoPane({
           src={url}
           controls
           playsInline
-          className="w-full rounded-lg bg-black"
+          // Height scales with the viewport instead of being a fixed cap, clamped so it
+          // neither collapses on a short laptop nor eats a tall monitor. object-contain
+          // is what letterboxes portrait footage inside that box — without it, it crops.
+          className="w-full max-h-[clamp(140px,26vh,420px)] rounded-lg bg-black object-contain"
+          onLoadedMetadata={() => {
+            const v = videoRef.current;
+            if (v) v.playbackRate = rate;
+          }}
           onTimeUpdate={() => {
             const v = videoRef.current;
             if (v) onPlayhead?.(originS + v.currentTime);
@@ -149,6 +199,37 @@ export default function VideoPane({
       ) : (
         <p className="py-6 text-center text-xs text-muted">Loading video…</p>
       )}
+      {/* Frame step + playback speed — reading an arm entry needs both */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        <button
+          onClick={() => step(-1)}
+          className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink"
+          title="Back one frame (← with nothing selected)"
+        >
+          −1 frame
+        </button>
+        <button
+          onClick={() => step(1)}
+          className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink"
+          title="Forward one frame (→ with nothing selected)"
+        >
+          +1 frame
+        </button>
+        <span className="ml-1 text-muted">Speed</span>
+        {RATES.map((r) => (
+          <button
+            key={r}
+            onClick={() => setRate(r)}
+            className={`rounded-md border px-2 py-1 font-semibold ${
+              rate === r
+                ? "border-accent bg-accent text-white"
+                : "border-surface-3 bg-surface-2 text-subtle hover:text-ink"
+            }`}
+          >
+            {r}×
+          </button>
+        ))}
+      </div>
       {/* Sync: sessionTime = origin + videoTime */}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
         <span className="text-muted">Sync offset</span>

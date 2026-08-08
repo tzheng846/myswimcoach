@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useMemo, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api";
@@ -30,8 +30,16 @@ export default function ReportCardPage({ params }) {
   const [markerTimeS, setMarkerTimeS] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
 
-  useEffect(() => {
-    (async () => {
+  // Sequence guard: load() can now be triggered from three places, so a slow earlier
+  // response must not overwrite a newer one.
+  const reqRef = useRef(0);
+
+  // resetEditable is only true on the initial load. A revalidation must NOT reassign
+  // sessionName / notes / isStarred: those are user-owned local state that PATCHes on
+  // blur, and clobbering them would silently discard notes typed before an alt-tab.
+  const load = useCallback(
+    async ({ resetEditable = false } = {}) => {
+      const seq = ++reqRef.current;
       const { data: row, error: err } = await supabase
         .from("sessions")
         .select(
@@ -39,24 +47,52 @@ export default function ReportCardPage({ params }) {
         )
         .eq("id", sessionId)
         .single();
+      if (seq !== reqRef.current) return; // superseded by a newer load
       if (err) {
         setError("Failed to load session.");
         return;
       }
       setData(row);
-      setSessionName(row.name ?? "");
-      setIsStarred(row.is_starred ?? false);
-      setNotes(row.notes ?? "");
+      if (resetEditable) {
+        setSessionName(row.name ?? "");
+        setIsStarred(row.is_starred ?? false);
+        setNotes(row.notes ?? "");
+      }
       if (row.athlete_id) {
         const { data: ath } = await supabase
           .from("athletes")
           .select("name, head_waist_m")
           .eq("id", row.athlete_id)
           .single();
+        if (seq !== reqRef.current) return;
         setAthlete(ath);
       }
-    })();
-  }, [sessionId]);
+    },
+    [sessionId]
+  );
+
+  useEffect(() => {
+    load({ resetEditable: true });
+  }, [load]);
+
+  // Revalidate on return, because mounting is the one moment a bfcache restore skips:
+  // the browser brings the whole JS heap back, so React never re-runs and `data` keeps
+  // whatever it was holding — including auto metrics for a session annotated since.
+  // router.refresh() cannot reach this; nothing React-side fires at all on a restore.
+  // `focus` covers the ordinary alt-tab case, matching the useFocusEffect convention the
+  // mobile tab screens settled on in Phase 55.
+  useEffect(() => {
+    const onPageShow = (e) => {
+      if (e.persisted) load();
+    };
+    const onFocus = () => load();
+    window.addEventListener("pageshow", onPageShow);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [load]);
 
   const patchSession = useCallback(
     async (updates) => {
@@ -95,8 +131,18 @@ export default function ReportCardPage({ params }) {
 
   const metrics = data.metrics_json ?? {};
   const strokeType = data.stroke_type;
-  // null stroke_type = legacy session = show full analytics
-  const isAnalyticsReady = !strokeType || strokeType === "breaststroke";
+  // Phase 58-03: every stroke gets full analytics on the web. This was
+  //     const isAnalyticsReady = !strokeType || strokeType === "breaststroke";
+  // — the web twin of the mobile gate 54-01 removed. Phase 54's audit recorded that the web had
+  // no stroke gate, so this copy was missed and the web stayed breaststroke-only for two days
+  // after the iOS unlock shipped. Restore by putting that line back; every usage site and the
+  // "coming soon" branch below are deliberately kept so it stays a one-line change.
+  //
+  // ⚠ The bands shown for non-breaststroke are BREASTSTROKE-DERIVED and unvalidated (ratings.py
+  // falls back to that table for every stroke). `provisional` is False for all four strokes, so
+  // PillarCards' "Provisional" banner does NOT fire — nothing on screen says the bands are
+  // borrowed. Whether that caveat should exist is Phase 53's question, not this plan's.
+  const isAnalyticsReady = true;
   const unitFactor = unit === "imperial" ? 1.09361 : 1;
   const velUnit = unit === "imperial" ? "yd/s" : "m/s";
   const date = new Date(data.created_at).toLocaleDateString("en-US", {
@@ -194,6 +240,22 @@ export default function ReportCardPage({ params }) {
 
       <div className="mt-4 space-y-3">
         <SessionSummaryCard session={metrics.session} unit={unit} />
+
+        {/* Provenance. api.py:899 has always set this flag on a successful recompute and
+            nothing has ever rendered it — so a coach could not tell "my annotation had no
+            effect" from "it worked and the numbers barely moved". */}
+        {metrics.data_quality?.recomputed_from_annotation && (
+          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs leading-relaxed text-subtle">
+            <span aria-hidden="true">✎</span>
+            These metrics were recomputed from a hand annotation — not auto-segmentation.
+            <Link
+              href={`/app/annotate/${sessionId}`}
+              className="font-semibold text-primary"
+            >
+              Review marks ›
+            </Link>
+          </p>
+        )}
 
         {isAnalyticsReady ? (
           view === "advanced" ? (
