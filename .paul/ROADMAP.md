@@ -363,6 +363,50 @@ from a 58 regression.
   posting `video_origin_s`. Split out of 58-02 because the D8 option the user declined bundled it.
   **Until this lands, every record-with-video session must be opened once in Video Overlay on the
   phone or it arrives on the web at `origin_s = 0`, silently unsynced.**
+- [x] 58-05 ✅ **COMPLETE 2026-08-07** — all 5 ACs pass, checkpoint approved. 2 files, suite still
+  237, build exit 0, zero console errors. Cards now carry an auto-generated title
+  (`"Freestyle · 8:24 PM"`, display-only), the athlete name, a weekday-or-date, and prominent
+  **✎ Annotated** / 🎥 Video / ⚠ Quality chips; the list revalidates on `pageshow`/`focus` so the
+  Annotated chip appears without a manual reload.
+  ⭐ **The kick trap was VERIFIED, not assumed** — the shipped `qualityIssue` was extracted and run:
+  kick-only → `null`, kick+real → the real warning, 6.2% dropout → flagged, 3.0% → null, thresholds
+  matching `DataQualityCard`. The ⚠ will not be universal. 7-day boundary exact (6.9 d → `"Sun"`,
+  7.1 d → `"08-01-26"`); null/unknown stroke → `"Session · …"`, no crash.
+  ⚠ **RECOMMENDATION: DROP 57-03's SEPARATE QUEUE PAGE.** It existed because "a timestamp-only list
+  will be unusable"; that constraint is gone. The sessions list already IS a queue — newest-first,
+  filterable by stroke + athlete, shows annotated state, revalidates. A second page would duplicate
+  it and need syncing forever. What genuinely remains: **prev/next on the annotate page** (the real
+  throughput win, still unaddressed) and a **"Not annotated" filter chip** (~10 lines; the annotated
+  Set is already in that component's state).
+  ⚠ Checkpoint approved without itemised answers to the two questions the plan asked it to report
+  (are the 19 distinguishable in practice; is ⚠ informative on real data). SUMMARY: 58-05-SUMMARY.md.
+  Original scope follows.
+- [ ] ~~58-05 PLAN created 2026-08-07, awaiting approval~~ — session-card legibility. Web only,
+  **2 files** (`app/app/sessions/page.js`, `components/portal/SessionCard.js`), no backend, no
+  schema, no new dep. 2 tasks + 1 human-verify; `autonomous:false`, `depends_on []`.
+  TRIGGER: the card shows a bare date, so the 19-session corpus renders as nineteen rows reading
+  "Aug 5, 2026". Adds an auto-generated title (`"{Stroke} · 8:24 PM"`, display-only — `sessions.name`
+  is never written, so all 19 are fixed with no backfill and a typed name still wins), the athlete
+  name (the card has never shown whose session it is), weekday-within-7-days else MM-DD-YY, and
+  prominent **Annotated** / 🎥 video / ⚠ quality indicators.
+  ⚠ **THE USER'S DATE RULE HAD TO BE ADJUSTED, with evidence:** 57-01's Supabase read established
+  the 19 are **a time block on one evening (19:50–20:59), not a date** — plain day-of-week would
+  render all nineteen as "Wed". Time therefore lives in the TITLE and the weekday in the meta line,
+  which separates them without duplicating anything.
+  ⚠ **TRAP FOUND AT PLAN TIME:** `metrics.py` sets `kick_metrics_reliable = False` on EVERY session,
+  so a naive `warnings.length > 0` quality check would put ⚠ on literally every card and the
+  indicator would carry zero information. The plan mirrors `DataQualityCard.js:28-31`'s deliberate
+  kick-warning exclusion, and the checkpoint explicitly asks the user to report if ⚠ is universal.
+  ⚠ **NO BACKEND NEEDED:** `session_annotations` is readable straight from supabase-js — patch_07
+  creates a `FOR ALL` team-scoped RLS policy. "Annotated" is one extra key-only query, not an
+  endpoint. Its tooltip distinguishes *metrics recomputed* from *marks saved but too few cycle
+  boundaries* — conflating those is how a coach concludes an annotation "did nothing".
+  Reuses 58-03's `pageshow`/`focus` revalidation so the Annotated marker appears after annotating
+  without a manual reload (a marker that lags reads as "not yet done").
+  ⚠ **RE-SCOPES 57-03.** That plan's own summary names "a timestamp-only list will be unusable" as
+  its blocking constraint; this solves it on the list that already exists. The SUMMARY is required
+  to recommend whether a separate queue page is still worth building, or whether prev/next on the
+  annotate page is all that remains.
   ⚠ **PHASE 58 IS NOT COMPLETE.** 58-01/02/03 are closed and all three have SUMMARYs, so the
   mechanical "PLAN count == SUMMARY count" rule WOULD fire a phase transition — do NOT. This plan is
   owed, and **CONTEXT R1 is unanswered after three consecutive checkpoints** (57-02, 58-02, 58-01):

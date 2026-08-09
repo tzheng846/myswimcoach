@@ -110,6 +110,71 @@
   ⚠ CONCURRENCY: ROADMAP.md was modified on disk mid-session by another PAUL environment (the edit
     still applied cleanly). Commit `.paul/` between sessions so this surfaces as a merge conflict.
 
+## Loop Position (58-05)
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [58-05 CLOSED 2026-08-07 — SUMMARY written. Checkpoint APPROVED.
+                          All 5 ACs pass. 2 files, suite still 237, build exit 0, zero console
+                          errors on /app/sessions.
+                          ⭐ THE KICK TRAP WAS VERIFIED, NOT ASSUMED — shipped `qualityIssue`
+                            extracted and run: kick-only → null, kick+real → the real one, 6.2%
+                            dropout → flagged, 3.0% → null, thresholds matching DataQualityCard.
+                            The ⚠ indicator will NOT be universal.
+                          ⭐ 7-day boundary exact: 6.9 d → "Sun", 7.1 d → "08-01-26"; zero-padding
+                            "01-09-26"; null/bogus stroke → "Session · 1:24 PM", no crash.
+                          AUTO-FIX: header bottom margin made conditional on whether a chip row
+                            follows, so cards with NO chips stay pixel-identical to before.
+                          ⚠ **RECOMMENDATION ON 57-03 (required by the plan): DROP THE SEPARATE
+                            QUEUE PAGE.** 57-03 existed because "a timestamp-only list will be
+                            unusable" — that constraint is gone. The sessions list already IS a
+                            queue: newest-first, filterable by stroke + athlete, shows annotated
+                            state, revalidates on return. A second page would duplicate it and
+                            need syncing forever. WHAT REMAINS: (1) prev/next on the annotate page
+                            — the real throughput win, still unaddressed; (2) a "Not annotated"
+                            filter chip beside the stroke chips, ~10 lines since the annotated Set
+                            is already in that component's state.
+                          ⚠ Checkpoint approved WITHOUT itemised answers to the two questions the
+                            plan asked it to report: whether the 19 are in practice distinguishable,
+                            and whether ⚠ is informative on real data. Mechanisms proven by the
+                            extracted-function run; the real-data judgement is not recorded.
+                          Prior detail: created 2026-08-07 — session-card legibility. Web only, 2 files
+                          (`app/app/sessions/page.js`, `components/portal/SessionCard.js`), NO
+                          backend, NO schema, NO new dep. autonomous:false, depends_on [].
+                          TRIGGER: the card shows a bare date, so the 19-session corpus renders as
+                          nineteen rows reading "Aug 5, 2026".
+                          USER DECISIONS (AskUserQuestion ×4): web-only (mobile untouched, cards
+                          will diverge — accepted); auto-name is DISPLAY-ONLY (`sessions.name` is
+                          never written → all 19 fixed with no backfill, typed names still win);
+                          weekday+time then date+time; extras = athlete name + 🎥 video + ⚠ quality.
+                          Duration-instead-of-Distance was offered and DECLINED — stat row unchanged.
+                          ⚠ **THE DATE RULE AS ASKED WOULD HAVE FAILED ON THIS EXACT CORPUS.**
+                            57-01's Supabase read established the 19 are a TIME BLOCK on one evening
+                            (19:50–20:59), not a date — plain day-of-week renders all nineteen as
+                            "Wed". Resolution: time in the TITLE, weekday in the META line, so they
+                            separate without duplicating.
+                          ⚠ **TRAP FOUND AT PLAN TIME:** metrics.py sets `kick_metrics_reliable =
+                            False` on EVERY session, so a naive `warnings.length > 0` quality check
+                            would put ⚠ on literally every card, carrying zero information. Plan
+                            mirrors DataQualityCard.js:28-31's kick-warning exclusion, and the
+                            checkpoint explicitly asks the user to report if ⚠ is universal.
+                          ⚠ **NO BACKEND NEEDED** — `session_annotations` is readable straight from
+                            supabase-js (patch_07 creates a FOR ALL team-scoped RLS policy). One
+                            key-only query, not an endpoint. Tooltip distinguishes *metrics
+                            recomputed* from *marks saved, too few cycle boundaries* — conflating
+                            them is how a coach concludes an annotation "did nothing".
+                          Reuses 58-03's pageshow/focus revalidation (a marker that lags after
+                            annotating reads as "not yet done"). 58-03's `resetEditable` hazard does
+                            NOT apply here — no user-editable local state on this page; the plan
+                            says confirm that rather than assume it.
+                          ⚠ **RE-SCOPES 57-03**: that plan's summary names "a timestamp-only list
+                            will be unusable" as its blocker; this solves it on the list that already
+                            exists. The SUMMARY must recommend whether a separate queue page is still
+                            worth building or whether prev/next is all that remains.
+                          Numbering: 58-04 (VideoPane end-anchor) is already registered as owed and
+                            referenced across 4 files, so this took 58-05 rather than renumbering it.
+                          Plan: 58-video-ground-truth/58-05-PLAN.md. DO NOT APPLY until user says so.]
+```
+
 ## Loop Position (58-03)
 ```
 PLAN ──▶ APPLY ──▶ UNIFY

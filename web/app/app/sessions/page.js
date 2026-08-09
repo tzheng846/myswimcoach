@@ -23,6 +23,7 @@ function SessionsView() {
 
   const [athletes, setAthletes] = useState([]);
   const [sessions, setSessions] = useState(null);
+  const [annotated, setAnnotated] = useState(() => new Set());
   const [strokeFilter, setStrokeFilter] = useState("all");
 
   useEffect(() => {
@@ -37,17 +38,49 @@ function SessionsView() {
     let q = supabase
       .from("sessions")
       .select(
-        "id, created_at, name, is_starred, stroke_type, athlete_id, session:metrics_json->session"
+        "id, created_at, name, is_starred, stroke_type, athlete_id, video_path, session:metrics_json->session, dq:metrics_json->data_quality"
       )
       .order("created_at", { ascending: false });
     if (athleteFilter !== "all") q = q.eq("athlete_id", athleteFilter);
-    const { data } = await q;
+    // session_annotations is readable straight from supabase-js — patch_07 gives it a FOR ALL,
+    // team-scoped RLS policy — so "has this been annotated?" needs no API endpoint. Fetched in
+    // the same Promise.all as the sessions so the two can never disagree about which are done.
+    const [{ data }, { data: annRows }] = await Promise.all([
+      q,
+      supabase.from("session_annotations").select("session_id"),
+    ]);
     setSessions(data ?? []);
+    setAnnotated(new Set((annRows ?? []).map((r) => r.session_id)));
   }, [athleteFilter]);
 
   useEffect(() => {
     fetchSessions();
   }, [fetchSessions]);
+
+  // Revalidate on return. Annotating happens on another route, and an "Annotated" marker that
+  // only appears after a manual reload reads as "not yet done" — worse than no marker. Same
+  // pattern as the report card (58-03): pageshow/persisted is the bfcache case, which nothing
+  // React-side can otherwise reach. Unlike the report card there is no user-editable local
+  // state here, so a refetch has nothing to clobber.
+  useEffect(() => {
+    const onPageShow = (e) => {
+      if (e.persisted) fetchSessions();
+    };
+    const onFocus = () => fetchSessions();
+    window.addEventListener("pageshow", onPageShow);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [fetchSessions]);
+
+  // Athlete names for the cards. Reuses the roster already fetched above — deliberately not a
+  // second query.
+  const athleteNames = useMemo(
+    () => new Map(athletes.map((a) => [a.id, a.name])),
+    [athletes]
+  );
 
   // Only show chips for strokes that actually have sessions (iOS Phase 17 behavior)
   const presentStrokeKeys = useMemo(
@@ -154,6 +187,8 @@ function SessionsView() {
             <SessionCard
               key={item.id}
               session={item}
+              athleteName={athleteNames.get(item.athlete_id)}
+              isAnnotated={annotated.has(item.id)}
               onStar={() => handleStar(item)}
               onDelete={() => handleDelete(item)}
             />
