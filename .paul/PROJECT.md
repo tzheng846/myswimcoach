@@ -28,8 +28,17 @@ Swim academies and competitive programs. Coach or operator runs the device; swim
 - ✓ Marketing **build-log blog** — public `/blog` index + statically-generated `/blog/[slug]` post pages (Next 16 `generateStaticParams` + `notFound`), linked from Nav + Footer, on the light marketing theme. Seeded with 5 thematic founder-journal posts (lightly-polished candid voice; covers current state, past struggles, upcoming ideas). Posts live in a plain JS data file (`web/lib/blog.js`) — no CMS; adding a post = append one object — Phase 46 (2026-06-23).
 - ✓ Parent report cards: coach-curated progress reports (range + metric picks + note), tokenized public pages with animated improvement deltas + trend charts, mass dispatch via mailto/copy-link — Phase 24. Email provider (Resend) deliberately deferred.
 - Device pairing via QR code (serial number → team account claim)
+- ✓ **Segmenter measured and tuned against ground truth — Phase 59 (2026-08-09).** The project's
+  first scoring harness (`segmenter_eval.py` + `tools/score_segmenter.py` + a committed fixture
+  regression), then per-stroke segmenter dispatch. Butterfly F1 0.317→0.526, breaststroke
+  0.232→0.444, freestyle boundary F1 0.000→0.458; the swim window is now rhythm-based
+  (`ip_end` 3.93→1.99 s, `finish` 3.82→0.82 s); freestyle stroke rate corrected from **1.65× the
+  true value to 1.00**. ⚠ Three defects fixed, **all invisible to `stroke_rate_spm`** — the metric
+  a coach actually reads. ⚠ Still true: one swimmer, 23 annotated sessions, breaststroke n=2,
+  backstroke n=0, and `segmentation_reliable` remains hardcoded `False`. **SUPERSEDES the long-
+  referenced "16-06" slot.**
 - Freestyle support (Phase 16 — wavelet/CWT ridge segmenter SHIPPED for all strokes at placeholder
-  quality, 16-05; `segmentation_reliable=False`; accuracy tuning pending more freestyle data → 16-06).
+  quality, 16-05; `segmentation_reliable=False`; accuracy tuning → Phase 59, done).
   **UI unlock shipped end-to-end 2026-08-05** (Phase 54-01 backend, deployed in `dedac17`; Phase 55-01
   carried the mobile half into an EAS build and it was verified on device): `ratings.py` falls back to
   the breaststroke threshold table for every stroke, `provisional` no longer keys off

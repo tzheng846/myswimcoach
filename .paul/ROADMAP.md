@@ -185,6 +185,8 @@ An end-to-end pipeline with velocity tracking and analysis for stroke analysis f
 
 | 58 | Video Ground Truth (solo capture + annotate-from-video) | Planning — discussed 2026-08-05 via /paul:discuss, CONTEXT.md written. TRIGGER: labeling the 19-session batch proved the Phase-57 tool's core assumption false for alternating strokes — freestyle/backstroke arm entries are not reliably discernible from the velocity trace (3-4 of 10 freestyle sessions unlabelable), while fly/breast trough-labeling is fine. The 19 have ZERO video and none can be added retroactively. Tripod + video test scheduled 2026-08-06, run SOLO (the swimmer is the operator). REPO-VERIFIED, mostly in the user's favour: the camera is already built, shipped and device-verified (RecordScreen.js:473-580 one-tap video + videoUploadQueue background FIFO, 47-03 verified in the Phase-55 build) — the 19 have no video because the mode wasn't used; web annotation ALREADY reaches iOS for metrics (PUT /annotations rewrites metrics_json, ReportCardScreen.js:94 reads it fresh) so item 3 needs no code; chart↔video scrubbing ALREADY works both directions (page.js:128 seek, playheadS marker) — the missing direction is MARKING, since marks land where you click the chart and there is no "mark at the video's current time"; buffer-and-dump makes the swim BLE-free (ESP_32_V5.ino:520-529 explicitly keeps recording through a disconnect; dumpBuffer retains the buffer; buffer-full truncates, never wraps). REAL GAPS: `video_origin_s` only reaches the server from VideoOverlayScreen (the background upload sends the file only) so an unopened session arrives at origin=0, silently unsynced; and a failed `writeCmd('STOP')` is caught non-fatal while the device keeps recording, inflating deviceDuration and therefore the auto-posted end-anchored origin — silent corruption of the same shape as Phases 51/52/57, which auto-stop removes by firing camera-stop and STOP off one timer. DECISIONS: auto-stop default **20 s** (user: "trust me" — confirmed against their own traces, 18.93 s and 16.53 s end to end with velocity back to zero before each recording ended, so 20 s clears both; 15 s would have clipped both finishes), editable with a live countdown since a too-early stop genuinely loses the swim's end; capture via the existing one-tap mode but HELD PROVISIONAL because it structurally pins the tripod near the block (BLE range) = the shallow ~4° rear angle most exposed to glare and occlusion; lab-now/product-later; annotate what's legible and flag the rest; no IMU. OPTICS VERIFIED: distance is NOT the constraint (~70° HFOV → 55 px/m at 1080p / 111 at 4K at 25 m; a 0.4 m splash is 22-44 px, left-vs-right separation 25-50 px) — angle, glare and occlusion are, and they are untested. Context: .paul/phases/58-video-ground-truth/CONTEXT.md |
 
+| 59 | Segmenter Evaluation (ground-truth scoring harness + per-stroke dispatch) | ✅ **COMPLETE (5/5 plans) 2026-08-09.** Built the first ground-truth scoring harness the project has ever had, then used it to fix three real defects and route every stroke to a measured choice. **Butterfly F1 0.317→0.526 · breaststroke 0.232→0.444 · freestyle boundary F1 0.000→0.458 · freestyle rate 1.647→1.00 · swim window ip_end 3.93→1.99 s, finish 3.82→0.82 s.** ⚠ **ALL THREE BUGS WERE INVISIBLE TO `stroke_rate_spm`** — the metric everyone watches: (1) every wavelet boundary counted as a cycle, so freestyle read 1.75× high; (2) the swim window asked "where is MOTION" instead of "where is STROKING"; (3) `_anchors_from_marks`' leading pad put every freestyle cycle half a cycle out of phase, with the rate ratio reading 1.00 either way. ⚠ **THE PHASE'S METHODOLOGICAL LESSON, learned twice:** a gate measured on the tuning subset proves nothing — 59-03's window passed on its 12 tuning sessions and collapsed on 13 of 36; 59-04's `peakpick` won butterfly on F1 and would have shipped phase-drifting cycles. LOSO scoring and `TestCycleRegularityGate` exist because of it. ⚠ OPEN, carried out (none blocking): the trace-vs-video / tether-sag question (decisive experiment = one swim marked twice, NOT done); ground truth redefined to "the TRACE" mid-phase with nothing re-scored; the corpus mixes chart-timed and video-timed labels; 59-03's window regressed butterfly/breaststroke and 17/36 sessions fall back; breaststroke rests on n=2 and backstroke on ZERO; 37 stored sessions out of scale (16 annotation-derived, never to be overwritten); `ratings.py` thresholds now sit on changed inputs. Prior status: Planning — discussed 2026-08-08/09 via /paul:discuss (AskUserQuestion ×3 rounds, 12 questions), CONTEXT.md written. **SUPERSEDES the "16-06 segmenter tuning" slot.** TRIGGER: 23 sessions are now annotated (236 marks: 14 freestyle / 7 butterfly / 2 breaststroke / **0 backstroke**) and the user asked to train a segmenter. MEASURED, not recalled: that corpus is one swimmer on one device and is not a training set, but it IS an evaluation set — and evaluation has never existed, since `segmentation_reliable=False` is a hardcoded constant rather than a measurement. FIRST-EVER SCORE of `segment_cycles_wavelet` against the labels (annotated swim window, greedy 1-to-1 match): vs human CYCLE boundaries recall 0.57 / precision 0.28 at ±0.2 s; vs human ARM ENTRIES, freestyle recall 0.82 / precision 0.67 at ±0.3 s, median timing error 0.06–0.16 s. The ridge tracks the right oscillation and lands within ~0.1 s — it disagrees about what one oscillation MEANS, stroke by stroke. **`marks_per_cycle` ≠ `boundaries_per_cycle`**: freestyle emits 1.15–1.5× the arm-entry count, butterfly a wildly unstable 1.18–2.18× the cycle count (the ridge sometimes locks onto the two-dolphin-kick harmonic), so no single divisor exists and `annotations.MARKS_PER_CYCLE` cannot be reused on the auto path. LIVE DEFECT FOUND: `compute_session_metrics` never receives `stroke_type`, so every wavelet boundary counts as one cycle — on the well-labeled 08-07 freestyle batch the auto `stroke_rate_spm` is **1.48–2.08× (median ~1.75×)** the annotation-recomputed value, i.e. every freestyle session in the app and on the web shows roughly double the true cycle rate. ENABLER: `sessions.velocity_profile` + `sample_rate_hz` are stored per session, so the harness needs no raw-CSV download. DECISIONS (15): harness before any algorithm work; primary gate = per-stroke boundary F1 at ±0.15 s with a tolerance sweep (rate error + MAE reported, not gating); partial labels excluded via a hand-curated list (4 proposed, user to confirm) with excluded sessions still scored for recall; tuning scope free+fly, breast/back scored but never tuned; committed pure module + CLI + checked-in fixture + pytest regression, plus an uncommitted scratch notebook; **per-stroke segmenter dispatch with `metrics.py` owning its own registry** (no import edge to annotations.py — the labeling convention and segmenter behavior are different numbers); the harness ALSO scores the four human phase boundaries, since `detect_phases`/`detect_initial_phase` have never been measured either and `detect_initial_phase` is breaststroke-shaped (dive surge → pulldown peak) while running on all four strokes; a generic named-series scorer so the coming UW-kick segmentation is a caller change, not a rewrite (⚠ the annotation contract has nowhere to store UW kick marks today); backstroke inherits the freestyle implementation, documented as unvalidated; breaststroke scores wavelet AND the never-called trough segmenter, routing decided on the numbers; **refactor first / behavior second** — 59-02 is a pure dispatch refactor whose acceptance is byte-identical harness output, 59-03 changes behavior, because this codebase has a documented history of silent metric drift (51/52/57). Context: .paul/phases/59-segmenter-evaluation/CONTEXT.md |
+
 ### Phase 58: Video Ground Truth (solo capture + annotate-from-video)
 **Goal:** Make tomorrow's tripod + video test produce usable ground truth, and make the footage
 actually usable for annotation once it exists. Four asks, of which two turned out to be already
@@ -1191,6 +1193,267 @@ UUID) both sit on API paths the seeder skips by writing direct with the service 
 
 ---
 *Roadmap created: 2026-05-17*
+### Phase 59: Segmenter Evaluation (ground-truth scoring harness + per-stroke dispatch)
+**Goal:** Build the instrument before running the experiment. Nothing in this repo can currently
+answer "is this segmenter better than that one?" — `segmentation_reliable = False` is a hardcoded
+constant, not a measurement. With 23 annotated sessions now in hand, build a committed offline
+scorer, make segmentation per-stroke (each stroke has different markers — breaststroke has only a
+pulldown, the other three have dolphin kick, and cycle definitions differ), and correct the
+freestyle stroke rate that currently ships at ~1.75× the truth.
+**Not a training exercise:** 23 sessions / 236 marks / one swimmer / one pool / one device / zero
+backstroke is an evaluation set, not a training set. No learned model is in scope.
+**Supersedes:** the "16-06 segmenter tuning" slot referenced since Phase 16-04. ⚠ Reconciliation is
+LIVING DOCS ONLY (CLAUDE.md, PROJECT.md, ROADMAP.md, STATE.md, CODEBASE-AUDIT.md); the ~25
+historical PLAN/SUMMARY files that mention 16-06 are a record and must not be rewritten.
+**Plans:**
+**⚠ PLAN STRUCTURE REVISED 2026-08-09, mid-apply, user-directed — 3 plans became 5.** The user
+asked where new segmentation techniques get brainstormed and found a REAL SCOPING GAP: no plan
+covered it. The old 59-03 meant "route the best of the three already scored", not "invent better
+ones" — and a 20-line peak-pick baseline beating the SHIPPING segmenter 2× on butterfly says the
+space is badly under-explored. Exploration became its own research plan, which pushed the ship plan
+out by one; separately, the ~1.75× cycle-pairing fix was split out because it is a cycle-DEFINITION
+bug, independent of which segmenter wins, and must not wait behind an open-ended search.
+
+- [x] 59-01 ✅ **COMPLETE 2026-08-09** — all 5 ACs pass. Suite 237 → **262**; regression passes with
+  Supabase credentials unset; `git diff --stat` on metrics.py/api.py/annotations.py/ratings.py/
+  vel_acc_extraction.py is EMPTY. 4 new files, no product path touched. Fixture 113 KB / 9125 samples.
+  ⭐ **THE GREEDY PRIORS HELD** — optimal assignment reproduced them almost exactly (freestyle
+  @±0.30 s recall 0.82 vs prior 0.82, precision 0.68 vs 0.67), so the CONTEXT figures can be cited.
+  ⭐ **THE PHASE DETECTOR IS THE LARGER ERROR SOURCE, and nobody had ever measured it.** The auto
+  swim window is wider than the human window on **19 of 22** sessions, median **+7.83 s**
+  (`stroke_start_s` 3.9 s early, `finish_s` 3.6 s late). That is why every production-window score
+  sits below its annotated-window twin. `detect_initial_phase` hunts a dive surge then a pulldown
+  peak — breaststroke's shape — while running on all four strokes.
+  ⭐ **THE TROUGH SEGMENTER'S 0.00 IS A MISFEED, NOT A FAILURE — this invalidates D13 as posed.** It
+  keys on velocity below `0.20 × v95`, and Phase 57 made the swim window authoritative, deleting the
+  dead tail those troughs lived in. Breaststroke routing CANNOT be decided from this run; re-score it
+  on the UNTRIMMED trace in 59-04.
+  ⭐ Wavelet finds the right events and places them badly: freestyle entries-F1 climbs 0.19 → 0.74
+  across ±0.05 → ±0.30 s. **No constant lag to correct** — bias is −0.04/+0.08/+0.13 s against a
+  ~0.10 s within-session spread, so 59-05 must not chase a global shift.
+  ⭐ The ridge is strikingly window-sensitive: on `4219daea`, a **0.58 s** window shift collapses
+  entries-F1 from 0.54 to 0.11. Pinned in the regression deliberately.
+  ⚠ DEVIATIONS (2, minor): the CLI had to be made **ASCII-only** (Windows cp1252 raised
+  `UnicodeEncodeError` printing the plan's own ⚠/± glyphs, *after* the fetch had succeeded — the run
+  died at the report, not the work); and the regression **imports the CLI by path** rather than
+  re-implementing candidate invocation, which the plan's import list did not anticipate but which is
+  what stops test and tool drifting apart. SUMMARY: 59-01-SUMMARY.md. Original scope follows.
+- [ ] ~~59-01: the harness — PLAN created 2026-08-09~~. New files only, no product path touched.
+  3 auto tasks + 1 checkpoint:decision (confirm the D4 exclusion list against the printed coverage
+  table); `autonomous:false`, `depends_on []`; no new dependency.
+  ⚠⚠ THE CIRCULARITY TRAP: phase scoring must seed from `metrics_json_auto`, NOT `metrics_json` —
+  `api.py:889` has already overwritten the latter with metrics recomputed FROM the human annotation,
+  so seeding from it and scoring against that same annotation manufactures a meaningless near-perfect
+  score. ⚠ Optimal assignment (`scipy.optimize.linear_sum_assignment`), not the greedy matcher that
+  produced the preliminary numbers. ⚠ The regression pins exact values within 1e-6, not a `>=` floor,
+  because 59-02's acceptance is byte-identical output. ⚠ `metrics.py` is read-only here INCLUDING
+  anything that looks wrong while reading it. Files —
+  `segmenter_eval.py` (pure: named-series matching, P/R/F1, tolerance sweep, coverage statistic),
+  `tools/score_segmenter.py` (CLI), `tests/fixtures/segmenter_truth.json`,
+  `tests/test_segmenter_eval.py`. Scores wavelet + trough + a peak-pick baseline over cycle
+  boundaries AND the four human phase boundaries, on both the annotated window and the production
+  `ip_end:swim_end` window (the gap between them measures how much error belongs to phase detection
+  rather than segmentation — never separated before). No new dependencies.
+- [x] 59-02 ✅ **COMPLETE 2026-08-09** — all 5 ACs pass. Suite 262 → **268**; 5 files; no behavior
+  change. ⭐ **INERTNESS PROVEN BY HASH, NOT BY ASSERTION** — the full fixture report (every
+  window × candidate × framing) captured BEFORE the first edit and again after all three tasks is
+  byte-identical, `sha256 4609a7b0…` both times. `git diff` on `tests/test_segmenter_eval.py` and
+  the fixture is EMPTY, so no pinned value was edited to make anything pass.
+  Shipped: `SEGMENTER_BY_STROKE` (**empty by design**) + `resolve_segmenter()` +
+  `compute_session_metrics(..., stroke_type=None)`; `/process` forwards the stroke it already had.
+  ⚠ **FIRST PHASE-59 CHANGE ON THE RAILWAY DEPLOY PATH** (`metrics.py`, `api.py`) — safe, since
+  nothing moved, but 59-01 was purely additive by comparison.
+  ⚠ **TWO TESTS ARE EXPECTED TO FAIL LATER BY DESIGN**:
+  `test_stroke_type_does_not_change_results_yet` fails in 59-05, and the 7 pinned regression values
+  move in 59-03 and 59-05. Re-baseline them with the new numbers recorded in that plan's SUMMARY —
+  never edit them to make a diff green.
+  ⚠ AUTO-FIX worth keeping: the CLAUDE.md note first claimed the ~1.75× defect was "fixed in
+  59-03". It is NOT — 59-03 is unwritten. Corrected to "STILL LIVE, owned by 59-03", with the
+  consequence spelled out (auto vs annotation-recomputed freestyle metrics are not on the same
+  scale). SUMMARY: 59-02-SUMMARY.md. Original scope follows.
+- [ ] ~~59-02 PLAN created 2026-08-09~~ — 3 auto tasks, **`autonomous:true`**
+  (everything is mechanically verifiable — no checkpoint), `depends_on ["59-01"]` (genuine: 59-01's
+  regression IS this plan's acceptance test). 5 files: `metrics.py`, `api.py`, `tests/test_metrics.py`,
+  `tests/test_api.py`, `CLAUDE.md`. ⚠ **THE REGISTRY SHIPS EMPTY BY DESIGN** — it is an OVERRIDE
+  table, and "no stroke has earned its own segmenter yet" is the literal truth today; pre-populating
+  four entries all pointing at the wavelet says nothing and still has to be edited in 59-05.
+  ⚠ Task 1 must capture a before-image of the fixture report BEFORE editing — it covers all
+  windows × candidates × framings, broader than the 7 pinned assertions, and cannot be reconstructed
+  afterwards. ⚠ `tests/test_segmenter_eval.py` and the fixture are BOUNDARIED: editing a pinned value
+  to make it pass would destroy the only evidence the refactor is inert. ⚠ The registry CONTRACT is
+  written down now — `(t, vel) -> cycles|None`, slice-relative — because `segment_cycles_trough`'s
+  extra `T_est` param does NOT match it and 59-05 must wrap it rather than widen the seam. ⚠ AC-2
+  requires proving a registered override is actually CALLED, or the refactor is untested plumbing
+  wired to nothing. `api.py:888` deliberately untouched (dead by construction — guarded by
+  `cycle_bounds`, which bypasses segmentation entirely). Original scope follows.
+- [ ] 59-02 (scope): **pure dispatch refactor.** `compute_session_metrics(..., stroke_type=None)`
+  plus a stroke→implementation registry inside `metrics.py`; every stroke still routes to the
+  wavelet. **Acceptance is byte-identical harness output** — 59-01's regression pins exact values to
+  1e-6 precisely so this is provable. `stroke_type=None` reproduces today's path, so all 8 existing
+  call sites are unaffected by default. ⚠ `metrics.py` owns its OWN registry — no import edge to
+  `annotations.py`, because `MARKS_PER_CYCLE` is the LABELING convention and this is SEGMENTER
+  behavior, and 59-01 measured that they are different numbers.
+- [x] 59-03 ✅ **COMPLETE 2026-08-09** — all 6 ACs pass. Suite 268 → **269**; 2 files created,
+  3 modified. **GATE PASSED: median auto/human stroke-rate ratio 1.647 → 0.973**, median |log ratio|
+  0.50 → 0.069. `ip_end` median error **3.93 → 1.99 s**, `finish` **3.82 → 0.82 s**.
+  Shipped `detect_swim_window` (CWT-ridge frequency SETTLING — steady-state stroke frequency taken
+  from the back 60% of the swim, `ip_end` = where the ridge first settles near it) plus
+  `_pair_boundaries` registered for freestyle/backstroke through 59-02's seam.
+  ⭐ **THE RESEARCH MATTERED — 3 of 4 candidates failed, instructively.** A and B missed `ip_end` by
+  4–8 s and always EARLY (dolphin kicking is rhythmic; B's band filter centred on the kicking
+  because its reference was computed over a mask containing it). C nailed `finish` but was WORST on
+  `ip_end`. Only the frequency-transition candidate beat the incumbent on both.
+  ⚠⚠ **A REGRESSION THE GATE COULD NOT SEE.** The gate measures the 12 fully-labeled sessions —
+  exactly the tuning subset. Across all 36, **13 produced a window yielding ≤3 cycles**, a failure
+  mode the OLD detector never had. Root cause: the amplitude run latches onto the DIVE transient,
+  whose broadband energy inflates the 95th-pct reference until swimming falls below it. **Four
+  alternative references were swept; none beat the shipped one, two were far worse.** Resolution
+  (user decision, asked because it exceeded the already-answered checkpoint): `_WINDOW_MIN_CYCLES =
+  4.0` — disbelieve any window spanning <4 cycles at its own detected frequency and return None, so
+  the caller keeps the old boundaries. Flags **13/13** collapsed windows while also disbelieving
+  7/23 sound ones; the asymmetry is deliberate (a false positive costs only the improvement, a false
+  negative ships a confident wrong answer). **Collapse 13/36 → 1/36.**
+  ⚠ **17 of 36 sessions now fall back** — the improvement reaches roughly half the corpus.
+  ⚠ **`tools/score_segmenter.py`'s production-window column is STALE** — it still calls the old
+  detectors. 59-04 must fix it before trusting that column.
+  ⚠ Butterfly/breaststroke are unpaired but the window still moved them: median **1.316**, fly to
+  1.92 — the fix removed an error that had been cancelling for them too. Reported, not compensated.
+  ⚠ AC-3 verified empirically: `cycles` identical 23/23 across annotation recomputes, `session`
+  22/23 (the exception has `finish_s = null`, so there was no human boundary to override with).
+  ⚠ AUTO-FIX: my own reordering moved `detect_initial_phase` above the manual `baseline_end_idx`
+  override, silently changing dive/pulldown on annotated sessions — caught by reading the diff, not
+  by a test. ⚠ `_cwt_ridge` extraction proven inert by the 59-01 fixture hash.
+  SUMMARY: 59-03-SUMMARY.md. Original scope follows.
+- [ ] ~~59-03 PLAN created 2026-08-09~~ — cycle pairing **+ the swim-window fix**,
+  bundled. 4 tasks + 1 checkpoint:decision; `autonomous:false`; `depends_on ["59-01","59-02"]`.
+  ⚠⚠ **THIS PLAN'S SCOPE DOUBLED AT PLANNING TIME, AND IT CORRECTS A CLAIM MADE IN 59-01's SUMMARY
+  AND IN CONTEXT D7.** Both said the pairing fix was "independent, so it must not wait." It is
+  independent of the SEGMENTER but **not of the WINDOW**, and the two errors partially cancel.
+  Measured on the 12 fully-labeled freestyle sessions: today **1.647**, pairing only **0.761**
+  (a sign flip, not a fix), window only **2.135** (strictly worse), **both 1.010 (10/12 within
+  ±15%)**. Neither half is independently shippable, which is why the phase's usual
+  one-change-per-plan rule argues FOR bundling here.
+  ⚠ **TWO HYPOTHESES ABOUT THE WINDOW WERE TESTED AND BOTH REFUTED — it is not a tuning fix.**
+  `ip_end` is not picking the wrong trough (in 12/23 sessions the first trough already IS the
+  nearest to the human mark, still 0.6–6.1 s early; several freestyle traces contain exactly ONE
+  qualifying trough and it is 5–6 s early — the trough is the wrong FEATURE). `finish` is not
+  threshold-sensitive (mean |vel| in the over-run is **0.403 m/s, 8× `_BASELINE_THRESH`** — the
+  swimmer really is still moving; it is a SEMANTIC gap).
+  ⭐ **REFRAMING:** both boundaries fail the same way — the detectors ask "where does MOTION start
+  and stop", the human marked "where does CYCLIC STROKING start and stop". Post-touch drift is fast
+  but not rhythmic; underwater kicking is rhythmic at the wrong frequency. The CWT ridge already
+  encodes that distinction. This makes the window fix RESEARCH, so the plan opens with a design task
+  in `tools/` and a checkpoint where **stopping is an explicit, legitimate option**.
+  DECISIONS: full pairing (a cycle becomes 2 boundaries, so per-cycle metrics are computed over real
+  cycles — accepted comparability break, and `cv_isi` is expected to get NOISIER since the wavelet
+  over-segments 1.15–1.5×); `finish` redefined as end-of-cyclic-stroking; **dry-run backfill report
+  only**, no DB write (37 sessions affected, **14 already on the human scale** — the corpus is
+  ALREADY mixed, so this changes which axis the inconsistency falls on rather than creating it);
+  gate = median ratio in **0.85–1.15** AND median |log ratio| < today's 0.50.
+  ⚠ Pairing ships as a WRAPPER in `SEGMENTER_BY_STROKE` — exactly what 59-02's seam was built for —
+  and the divisor is NOT imported from `annotations.MARKS_PER_CYCLE` (that is exact physiology for
+  human marks; on the auto path 2 works only as an empirical property of the wavelet).
+  ⚠ 59-01's 7 regression pins and 59-02's `test_stroke_type_does_not_change_results_yet` BOTH move
+  here (59-02 predicted the latter for 59-05; it lands earlier). Re-baseline with every old → new
+  recorded; nothing may be loosened or deleted to make the suite green.
+  ⚠ `ratings.py` untouched but AFFECTED — halving freestyle stroke rate moves it against the
+  breaststroke-derived bands, changing pillar scores and the needs-attention list. Report, do not
+  compensate; Phase 53 owns it.
+- [x] 59-04 ✅ **COMPLETE 2026-08-09** — all 5 ACs pass. Suite 269; 1 file created, 2 modified,
+  **`metrics.py` untouched** (nothing shipped, as designed). Results (annotated window, F1 @±0.15 s):
+  | candidate | free | fly | breast |
+  |---|---|---|---|
+  | wavelet (incumbent) | 0.458 | 0.317 | 0.232 |
+  | peakpick | 0.437 | **0.524** | 0.308 |
+  | R2 snap→steep rise | **0.485** | 0.233 | 0.239 |
+  | L1 learned (LOSO) | 0.375 | **0.591** | **0.359** |
+  ⭐ **THE LEARNED MODEL DID NOT OVERFIT — 59-01's PREDICTION WAS WRONG.** LOSO vs in-sample differ
+  by ~0.01 (fly 0.591/0.600). Mechanism: logistic regression on 5 features is too LOW-CAPACITY to
+  memorise 236 marks. ⚠ This does NOT license a bigger model — a higher-capacity learner would
+  behave exactly as 59-01 feared.
+  ⭐ **BUTTERFLY: the wavelet is the wrong tool** — beaten ~2× by two unrelated methods.
+  ⭐ **FREESTYLE: refinement works but trades events for precision** — R2 wins at every tolerance
+  below ±0.30 and LOSES at ±0.30 (0.774 vs 0.836).
+  ⭐ **CONTEXT D13 ANSWERED — the trough segmenter does not transfer.** 0.000 on every stroke even
+  untrimmed, and VERIFIED not an artifact: 9–33 troughs found per session but **zero inside the swim
+  window** on free/fly — during actual stroking velocity never drops below 0.20×v95. Breaststroke
+  gets 12 in-window troughs yet still scores 0.000 until ±0.30 — a systematic PHASE OFFSET. Stop
+  carrying it.
+  ⚠⚠ **GROUND TRUTH REDEFINED MID-PHASE (user): it is now the TRACE, not video.** The product only
+  ever has the trace. **This INVERTS 59-01's quality ordering** — the corpus is inhomogeneous
+  (58-02 shipped mark-at-playhead on 08-07, so only that batch is video-timed), and the batch 59-01
+  called "measurably the best" on coverage is now the LESS appropriate ground truth. **Nothing was
+  re-scored on this basis.**
+  ⚠ **TETHER SAG investigated (user hypothesis: encoder 0.5 m above water, inextensible free-spool
+  line, so the CWT may have been right and the labels wrong).** Error DOES grow within a swim with
+  the sign sag predicts (mean |err| 0.150 → 0.235 s across thirds, 13/19 sessions) — but chart-timed
+  vs video-timed labels show NO difference (median F1 0.308 vs 0.379), so the ~60 ms drift is an
+  order of magnitude too small to explain F1≈0.3. **Not supported at corpus level.** DEFERRED and
+  decisive: mark one swim from trace alone AND video alone, measure divergence vs distance.
+  ⚠ PLAN SELF-CONTRADICTION resolved: AC-1 required re-baselining the production-window column while
+  the boundaries said the 59-01 pins "must not move" — the pins CONTAIN those values. Resolved for
+  AC-1; 8 pins updated; the annotated column did NOT move (containment proof).
+  ⚠ Boundary-count ratios for 59-05's `k`: wavelet 2.27, peakpick 3.47, L1 2.17, R2 2.25 — a winner
+  that is not ~2.27 means `k` must be RE-MEASURED. ⚠ sklearn is `tools/`-only; shipping L1 puts it on
+  the Railway path as an EXPLICIT 59-05 decision. SUMMARY: 59-04-SUMMARY.md. Original scope follows.
+- [ ] ~~59-04 PLAN created 2026-08-09~~ — 3 tasks, `type: research`,
+  `autonomous:true`, `depends_on ["59-01","59-03"]`. **2 files, both in `tools/` — nothing ships to
+  `metrics.py`.** ⭐ **The work originally expected when annotation started** —
+  `segment_cycles_wavelet` is still exactly as 16-05 shipped it.
+  BASELINE RE-MEASURED at plan time (entries F1 @±0.15 s, median/session), because 59-03 changed the
+  segmenter's input: freestyle **0.186 → 0.280** (perfect window 0.458), butterfly **0.320 → 0.222**
+  (0.317), breaststroke **0.473 → 0.167** (0.232). Production is **0.17–0.28** — about one boundary
+  in four lands within 150 ms of a human mark. ~40% of the remaining freestyle gap is STILL window
+  quality even after 59-03.
+  SIX CANDIDATES across four families: boundary snapping to velocity minimum / steepest rise (the
+  F1-vs-tolerance curve climbs 0.19→0.74, i.e. right events, bad placement); per-swimmer matched
+  filter; **trough re-fed the UNTRIMMED trace** (answers CONTEXT D13, open since 59-01 — its 0.00
+  was a MISFEED, since Phase 57 removed the dead tail it keys on); autocorrelation + constant phase;
+  and a small learned boundary detector. Plus both incumbents.
+  ⚠⚠ **LEAVE-ONE-SESSION-OUT IS MANDATORY for every tunable candidate** — 59-03's lesson made
+  mechanical. Its gate passed on the 12 sessions its constants were tuned against and then collapsed
+  on 13 of 36. With a learned model on 236 marks from ONE swimmer, in-sample scoring is actively
+  misleading; LOSO and in-sample are reported side by side.
+  ⚠ **PRIMARY SCORING USES THE ANNOTATED WINDOW** — the window is out of scope and 59-03's is
+  freestyle-tuned, so scoring through it would penalise a butterfly candidate for a defect it did not
+  cause. ⚠ **WINDOW IS OUT OF SCOPE (user decision), so the butterfly/breaststroke regression and the
+  17/36 fallback rate BOTH STAY LIVE** after this plan — recorded, not fixed.
+  ⚠ Task 1 is a prerequisite: `score_segmenter.py`'s production-window column is STALE and no longer
+  measures what the pipeline slices. Fixing it re-baselines that column; the annotated column must
+  NOT move, which is the proof the change is confined.
+  ⚠ A negative result on the learned model is a real deliverable. Original scope follows.
+- [ ] 59-04 (scope): **EXPLORE new segmentation techniques** (`type: research`). Candidates
+  live in `tools/` or a scratch module and NEVER in `metrics.py`, so a dead end costs nothing;
+  deliverable is a scored table plus a recommendation, not production code. Directions the 59-01
+  measurements actually point at, rather than a blank page: snap ridge crossings to a local velocity
+  feature (the F1-vs-tolerance curve says right events, bad placement); reject the two-dolphin-kick
+  harmonic for butterfly; **re-score the trough segmenter on the UNTRIMMED trace** (its 0.00 is a
+  misfeed, and this is the only way to answer D13); per-swimmer matched filter / template averaging;
+  rate-continuity-constrained DP on the ridge; HMM. Also worth testing whether fixing the +7.8 s
+  window raises segmentation scores without touching the segmenter at all.
+- [x] 59-05 ✅ **COMPLETE 2026-08-09** — all 4 ACs pass. Suite 269 → **273**; 3 files modified.
+  Butterfly + breaststroke moved OFF the wavelet to `_learned_boundaries` with k=2; freestyle
+  deliberately unchanged (59-04 measured both challengers worse on freestyle cycle regularity).
+  butterfly **F1 0.317→0.526, cv 0.218→0.104, rate 1.31→1.02**; breaststroke **F1 0.232→0.444,
+  cv 0.217→0.071, rate 1.66→1.00**.
+  ⭐ **NO sklearn IN PRODUCTION** — 5-feature logistic regression, inference is a dot product +
+  sigmoid, numpy form verified to reproduce `predict_proba` to **1.1e-16**. Weights are a constant
+  block; retrain = re-run `tools/segmenter_candidates.py` and replace two numbers.
+  ⭐⭐ **FOUND AND FIXED A PHASE BUG IN 59-03's PAIRING.** `_anchors_from_marks` pads with index 0,
+  so pairing `[0,m0,m1,…]` at 0,2,4… selected `[0,m1,m3,…]` — every freestyle cycle **half a cycle
+  out of phase**. Boundary F1 **0.000 with the pad, 0.458 without**. It survived 59-03's gate
+  because `stroke_rate_spm` is blind to it (mean interval identical, ratio 1.00 either way).
+  ⚠ SCOPE ADDITION: that fix touches `_pair_boundaries`, which 59-05's boundaries said not to do —
+  justified, but **freestyle per-cycle metrics moved AGAIN**, a second comparability break.
+  ⭐ `peakpick` rejected for butterfly despite better F1 (alternation 0.276 vs human 0.056);
+  `TestCycleRegularityGate` now guards that permanently. ⚠ Breaststroke rests on n=2.
+  SUMMARY: 59-05-SUMMARY.md. Original scope follows.
+- [ ] ~~59-05 (scope)~~: **SHIP the winner per stroke.** Fill in 59-02's registry from 59-04's
+  table. ⚠ Backstroke inherits freestyle's implementation, documented as unvalidated (CONTEXT D12) —
+  it has ZERO labeled sessions. ⚠ Breaststroke rests on 2 sessions plus historical validation, and
+  the write-up must say so. ⚠ Do NOT apply a global timing offset: 59-01 measured the error as
+  scatter, not lag.
+
 *Last updated: 2026-07-27 — Phase 50 (Demo Team & Synthetic History) opened: discussed +
 50-01 planned. Seeder-only, no product/schema/web changes.*
 *Last updated: 2026-07-20 — Phase 47 (Trial Annotation) COMPLETE (4/4 plans): annotation

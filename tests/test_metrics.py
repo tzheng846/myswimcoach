@@ -240,3 +240,132 @@ class TestAnnotationToOverrides:
         assert out["cycle_bounds"][0] == (500, 700)
         assert a.annotation_to_overrides(None, 3000) == {}
         assert a.annotation_to_overrides({}, 0) == {}
+
+
+class TestSegmenterDispatch:
+    """Per-stroke segmenter registry (Phase 59-02, populated 59-03, completed 59-05).
+
+    ⚠ RE-BASELINED TWICE, BOTH TIMES DELIBERATELY. 59-02 shipped the registry EMPTY and
+    these tests pinned that inertness; 59-03 registered free/back with a pairing wrapper;
+    59-05 registered fly/breast with the LEARNED detector. Every assertion has been
+    TIGHTENED to the new truth each time, never loosened to make the suite green.
+    """
+
+    def test_every_stroke_is_registered_and_unknowns_take_the_default(self):
+        """All four strokes route somewhere specific as of 59-05.
+
+        Only genuinely unknown values fall through to the bare wavelet — including the
+        mobile picker's "im" and "udk", which are not strokes this pipeline models.
+        """
+        for stroke in ("im", "udk", "not-a-stroke", "", None):
+            assert m.resolve_segmenter(stroke) is m.segment_cycles_wavelet, stroke
+        for stroke in ("freestyle", "backstroke", "butterfly", "breaststroke"):
+            assert m.resolve_segmenter(stroke) is not m.segment_cycles_wavelet, stroke
+
+    def test_registry_holds_exactly_the_four_strokes(self):
+        """A stroke appearing here by accident is the failure worth catching."""
+        assert set(m.SEGMENTER_BY_STROKE) == {
+            "freestyle", "backstroke", "butterfly", "breaststroke"}
+
+    def test_alternating_strokes_pair_wavelet_boundaries(self, real_session):
+        """Free/back keep the wavelet and halve its boundary count.
+
+        59-04 measured both challengers WORSE than the wavelet on freestyle cycle
+        regularity (L1 0.121, peakpick 0.246 vs 0.069), so freestyle deliberately did NOT
+        move in 59-05.
+        """
+        t, vel, dist = real_session
+        base_n = m.compute_session_metrics(t, vel, dist)["session"]["stroke_count"]
+        for stroke in ("freestyle", "backstroke"):
+            n = m.compute_session_metrics(
+                t, vel, dist, stroke_type=stroke)["session"]["stroke_count"]
+            assert n < base_n, f"{stroke} should yield fewer, longer cycles"
+            assert abs(n - base_n / 2) <= 1, f"{stroke}: {n} vs base {base_n}"
+
+    def test_fly_and_breast_use_the_learned_detector(self, real_session):
+        """Butterfly/breaststroke moved OFF the wavelet in 59-05.
+
+        ⚠ They are paired k=2 despite being physiologically ONE arm entry per cycle. That
+        is not a bug: the detector emits ~2.02 events per cycle consistently, so every 2nd
+        lands one boundary per cycle at a stable phase. `k` is a property of the DETECTOR.
+        """
+        t, vel, dist = real_session
+        base = m.compute_session_metrics(t, vel, dist)
+        for stroke in ("butterfly", "breaststroke"):
+            out = m.compute_session_metrics(t, vel, dist, stroke_type=stroke)
+            assert out["cycles"] != base["cycles"], f"{stroke} must not equal the wavelet"
+
+    def test_learned_inference_needs_no_sklearn(self):
+        """AC-3: a 5-parameter model must not drag a dependency onto the Railway path."""
+        import inspect
+        src = inspect.getsource(m)
+        assert "sklearn" not in src.replace("NO sklearn", "").replace(
+            "sklearn stays in tools/", "").replace("reproduce sklearn's", "")
+        assert m._LEARNED_COEF.shape == (5,)
+
+    def test_a_registered_override_is_actually_called(self, monkeypatch, real_session):
+        """Proves the seam reaches the segmentation slice.
+
+        Without this the registry could be wired to nothing and every other test here
+        would still pass.
+        """
+        t, vel, dist = real_session
+        seen = {}
+
+        def sentinel(t_seg, vel_seg):
+            seen["n"] = len(vel_seg)
+            return [
+                {"cycle_num": 0, "peak_idx": 10, "start_idx": 0, "end_idx": 200},
+                {"cycle_num": 1, "peak_idx": 210, "start_idx": 200, "end_idx": 400},
+            ]
+
+        monkeypatch.setitem(m.SEGMENTER_BY_STROKE, "butterfly", sentinel)
+        out = m.compute_session_metrics(t, vel, dist, stroke_type="butterfly")
+
+        assert "n" in seen, "the registered segmenter was never called"
+        assert 0 < seen["n"] <= len(vel), "it did not receive the segmentation slice"
+        assert out["session"]["stroke_count"] <= 2
+        # An UNREGISTERED value still takes the default. All four strokes are registered
+        # as of 59-05, so this must use something outside the stroke set entirely.
+        assert m.resolve_segmenter("im") is m.segment_cycles_wavelet
+
+
+class TestCycleRegularityGate:
+    """Cycles must be REGULAR, not merely well-placed (Phase 59-05).
+
+    ⚠ THIS EXISTS BECAUSE F1 ALONE PASSED A WRONG CANDIDATE. In 59-04 `peakpick` scored
+    butterfly F1 0.524 against the wavelet's 0.317 and would have shipped on that basis.
+    Its cycles alternated long/short (alternation 0.276 vs a human 0.056) because it emits
+    an UNSTABLE ~2.5 events per cycle, so pairing drifted through phases.
+
+    A segmenter can place boundaries well and still emit meaningless cycles. That poisons
+    cv_isi, mean_dps_m and mean_coast_fraction while leaving stroke_rate_spm looking fine,
+    because taking every k-th event preserves the MEAN interval even when every individual
+    cycle is wrong. Rate is blind to this class of error; these statistics are not.
+    """
+
+    @staticmethod
+    def _interval_stats(cycles, fs):
+        b = [c["start_idx"] for c in cycles] + [cycles[-1]["end_idx"]]
+        iv = np.diff(b) / fs
+        iv = iv[iv > 0.15]
+        if len(iv) < 3:
+            return None
+        cv = float(np.std(iv) / np.mean(iv))
+        alt = float(np.mean([abs(iv[i + 1] / iv[i] - 1) for i in range(len(iv) - 1)]))
+        return cv, alt
+
+    @pytest.mark.parametrize("stroke", ["freestyle", "butterfly", "breaststroke"])
+    def test_registered_cycles_are_no_less_regular_than_the_wavelet(
+            self, real_session, stroke):
+        t, vel, dist = real_session
+        fs = m._compute_fs(t)
+        seg = m.resolve_segmenter(stroke)(t, vel)
+        base = m.segment_cycles_wavelet(t, vel)
+        assert seg and base, "both should segment the fixture"
+        got, inc = self._interval_stats(seg, fs), self._interval_stats(base, fs)
+        assert got and inc
+        # Generous margin: this is a guard against phase-drifting cycles, not a tuning knob.
+        assert got[1] <= inc[1] + 0.15, (
+            f"{stroke}: alternation {got[1]:.3f} vs incumbent {inc[1]:.3f} — "
+            "cycles are drifting through phases, which is the peakpick failure mode")

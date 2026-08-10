@@ -172,7 +172,9 @@ async def process_session(
         t_dec, dist_dec, vel, _accel, actual_fs = vae.run_pipeline(df, 100.0)
 
         # ── Metrics ──────────────────────────────────────────────────────
-        result = m.compute_session_metrics(t_dec, vel, dist_dec, head_waist_m=head_waist_m)
+        result = m.compute_session_metrics(
+            t_dec, vel, dist_dec, head_waist_m=head_waist_m, stroke_type=stroke_type
+        )
 
         # ── Data quality summary ──────────────────────────────────────────────
         _dq_warnings = []

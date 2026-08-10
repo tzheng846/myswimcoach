@@ -136,8 +136,10 @@ def segment_cycles_trough(t, vel, T_est=None):
 # Ported from wavelet_spike.py (16-04 GO). Morlet CWT ridge → instantaneous
 # stroke rate → integer-phase-crossing cycle boundaries. Shipped at PLACEHOLDER
 # quality (session["segmentation_reliable"] = False): the 16-04 breaststroke
-# cross-check was weak (3/8 within ±5 SPM). segment_cycles_trough above is kept
-# as a never-called reference/backup — user decision: wavelet only, no fallback.
+# cross-check was weak (3/8 within ±5 SPM). Still the default for every stroke,
+# but no longer hardcoded — Phase 59-02 made routing table-driven; see
+# SEGMENTER_BY_STROKE below. segment_cycles_trough above is not called from the
+# pipeline; it is a scored candidate for Phase 59-04.
 
 _WAVELET          = "cmor1.5-1.0"
 _DETREND_WINDOW_S = 3.0
@@ -198,6 +200,36 @@ def _track_ridge(power, freqs_hz):
     return path
 
 
+def _cwt_ridge(vel, fs):
+    """Detrended velocity → (ridge_freq_hz, ridge_power) along the DP-tracked ridge.
+
+    Extracted in Phase 59-03 because TWO callers now need the same ridge and must not
+    drift apart if _WAVELET or the scale grid ever changes:
+      * segment_cycles_wavelet integrates the frequency to count cycle boundaries
+        ("how many strokes have gone by") — needs precision.
+      * detect_swim_window asks whether the frequency is STEADY ("is this rhythm
+        stroking, kicking, or nothing") — needs only coarse discrimination.
+    Same signal, two different questions, very different precision requirements.
+
+    Returns (None, None) on short or flat input — the caller decides what that means.
+    """
+    if len(vel) < max(50, int(_PERIOD_MAX_S * fs)):
+        return None, None
+    active = _detrend_for_cwt(vel, fs)
+    if not np.any(np.isfinite(active)) or float(np.max(np.abs(active))) < 1e-6:
+        return None, None
+
+    dt = 1.0 / fs
+    target_freqs = np.geomspace(1.0 / _PERIOD_MAX_S, 1.0 / _PERIOD_MIN_S, _N_SCALES)
+    scales       = pywt.central_frequency(_WAVELET) / (target_freqs * dt)
+
+    coeffs, freqs_hz = pywt.cwt(active, scales, _WAVELET, sampling_period=dt)
+    power = np.abs(coeffs) ** 2
+
+    ridge_idx = _track_ridge(power, freqs_hz)
+    return freqs_hz[ridge_idx], power[ridge_idx, np.arange(power.shape[1])]
+
+
 def _anchors_from_marks(vel, marks):
     """Boundary-mark indices → {cycle_num, peak_idx, start_idx, end_idx} anchors
     (dominant peak per span) — the same cycle shape segment_cycles_trough returns,
@@ -233,27 +265,13 @@ def segment_cycles_wavelet(t, vel):
     if n < 50:
         return None
     fs = _compute_fs(t)
-    dt = 1.0 / fs
 
-    # Guard: need at least one longest-period window, and an actual oscillation.
-    # A flat signal detrends to ~0 → the CWT has no ridge and _track_ridge would
-    # divide by an all-zero column. Returning None here is the flat/short path.
-    if n < max(50, int(_PERIOD_MAX_S * fs)):
+    # Guard (inside _cwt_ridge): need at least one longest-period window, and an actual
+    # oscillation. A flat signal detrends to ~0 → the CWT has no ridge and _track_ridge
+    # would divide by an all-zero column. That is the flat/short path.
+    ridge_freq, _ = _cwt_ridge(vel, fs)   # Hz = instantaneous stroke rate
+    if ridge_freq is None:
         return None
-    active = _detrend_for_cwt(vel, fs)
-    if not np.any(np.isfinite(active)) or float(np.max(np.abs(active))) < 1e-6:
-        return None
-
-    f_min, f_max = 1.0 / _PERIOD_MAX_S, 1.0 / _PERIOD_MIN_S
-    target_freqs = np.geomspace(f_min, f_max, _N_SCALES)
-    central_freq = pywt.central_frequency(_WAVELET)
-    scales       = central_freq / (target_freqs * dt)
-
-    coeffs, freqs_hz = pywt.cwt(active, scales, _WAVELET, sampling_period=dt)
-    power = np.abs(coeffs) ** 2
-
-    ridge_idx  = _track_ridge(power, freqs_hz)
-    ridge_freq = freqs_hz[ridge_idx]                      # Hz = instantaneous stroke rate
 
     # Cumulative phase; a boundary at each integer crossing (slice-relative index).
     phase    = np.concatenate(([0.0], np.cumsum(ridge_freq[:-1] * np.diff(t))))
@@ -267,6 +285,289 @@ def segment_cycles_wavelet(t, vel):
 
     anchors = _anchors_from_marks(vel, marks)
     return anchors if len(anchors) >= 1 else None
+
+
+# ── LEARNED BOUNDARY DETECTOR (Phase 59-05) ──────────────────────────────────
+#
+# Logistic regression over a 5-feature window stack, predicting "is this sample an arm
+# entry". Fitted in tools/segmenter_candidates.py on all 20 scorable annotated sessions —
+# the same protocol 59-04's leave-one-session-out numbers came from.
+#
+# ⚠ NO sklearn IN PRODUCTION, DELIBERATELY. Inference is a dot product and a sigmoid; the
+# numpy form below was verified to reproduce sklearn's predict_proba to 1.1e-16 across all
+# 20 sessions. sklearn stays in tools/ for FITTING only. The weights are a CONSTANT BLOCK
+# rather than a loaded artifact, so there is no model file to version, ship, or lose.
+# To retrain: re-run tools/segmenter_candidates.py and replace these two constants.
+#
+# ⚠ 59-04 measured this LOSO vs in-sample at 0.591/0.600 (butterfly) — it does NOT overfit,
+# because 5 features cannot memorise 236 marks. That is a property of THIS model's tiny
+# capacity and is NOT a license to fit a bigger one on the same corpus.
+_LEARNED_COEF      = np.array([0.6976347336, 1.5399329061, 0.2073524188,
+                               -0.1574910741, 1.1872824453])
+_LEARNED_INTERCEPT = -1.0419426935241078
+_LEARNED_FEAT_WIN_S = 0.15
+_LEARNED_MIN_PROB   = 0.5
+
+
+def _learned_features(vel, fs):
+    """[v, dv, d2v, v-local_mean, local_std] per sample.
+
+    ⚠ MUST match tools/segmenter_candidates.py::_features exactly. A silent divergence here
+    does not raise — it just feeds the fitted weights inputs they were not trained on.
+    """
+    v  = np.nan_to_num(vel)
+    d1 = np.gradient(v)
+    d2 = np.gradient(d1)
+    w  = max(3, int(_LEARNED_FEAT_WIN_S * fs))
+    roll     = pd.Series(v).rolling(w, center=True, min_periods=1)
+    loc_mean = roll.mean().values
+    loc_std  = roll.std().fillna(0).values
+    return np.column_stack([v, d1, d2, v - loc_mean, loc_std])
+
+
+def _learned_boundaries(t, vel):
+    """Cycle boundaries from the learned per-sample arm-entry probability.
+
+    Same contract as every other segmenter: takes the already-sliced window, returns
+    slice-relative cycle dicts, or None when it finds too little to work with.
+    """
+    if len(vel) < 50:
+        return None
+    fs = _compute_fs(t)
+    p  = 1.0 / (1.0 + np.exp(-(_learned_features(vel, fs) @ _LEARNED_COEF
+                               + _LEARNED_INTERCEPT)))
+    period = _estimate_period(t, vel) or 1.0
+    marks, _ = find_peaks(p, height=_LEARNED_MIN_PROB,
+                          distance=max(1, int(0.6 * period * fs)))
+    if len(marks) < 2:
+        return None
+
+    # ⚠ Cycles are built BETWEEN consecutive peaks — deliberately NOT via
+    # _anchors_from_marks, which pads with 0 and len(vel). That padding is correct for
+    # segment_cycles_wavelet (whose marks are interior phase crossings) but wrong here: the
+    # peaks ARE the boundaries. Padding shifts every boundary one position and invents a
+    # cycle starting at t=0, which drops boundary F1 to 0.000 while leaving the stroke RATE
+    # looking fine — measured, not hypothetical.
+    cycles = []
+    for a, b in zip(marks[:-1], marks[1:]):
+        if b - a < 2:
+            continue
+        cycles.append({"cycle_num": len(cycles), "start_idx": int(a), "end_idx": int(b),
+                       "peak_idx": int(a) + int(np.argmax(vel[a:b]))})
+    return cycles or None
+
+
+def _pair_boundaries(base_segmenter, k):
+    """Wrap a segmenter so every k-th boundary starts a cycle (Phase 59-03).
+
+    Freestyle and backstroke ALTERNATE ARMS, so one cycle spans two arm entries. The
+    wavelet emits a boundary at roughly each arm entry, and counting every one of them
+    as a cycle is what made auto stroke_rate_spm read 1.48–2.08x (median ~1.75x) the
+    human-derived value. Mirrors annotations.annotation_to_overrides' marks[0::k].
+
+    ⚠ THE DIVISOR IS NOT annotations.MARKS_PER_CYCLE, AND MUST NOT BE IMPORTED FROM IT.
+    That table is EXACT PHYSIOLOGY for HUMAN marks. Here, k=2 works only because THIS
+    segmenter happens to emit boundaries at roughly arm-entry rate — an empirical
+    property measured in 59-01 (1.15–1.5x the arm-entry count), not a physiological
+    law. Swap the base segmenter in 59-05 and k must be re-measured, not assumed.
+    """
+    def paired(t, vel):
+        cycles = base_segmenter(t, vel)
+        if not cycles:
+            return cycles
+        bounds = [c["start_idx"] for c in cycles] + [cycles[-1]["end_idx"]]
+        # ⚠ DROP _anchors_from_marks' LEADING PAD BEFORE PAIRING (fixed in 59-05).
+        # segment_cycles_wavelet returns anchors padded with index 0, so the boundary list
+        # is [0, m0, m1, ...]. Pairing indices 0,2,4 of THAT selects [0, m1, m3, ...] —
+        # every cycle landing HALF A CYCLE out of phase with the arm entries. Measured on
+        # 12 freestyle sessions: boundary F1 0.000 with the pad, 0.458 without it.
+        # It went unnoticed because stroke_rate_spm is blind to it — the mean interval is
+        # unchanged either way, which is why 59-03's rate gate passed at 1.00.
+        if len(bounds) > 2 and bounds[0] == 0:
+            bounds = bounds[1:]
+        bounds = bounds[0::k]
+        out = []
+        for i in range(len(bounds) - 1):
+            a, b = bounds[i], bounds[i + 1]
+            if b - a < 2:
+                continue          # degenerate span cannot carry per-cycle metrics
+            out.append({"cycle_num": len(out), "start_idx": a, "end_idx": b,
+                        "peak_idx": a + int(np.argmax(vel[a:b]))})
+        return out or None
+    return paired
+
+
+# ── PER-STROKE SEGMENTER DISPATCH (Phase 59-02, populated 59-03) ──────────────
+#
+# An OVERRIDE table, not an exhaustive map. Anything absent resolves to the default.
+#
+# 59-02 shipped it EMPTY (proving the seam inert); 59-03 registered the two
+# alternating-arm strokes. The BASE segmenter is unchanged for every stroke —
+# freestyle and backstroke differ only in that their boundaries are paired into
+# cycles. Choosing a different base per stroke is Phase 59-05's job.
+#
+# ⚠ Butterfly and breaststroke get NO pairing: they are 1 arm entry per cycle. 59-01
+# measured butterfly over-counting at an UNSTABLE 1.18–2.18x the cycle count (the
+# ridge sometimes locks onto the two-dolphin-kick harmonic), which no constant
+# divisor can fix — that is 59-04/05's problem, not this one's.
+#
+# WHY THE SEAM EXISTS. Phase 59-01 scored the shipping segmenter against 23
+# hand-annotated sessions for the first time and found that no two strokes want
+# the same method — a 20-line peak-pick baseline beat the wavelet 2x on butterfly
+# (recall 0.84 vs 0.41 at ±0.15 s) while the wavelet won on freestyle.
+#
+# WHY THE TABLE LIVES HERE AND NOT IN annotations.py. `annotations.MARKS_PER_CYCLE`
+# is the LABELING convention (one mark = one arm entry; free/back = 2 per cycle).
+# The number of BOUNDARIES a segmenter emits per cycle is a DIFFERENT quantity —
+# 59-01 measured 1.15–1.5x the arm-entry count for freestyle and an unstable
+# 1.18–2.18x the cycle count for butterfly. Sharing one table would conflate a
+# human convention with an algorithm's behavior.
+#
+# REGISTRY CONTRACT — a value is a callable:
+#     f(t, vel) -> list[cycle dict] | None
+# It receives the ALREADY-SLICED vel[ip_end:swim_end] and returns slice-relative
+# indices in segment_cycles_wavelet's dict shape; the caller offsets them to
+# full-trace. None means "found nothing" and is handled by the caller.
+# ⚠ segment_cycles_trough(t, vel, T_est=None) does NOT satisfy this signature.
+# Wrap it (T_est from _estimate_period) rather than widening the contract.
+SEGMENTER_BY_STROKE = {
+    # Alternating arms: the wavelet emits ~1 boundary per ARM ENTRY, and 2 entries make a
+    # cycle. 59-04 measured both challengers WORSE here on cycle regularity (L1 cv 0.121,
+    # peakpick 0.246, vs the wavelet's 0.069 against a human 0.063) — so freestyle keeps it.
+    "freestyle":  _pair_boundaries(segment_cycles_wavelet, 2),
+    "backstroke": _pair_boundaries(segment_cycles_wavelet, 2),
+
+    # ⚠ k=2 ON STROKES THAT ARE PHYSIOLOGICALLY *ONE* ARM ENTRY PER CYCLE. NOT A BUG.
+    # It contradicts annotations.MARKS_PER_CYCLE (which says 1) and that is correct: `k` is
+    # a property of the DETECTOR, not the stroke. This detector emits ~2.02 events per
+    # butterfly cycle CONSISTENTLY, so every 2nd event lands one boundary per cycle at a
+    # stable phase — measured cv 0.104 / alternation 0.090 against a human 0.055 / 0.056.
+    # ⚠ `peakpick` was REJECTED here despite a better F1 (0.524 vs the wavelet's 0.317):
+    # it emits an UNSTABLE ~2.5 events per cycle, so pairing drifts through phases
+    # (alternation 0.276). Good boundary placement, meaningless cycles. See the regularity
+    # gate in tests/test_metrics.py before swapping either of these.
+    # ⚠ breaststroke rests on n=2 annotated sessions. Reverting is deleting this one line.
+    "butterfly":    _pair_boundaries(_learned_boundaries, 2),
+    "breaststroke": _pair_boundaries(_learned_boundaries, 2),
+}
+_DEFAULT_SEGMENTER = segment_cycles_wavelet
+
+
+def resolve_segmenter(stroke_type):
+    """Return the segmenter for a stroke_type. Unknown/None → the default.
+
+    Every value `sessions.stroke_type` can hold — the four strokes, the mobile
+    picker's "im" and "udk", an unrecognised string, or None — falls through to
+    the default while SEGMENTER_BY_STROKE is empty.
+    """
+    return SEGMENTER_BY_STROKE.get(stroke_type, _DEFAULT_SEGMENTER)
+
+
+# ── SWIM WINDOW BY RHYTHM (Phase 59-03) ───────────────────────────────────────
+#
+# ⚠ Tuned against ONE swimmer's 23 annotated sessions. Change-detector values, not
+# universal constants. Measured effect vs the old detectors (median |error|):
+#     ip_end  3.93 s → 2.16 s        finish  3.82 s → 1.20 s
+_WINDOW_POWER_FRAC   = 0.25   # ridge amplitude vs its own 95th pct → "rhythm present"
+_WINDOW_FREQ_TOL     = 0.30   # ±30% of steady-state stroke frequency counts as settled
+_WINDOW_HOLD_CYCLES  = 1.0    # settled frequency must persist this many cycles
+_WINDOW_GAP_S        = 1.0    # bridge rhythm dropouts shorter than this
+# Plausibility floor. A window spanning fewer than this many cycles at its OWN detected
+# stroke frequency is not a swim, and the detector is disbelieved (returns None → the
+# caller keeps the old motion-based boundaries). Measured on 36 freestyle/backstroke
+# sessions: `duration x f_ref < 4` flags 13/13 of the windows that collapse to ≤3 cycles,
+# at the cost of also disbelieving 7/23 sound ones. That asymmetry is deliberate — a
+# false positive costs only the IMPROVEMENT on that session (it reverts to today's
+# behavior), while a false negative ships an implausibly narrow window and a
+# wrong-in-a-new-way stroke rate.
+_WINDOW_MIN_CYCLES   = 4.0
+
+
+def _longest_active_run(mask, fs, min_gap_s=_WINDOW_GAP_S):
+    """Longest contiguous True run, after bridging gaps shorter than min_gap_s.
+
+    Bridging is load-bearing: one slow stroke or a breath dips the ridge amplitude
+    below threshold mid-swim, and without it the window would truncate at that dip.
+    """
+    if not mask.any():
+        return None
+    m = mask.copy()
+    gap = max(1, int(min_gap_s * fs))
+    idx = np.flatnonzero(m)
+    for a, b in zip(idx[:-1], idx[1:]):
+        if 1 < b - a <= gap:
+            m[a:b] = True
+    idx    = np.flatnonzero(m)
+    splits = np.flatnonzero(np.diff(idx) > 1)
+    starts = np.r_[idx[0], idx[splits + 1]]
+    ends   = np.r_[idx[splits], idx[-1]]
+    best   = int(np.argmax(ends - starts))
+    return int(starts[best]), int(ends[best]) + 1
+
+
+def detect_swim_window(t, vel):
+    """Start and end of CYCLIC STROKING → (ip_end, swim_end), or None.
+
+    Phase 59-03. Replaces two detectors that were asking the wrong question:
+    `detect_phases` asked "where does MOTION start and stop" and
+    `detect_initial_phase` asked "where is the first deep TROUGH". The coach marks
+    where STROKING starts and stops, which is neither.
+
+    Both old rules were measured wrong, and both hypotheses for WHY were refuted:
+      * finish is not a threshold problem — mean |vel| in the over-run region is
+        0.403 m/s, EIGHT times _BASELINE_THRESH. The swimmer really is still moving
+        after the touch. It is fast but APERIODIC, so rhythm separates it and
+        amplitude cannot.
+      * ip_end is not a trough-selection problem — in 12 of 23 sessions the first
+        qualifying trough was already the nearest one to the human mark and was still
+        0.6–6.1 s early. Underwater dolphin kicking IS rhythmic, just at roughly
+        twice the stroke frequency, so amplitude accepts it and only FREQUENCY
+        rejects it.
+
+    Hence: ridge amplitude finds the active region; the frequency SETTLING inside it
+    finds where stroking actually begins. Steady-state stroke frequency is taken from
+    the back 60% of the active region, which is past any breakout by construction.
+
+    Returns full-trace indices, swim_end exclusive. None when the trace is too short
+    or flat to carry a ridge — the caller keeps its existing fallbacks.
+    """
+    fs = _compute_fs(t)
+    ridge_freq, ridge_power = _cwt_ridge(vel, fs)
+    if ridge_freq is None:
+        return None
+
+    amp = np.sqrt(np.maximum(ridge_power, 0.0))
+    ref = float(np.percentile(amp, 95))
+    if ref < 1e-9:
+        return None
+    run = _longest_active_run(amp > _WINDOW_POWER_FRAC * ref, fs)
+    if run is None:
+        return None
+    i0, i1 = run
+
+    back = ridge_freq[i0 + int(0.4 * (i1 - i0)):i1]
+    if back.size < 3:
+        return i0, i1
+    f_ref = float(np.median(back))
+    if not np.isfinite(f_ref) or f_ref <= 0:
+        return i0, i1
+
+    # Plausibility: does this window even span a swim's worth of cycles at its own
+    # detected frequency? On roughly a third of real sessions the amplitude run latches
+    # onto the DIVE transient instead of the swim — it starts at t=0 and ends early —
+    # and the result is an implausibly narrow window. Disbelieve those outright rather
+    # than emit a confident wrong answer.
+    if ((i1 - i0) / fs) * f_ref < _WINDOW_MIN_CYCLES:
+        return None
+
+    near = np.abs(ridge_freq - f_ref) <= _WINDOW_FREQ_TOL * f_ref
+    hold = max(1, int(_WINDOW_HOLD_CYCLES / f_ref * fs))
+    held = 0
+    for i in range(i0, i1):
+        held = held + 1 if near[i] else 0
+        if held >= hold:
+            return int(i - hold + 1), i1
+    return i0, i1
 
 
 def detect_initial_phase(t, vel, baseline_end_idx):
@@ -430,9 +731,14 @@ def extract_cycle_peaks(vel, cycles):
 
 # ── METRICS ──────────────────────────────────────────────────────────────────
 
-def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None):
+def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_type=None):
     """
     Top-level function: run the full breaststroke analysis pipeline.
+
+    stroke_type (optional, Phase 59-02): selects the segmenter via SEGMENTER_BY_STROKE.
+        None or an unrecognised value → the default (wavelet), which is what every
+        stroke resolves to while that table is empty. Ignored entirely when
+        manual["cycle_bounds"] is supplied, since human boundaries bypass segmentation.
 
     manual (optional, Phase 47): dict of human-annotation overrides — any subset of
         baseline_end_idx  – replaces detect_phases baseline_end
@@ -451,17 +757,37 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None):
     fs  = _compute_fs(t)
 
     # ── phase detection ────────────────────────────────────────────────────
+    # baseline_end still comes from detect_phases — it marks where MOTION begins (the
+    # dive), which is the right question for that boundary and feeds baseline_end_s.
     phases   = detect_phases(t, vel)
     b_end    = phases["baseline_end"]
     swim_end = phases["swim_end"]
     if manual.get("baseline_end_idx") is not None:
         b_end = min(max(int(manual["baseline_end_idx"]), 0), len(t) - 1)
+
+    # ── swim window by RHYTHM (Phase 59-03) ────────────────────────────────
+    # Supersedes the two AUTO boundaries. Measured on 23 annotated sessions: ip_end
+    # median |error| 3.93 s → 2.16 s, finish 3.82 s → 1.20 s. Returns None when the
+    # trace is too short or flat to carry a ridge, in which case the old values stand.
+    # ⚠ A manual value always wins over this — applied below, exactly as before.
+    win = detect_swim_window(t, vel)
+    if win is not None:
+        swim_end = min(max(int(win[1]), b_end + 1), len(t))
     if manual.get("swim_end_idx") is not None:
         swim_end = min(max(int(manual["swim_end_idx"]), b_end + 1), len(t))
 
     # ── initial phase detection (dive + pulldown) ──────────────────────────
+    # ⚠ Still trough-based, deliberately: this call supplies the dive/pulldown fields
+    # annotations.build_seed reads. Phase 59-03 changes which function decides the
+    # WINDOW, not the whole front end. Its initial_phase_end_idx is superseded when the
+    # rhythm detector runs; pulldown_duration_s remains measured to the TROUGH, so it
+    # is not the interval from the pulldown peak to the new stroke start.
+    # Order preserved from pre-59-03: this runs AFTER the manual baseline override.
     initial_phase = detect_initial_phase(t, vel, b_end)
     ip_end = initial_phase["initial_phase_end_idx"]
+    if win is not None:
+        ip_end = min(max(int(win[0]), b_end), swim_end - 1)
+        initial_phase["initial_phase_end_idx"] = ip_end
     if manual.get("ip_end_idx") is not None:
         ip_end = min(max(int(manual["ip_end_idx"]), b_end), swim_end - 1)
 
@@ -493,11 +819,16 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None):
                 "peak_idx":  a + int(np.argmax(vel[a:b])),
             })
     else:
-        # Production segmenter = wavelet/CWT ridge for ALL strokes (Phase 16-05).
-        # segment_cycles_trough is kept above as a never-called backup (user decision:
-        # wavelet only, no fallback). Shipped at placeholder quality — see
-        # session["segmentation_reliable"] below and 16-04-SUMMARY.
-        cycles = segment_cycles_wavelet(t_seg, vel_seg)
+        # Routing is TABLE-DRIVEN as of Phase 59-02 — see SEGMENTER_BY_STROKE above.
+        # That table is currently EMPTY, so every stroke still resolves to the
+        # wavelet/CWT ridge exactly as Phase 16-05 shipped it, at placeholder quality
+        # (see session["segmentation_reliable"] below and 16-04-SUMMARY).
+        # segment_cycles_trough is still never called from here, but it is no longer
+        # merely a backup: it is a scored candidate for 59-04. Phase 59-01 measured it
+        # at 0.00 against ground truth, which is a MISFEED rather than a failure — it
+        # keys on velocity below 0.20 x v95, and Phase 57 made the swim window
+        # authoritative, removing the dead tail those deep troughs lived in.
+        cycles = resolve_segmenter(stroke_type)(t_seg, vel_seg)
         if cycles is None:
             cycles = []
 

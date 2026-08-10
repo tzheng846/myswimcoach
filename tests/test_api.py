@@ -1205,3 +1205,52 @@ class TestSchemaContract:
             'payload = {"session": {}, "cycles": [], "ok": True}\n'
         )
         assert find_violations(ok, schema) == []
+
+
+# ── Phase 59-02: /process forwards stroke_type to the segmenter dispatch ───────
+# compute_session_metrics gained a stroke_type parameter that selects the segmenter
+# via metrics.SEGMENTER_BY_STROKE. The value was already in scope at api.py:139 as a
+# Form field; it was simply never passed on. Today this changes nothing (the registry
+# is empty, so every stroke resolves to the wavelet) — it is wired now so 59-05 is a
+# one-line table edit rather than a hunt for call sites.
+
+class TestStrokeTypeForwardedToMetrics:
+    def _capture(self, api_client, monkeypatch, csv_bytes, stroke_type):
+        import api
+        captured = {}
+        real = api.m.compute_session_metrics
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(api.m, "compute_session_metrics", spy)
+        data = {"head_waist_m": "0.0"}
+        if stroke_type is not None:
+            data["stroke_type"] = stroke_type
+        resp = api_client.post(
+            "/process",
+            files={"file": ("session.csv", io.BytesIO(csv_bytes), "text/csv")},
+            data=data,
+            headers={"Authorization": "Bearer fake-token-mocked"},
+        )
+        assert resp.status_code == 200, resp.text
+        return captured
+
+    def test_stroke_type_value_reaches_compute_session_metrics(
+            self, api_client, monkeypatch, synthetic_csv_bytes):
+        """Assert the VALUE arrives, not merely that the key exists.
+
+        A wired-but-wrong argument (e.g. always None, or the athlete id) is the failure
+        mode worth catching — it would look fine until 59-05 filled the registry and
+        every stroke silently took the default anyway.
+        """
+        captured = self._capture(api_client, monkeypatch, synthetic_csv_bytes, "butterfly")
+        assert captured.get("stroke_type") == "butterfly"
+
+    def test_omitted_stroke_type_forwards_none(
+            self, api_client, monkeypatch, synthetic_csv_bytes):
+        """stroke_type is an optional Form field; absent must forward None, not "" or
+        a crash, because None is what resolves to the default segmenter."""
+        captured = self._capture(api_client, monkeypatch, synthetic_csv_bytes, None)
+        assert captured.get("stroke_type") is None
