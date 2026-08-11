@@ -1,5 +1,281 @@
 # Project State
 
+## Current Position
+
+Milestone: v0.5 Commercial Foundation
+Phase: **60 (Mobile App Rework) — ✅ COMPLETE (3/3 plans) 2026-08-11 · TRANSITIONED**
+Plan: none open. **Phase 60 closed and transitioned.**
+Status: Ready to plan the next phase.
+Last activity: 2026-08-11 — Phase 60 unified + transitioned (PROJECT.md evolved, phase commit made)
+
+Progress:
+- Phase 60: [██████████] 100% (3 of 3 plans)
+
+**NEXT RECOMMENDED: Phase 53-01** (repeatability) — written 2026-08-03, `autonomous:true`, needs NO
+new data. It has been the standing recommendation since Phase 59 closed, and Phase 60 added two
+inputs to it: the user's *"I don't trust auto detect baseline"* (now three unconnected notions of
+when a swim starts), and a report card that finally displays per-cycle spread rather than averages
+of it. Other open candidates: **58-04** (`VideoPane` end-anchor — owed, homeless, web-only),
+**52-02** (measure + backfill NULL sample rates — newly better motivated), **49** (security
+hardening, planned 2026-07-20, never applied), **56** (coach-chat athlete scoping — open defect,
+documented only).
+
+### Git State
+Last commit (myswimcoach): see `feat(60-mobile-app-rework)` below
+Mobile repo (`swimnetics-mobile`, separate + user-owned): `4a03f2c` (58-01), `098f345` (60-01),
+`8c4a4c0` (60-02), plus 60-03. **No remote push performed for either repo in this session.**
+⚠ **Phase 60 has NOT been verified on a device.** All three plans rest on device-independent
+evidence plus user approvals; one EAS build is owed and would also be the first hardware exposure
+for several deferred iOS checks.
+
+## Loop Position (60-03) — CLOSED
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [60-03 CLOSED 2026-08-11 — all 8 ACs met]
+```
+
+**PHASE 60 ✅ COMPLETE (3/3 plans) 2026-08-11 — Mobile App Rework.**
+  The phone stopped showing less than the laptop, and stopped showing one number wrong.
+  Suite 273 throughout (**zero Python touched in the entire phase**); export exit 0;
+  1091 → 1093 modules. Mobile commits `098f345` (60-01), `8c4a4c0` (60-02); 60-03 uncommitted.
+  **60-01** — ⭐ the report card's time axis was **−10.0%** on every recorded-rate session and is
+    now **+0.0%**, measured against the live DB, 4 for 4. Four consumers were wrong (chart axis,
+    cycle overlay, Time-to-Distance, CSV), and Time-to-Distance had a *second* compounding error.
+    Plus four per-cycle charts replacing six scalars, the Data Quality card retired down to a
+    dropout strip, and the `cv_isi` gate demoted from blackout to banner on both screens.
+  **60-02** — brush bar replaces pinch; a controlled window primitive; ⭐ the unwindowed polyline
+    proven **byte-identical** against the pre-refactor algorithm transcribed from git.
+  **60-03** — video reachable from any saved session, a rolling playhead window, origin protected
+    from silent overwrite, and (added mid-apply) a user-dropped start marker for Time-to-Distance.
+  ⭐ **THE BEST DESIGN CHANGE CAME FROM A USER QUESTION, NOT THE PLAN.** At 60-03's decision
+    checkpoint the user asked *"why are there different screens… I want a single destination —
+    would that make it simpler?"* It exposed both a misconception (there was only ever one screen,
+    with two doors) and a real simplification: the origin rule did not need to differ per door.
+    One sentence — **"use the stored origin if there is one, otherwise compute it and save it"** —
+    covers every case, and **deleted** the planned `allowOriginWrite` param, its branch, and the
+    "which screen am I" concept. D11 amended from "the read path never auto-writes" to **"never
+    overwrite an existing origin"**, which is what it was actually protecting.
+  ⚠ **A PREDICTED BUG WAS REAL:** the nudge-save was gated on a ref set by the auto-post, so
+    skipping the auto-post would have silently swallowed the user's first nudge — losing the very
+    repair mechanism D11 exists to preserve. Fixed with a dedicated mount ref.
+  ⚠ **DIAGNOSED, NOT FIXED — the trace "dancing".** One cause measured and fixed (`resampleWindow`
+    anchored its lattice to the window start, so at span 5 s two lattice phases alternated frame to
+    frame → shimmer; now one, stable). **But spans 1 s and 2 s were ALREADY stable**, so any
+    remaining jitter at the default 2 s has a different cause. Hypothesis: `player.currentTime`
+    wobbling between polls, moving a playhead-centred window ±2 px at 20 Hz. Diagnostic recorded in
+    60-03-SUMMARY. Not speculatively patched.
+  ⚠ **VERIFICATION HONESTY, both 60-01 and 60-03:** approved without itemized on-device
+    observations. Device-independent evidence (live DB, node, pytest, export, byte-comparison) is
+    strong; the visual/interactive ACs rest on the approvals. Specifically unconfirmed: **whether
+    the 2 s rolling window actually reads well during playback** — the point of the original ask.
+  ⚠ CARRIED OUT (none blocking):
+    • the `currentTime` wobble hypothesis — unmeasured
+    • **58-04 (`VideoPane` end-anchor) still owed and still homeless** — web work; 60-03 eased the
+      symptom from the mobile side but the annotate page still cannot compute an origin of its own
+    • **Phase 52-02 is better motivated than its backlog position** — 60-01 found most NULL-rate
+      rows are **~90 Hz, not ~100**, correcting a generalization in the Phase 59 record
+    • **three unconnected notions of "when the swim starts"** — auto `baseline_end`, the annotation
+      contract's `dive_start_s`, and 60-03's marker. The user's *"I don't trust auto detect
+      baseline"* is an input to Phase 53
+    • the start marker is in-memory only; persisting it is a schema change
+  SUMMARIES: `60-01-SUMMARY.md`, `60-02-SUMMARY.md`, `60-03-SUMMARY.md`
+
+## Loop Position (60-02) — CLOSED
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [60-02 CLOSED 2026-08-11 — all 5 ACs met]
+```
+
+**60-02 ✅ COMPLETE — windowed chart primitive + brush bar** (D6, D7, D12).
+  Suite 273 (unchanged, zero `.py` touched) · export exit 0 · **1092 → 1093 modules (+1)**.
+  **No `myswimcoach` file changed at all**, not even a doc.
+  ⭐ **AC-2: THE REFACTOR PROVABLY DID NOT DRIFT.** The old algorithm was transcribed **verbatim
+    from `git show HEAD:VelocityChart.js`** (not from memory) and run head-to-head on 4 real
+    traces — the unwindowed polyline is **BYTE-IDENTICAL** (4484/4505/5052/5370 chars).
+  ⚠ **THAT REQUIRED A DESIGN CHOICE WORTH KEEPING:** `resampleWindow` strides with `Math.ceil`,
+    the legacy unwindowed path with `Math.floor(n/400)` — on a 4216-sample trace those differ
+    (384 vs 422 points). The two paths are **deliberately kept separate**, with a code comment
+    saying so. Unifying them would silently change the default chart everyone looks at; it is a
+    legitimate future change but needs its own before/after, not a tidy-up.
+  ⚠ **PLAN FIGURE CORRECTED: the "~17 points" was from a hypothetical 47 s trace.** Real sessions
+    are 22–27 s, so the old behaviour kept **30–37**, not 17. New: **181**. Still 5–6×, but the
+    plan overstated the starting point.
+  SHIPPED: NEW `src/lib/chartWindow.js` (pure, node-verified across 7 clamp cases + 11 degenerate
+    inputs, no throws/NaN — it runs 20×/s on the video page where one NaN blanks the trace);
+    `clampWindow` takes an **`anchor`** (`span`/`start`/`end`) because pan and the two handle drags
+    want different edges held; pinch + pan-when-zoomed + the dead double-tap reset all removed;
+    brush strip on a **second, dedicated PanResponder** (the old bugs came from one responder
+    multiplexing three jobs), handles drawn at 8 pt but hit-tested at 20 pt; and the three perf
+    fixes 60-03 depends on (memoized full-trace downsample — the component had **no `useMemo`
+    anywhere**; in-window resampling; y-scale pinned to the full trace when windowed, else it
+    rescales 20×/s and the trace jitters).
+  D12 APPLIED: `brush` on **both** results surfaces (`ReportCardScreen.js:481`,
+    `RecordScreen.js:937`). `VideoOverlayScreen.js` untouched — `git diff` empty, which is AC-5's
+    regression guard; it gets a *controlled, playhead-driven* window in 60-03 instead.
+  ⚠ DEVIATION: Tasks 2 and 3's component edits landed in **one** file write, not two. The plan
+    split them per Phase 59's D14. The substance survived — the byte-identical test the split
+    existed to enable ran independently and passed, and the brush is purely additive behind a prop
+    defaulting to `false` — but the structure deviated. Recorded, not glossed.
+  ⚠ `web/components/Footer.js` + `Nav.js` show dirty: **pre-existing Phase 46 blog work**, not 60-02.
+  SUMMARY: `.paul/phases/60-mobile-app-rework/60-02-SUMMARY.md`
+  **NEXT: `/paul:plan` for 60-03** — video reachable from any saved session (D4), rolling playhead
+    window (D5), origin precedence + write guard (D11). **The last plan of Phase 60.**
+
+## Loop Position (60-01) — CLOSED
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [60-01 CLOSED 2026-08-11 — all 5 ACs met]
+```
+
+**60-01 ✅ COMPLETE — report card correctness + per-cycle analytics.**
+  Suite 273 (unchanged, zero `.py` touched) · export exit 0 · **1091 → 1092 modules (+1)**.
+  ⭐ **AC-1 MEASURED AGAINST THE LIVE DB, NOT SIMULATED.** The mobile time axis was **−10.0%** on
+    every recorded-rate session and is now **+0.0%** — exact agreement with each session's own
+    `lap_time_s`, 4 for 4 (89f33669 26.89 s · c0cdfc25 22.60 s · e166b8fe 25.36 s · d25c578f 21.70 s).
+    NULL-rate rows render byte-identically, as AC-1 required.
+  ⚠ **FINDING THAT OUTLIVES THE PLAN — most NULL-rate rows are ~90 Hz, not ~100.** Two of three
+    sampled NULL sessions are still −10.0% off, correctly so (no backfill; D1 and CLAUDE.md both
+    forbid it, since writing 100 would erase "genuinely 100" vs "unknown"). **This corrects a
+    generalization in the Phase 59 record**, which noted the two June NULL sessions "genuinely ran
+    at ~100 Hz" — true of those two (`e20cd07d` reproduces it), NOT true in general. **Phase 52-02
+    (measure + backfill) is worth more than its backlog position suggests.**
+  SHIPPED: `fsHz` at 3 division sites (+ Time-to-Distance fixed transitively, and with it the
+    *second* compounding error where `baseline_end_s` in true seconds was compared against the fake
+    array); NEW `CycleCharts.js` — 4 hand-rolled SVG panels (DPS / Coast / Duration / Arm Peak),
+    all cycles plotted per D8; `DataQualityCard` DELETED from **both** screens; NEW
+    `dropoutWarning.js` firing only above 5%, node-verified across 10 cases including the kick-only
+    trap; the `cv_isi > 0.80` gate demoted from blackout to banner on both screens.
+  DEVIATIONS (3, none blocking): a 6th file (`src/lib/dropoutWarning.js`) — two screens needed one
+    threshold and the plan's own verify wanted a node-runnable predicate; **Fatigue kept as a scalar**
+    because `fatigue_index_pct` is a q1-vs-q4 comparison with no per-cycle series and dropping it
+    would have silently removed a metric; and the ROADMAP's 58-01 module baseline (1075→1076) was
+    **stale** — real baseline 1091, the gap being `expo-media-library` added at 58-01's checkpoint
+    after that number was recorded (re-measured by stash → export → restore, so +1 is real).
+  ⚠ VERIFICATION HONESTY: approval covered **item 7** affirmatively (58-01's auto-stop on real
+    hardware). Items 1–6 were approved without itemized on-device observations. AC-1/3/5 rest on
+    device-independent evidence (live DB, node, pytest, export); AC-2/4 are visual and rest on the
+    approval plus a green export. Recorded because it is the same pattern 58-01 was flagged for.
+  ⚠ Mobile changes are **UNCOMMITTED** in `swimnetics-mobile`; HEAD is `4a03f2c` (Phase 58-01,
+    committed at 60-01's opening checkpoint).
+  SUMMARY: `.paul/phases/60-mobile-app-rework/60-01-SUMMARY.md`
+  **NEXT: `/paul:plan` for 60-02** (windowed chart primitive + brush bar).
+
+---
+
+**PHASE 58 ✅ CLOSED 2026-08-11 — Video Ground Truth.** User: *"update 58 to say that everything
+worked as intended - close the phase."*
+  **4 of 5 plans shipped and verified: 58-01, 58-02, 58-03, 58-05.**
+  ⭐ **58-01's auto-stop is now DEVICE-VERIFIED.** It had been the phase's one outstanding risk —
+    approved on assumption 2026-08-07 (*"assume 58-01 is working. approve it."*) and never fired
+    against real hardware, with a too-early stop being the failure mode that destroys data rather
+    than merely annoying. It rode the Phase 60-01 build and worked. **That is what closes this
+    phase**, and it also retires the `reset()` latent-bug concern in the 58-01 record.
+  ⚠ **58-04 (`VideoPane` end-anchor) WAS NEVER BUILT — it is carried out, not completed.** No plan
+    was ever written for it. It cannot be described as "working as intended" because it does not
+    exist. **Live consequence, unchanged:** `VideoOverlayScreen` on the phone is still the ONLY
+    thing in the entire system that writes `video_origin_s`, so a record-with-video session never
+    opened there arrives on the web at `origin_s = 0`, silently unsynced. It is WEB work
+    (`VideoPane` + the annotate page) and is therefore **out of Phase 60's scope entirely** —
+    Phase 60-03 adds a second mobile door into Video Overlay, which eases the manual workaround but
+    does not replace 58-04. **Needs a home in a future phase.**
+  ⚠ **R1 WAS NEVER ANSWERED — unanswered across five consecutive checkpoints** (57-02, 58-01,
+    58-02, 58-03, and now the phase close). Whether ~40 arm-entry marks are placeable from tripod
+    footage gates Phase 53 Track A4. **Partial evidence says YES**: the 08-07 batch was labeled with
+    58-02's video tooling and is measurably the best-covered in the corpus (~90% vs ~50% for some
+    08-05 sessions). Closing the phase does not close R1.
+
+**PHASE 60 — Mobile App Rework** (discussed 2026-08-10 via `/paul:discuss`, AskUserQuestion ×3
+rounds / 11 questions; CONTEXT.md written; **11 decisions D1–D11, zero open questions**).
+⚠ **`swimnetics-mobile` ONLY** — a separate, user-owned git repo. The single `myswimcoach` edit in
+the whole phase is a `CLAUDE.md` documentation correction. Nothing deploys to Railway or Vercel.
+
+TRIGGER: user asked for five mobile changes. Reading the source found a sixth thing they had not
+asked about, and it is a live wrong number:
+
+⚠ **THE REPORT CARD'S TIME AXIS IS ~11.7% WRONG, AND HAS BEEN SINCE PHASE 52.** `89205ca`
+("Persist per-session sample rate") fixed `web/app/app/sessions/[id]/page.js`,
+`web/app/app/annotate/[id]/page.js` and `web/components/portal/VelocityChart.js` — **it is a
+`myswimcoach` commit and the mobile repo was never in its diff.** The two report-card files are
+near-mirrors: web `:120` derives `fsHz` from `sample_rate_hz`; mobile `ReportCardScreen.js:170`
+still hardcodes `i / 100`. **`sample_rate_hz` appears ZERO times in the entire mobile `src/`.**
+Four on-screen consumers, all wrong: the chart x-axis (a 47.1 s swim drawn as 42.2 s), the
+cycle-boundary overlay, **Time-to-Distance** (7.16 s shown for a true 8.0 s) and the CSV export.
+Time-to-Distance carries a **second, compounding** error — `baseline_end_s` is in TRUE seconds and
+is compared against the FAKE array at `:536`, so the baseline index is wrong, not merely scaled.
+⚠ `CLAUDE.md` under-describes this: it names only "client-side CSV export" as the iOS gap.
+✅ VERIFIED UNAFFECTED: the `/process` path (`RecordScreen` uses the server's real `t_dec`), and
+mobile `CompareScreen` (metrics only, never touches a velocity profile).
+
+DECISIONS (11, all user choices):
+  D1 sample rate → full parity with web, NULL→100, **no backfill**; D1c fix the CLAUDE.md note.
+  D2 four per-cycle charts: `dist_m`, `coast_fraction`, `duration_s`, `arm_peak_vel`.
+  ⚠ **THE ASK HAD TO BE TRANSLATED:** "cycle-by-cycle graph of ISI CV" is not a thing — `cv_isi` and
+  `cv_arm_peak_vel` are the *dispersion of* `duration_s` and `arm_peak_vel` across cycles, not
+  per-cycle quantities. Chart the series, caption it with the CV. Confirmed with the user.
+  D3 remove the Data Quality card. D4 video via signed URL (`GET /sessions/{id}/video-url`), button
+  on the report card. D5 video window presets 1/2/5 s/All, default 2 s, playhead-driven. D6 brush
+  bar replaces pinch. D7 ONE controlled-window primitive, TWO drivers — the user corrected an
+  earlier framing that bundled asks #4 and #5 as one feature; they are not.
+  D8 charts plot ALL cycles, no ramp-up distinction (user: *"I no longer need that"*), resolved as
+  **display-only**. D9 one dropout strip survives, >5% only. D10 the `cv_isi > 0.80` gate becomes a
+  banner instead of blanking Efficiency, **on both screens**. D11 stored origin wins; the read path
+  never auto-writes.
+
+⚠ **`ramp_up` IS LOAD-BEARING, NOT COSMETIC.** `metrics.py:841-854` tags cycles `steady`/`ramp_up`;
+`ss_cycles` (`:892`) then drives **`stroke_count` (which IS the steady count, not the total)**,
+`stroke_rate_spm`, every `mean_*`/`cv_*`, and `fatigue_index_pct`. D8 touches the DISPLAY only —
+removing the concept would move every session metric ever recorded, a fourth comparability break on
+top of 57's, 59-03's and 59-05's. Two mismatches are now knowingly ACCEPTED and must not be
+"fixed": more dots than `stroke_count`, and a mean line off the dots' visual average.
+
+⚠⚠ **BLOCKING ON ENTRY: 58-01 IS UNCOMMITTED IN THE MOBILE TREE** — 7 files, including **both**
+`RecordScreen.js` and `VideoOverlayScreen.js`, which Phase 60 edits. 58-01 was approved on
+assumption (*"assume 58-01 is working. approve it."*) and its auto-stop has **never fired against
+real hardware**. Commit it first or the Phase-60 diff is unattributable. 60-01 opens with a
+`checkpoint:human-action` for exactly this.
+
+⚠ **58-04 (`VideoPane` end-anchor) IS STILL OWED AND INTERACTS WITH D11.** `VideoOverlayScreen` is
+currently the ONLY thing in the whole system that ever writes `video_origin_s`; a record-with-video
+session never opened there reaches the web at `origin_s = 0`, silently unsynced. Phase 60 adds a
+SECOND door into that screen — which is why exactly one of the two may be allowed to write.
+
+⚠ CORRECTION FOUND AT PLAN TIME: `DataQualityCard` is rendered on **BOTH** screens
+(`ReportCardScreen.js:492` **and** `RecordScreen.js:954`), not just the report card as CONTEXT.md
+first recorded. Deleting the component while touching only the report card would break the
+just-recorded results view. `RecordScreen.js` is therefore in scope for three decisions (D3, D9,
+D10), not the one D10 originally named.
+
+⚠ NO CHART LIBRARY EXISTS ON MOBILE — `react-native-svg` 15.15.4 only, `PanResponder` for gestures.
+recharts is web-only, so the `<Brush>` pattern (D6) and the per-cycle charts (D2) are both
+hand-rolled. No new dependency: a continuous slider would need `@react-native-community/slider`, a
+native module, hence a new EAS build just to test it — which is why D5 chose presets.
+
+PLAN SPLIT (3 plans, sequential — they share `ReportCardScreen.js`, and this repo has documented
+history of concurrent-edit contention between PAUL environments):
+  • **60-01** (wave 1, written) — report card correctness + per-cycle analytics: D1, D2, D3, D8,
+    D9, D10, D1c. Files: `ReportCardScreen.js`, `RecordScreen.js`, NEW `CycleCharts.js`, delete
+    `DataQualityCard.js`, `CLAUDE.md`. 3 auto tasks + 2 checkpoints; `autonomous:false`.
+  • **60-02** (wave 2, scoped not written) — windowed chart primitive + brush bar: D6, D7, plus the
+    memoization/in-window-resampling/fixed-y-scale fixes. Files: NEW `src/lib/chartWindow.js`
+    (pure, runnable in node — there is no jest on mobile), `VelocityChart.js`, one prop at the
+    report-card call site. `depends_on ["60-01"]`.
+  • **60-03** (wave 3, scoped not written) — video from any session + rolling window: D4, D5, D11.
+    Files: `ReportCardScreen.js`, `VideoOverlayScreen.js`. `depends_on ["60-01","60-02"]` — needs
+    the controlled `window` prop AND D1, since the origin-recompute fallback reads `deviceDuration`
+    off the time array.
+
+Context: `.paul/phases/60-mobile-app-rework/CONTEXT.md`
+Plan: `.paul/phases/60-mobile-app-rework/60-01-PLAN.md`. DO NOT APPLY until the user says so.
+
+## Session Continuity
+
+Last session: 2026-08-10
+Stopped at: Plan 60-01 created
+Next action: commit 58-01 in `swimnetics-mobile`, review 60-01, then `/paul:apply .paul/phases/60-mobile-app-rework/60-01-PLAN.md`
+Resume file: `.paul/phases/60-mobile-app-rework/60-01-PLAN.md`
+
+---
+
 **PHASE 59 ✅ COMPLETE (5/5 plans) 2026-08-09 — Segmenter Evaluation.**
   Built the first ground-truth scoring harness this project has ever had, then used it to fix three
   real defects and route every stroke to a measured segmenter choice.
@@ -1876,11 +2152,31 @@ PLAN ──▶ APPLY ──▶ UNIFY
 ## Loop Position (53-01)
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ○        ○     [53-01 created 2026-08-03 — Track-A5 repeatability/saturation analyzer +
-                          pool-day collection protocol. NEW repeatability.py (pure) +
-                          tools/analyze_repeatability.py (offline CLI) + tests/test_repeatability.py
-                          + COLLECTION-PROTOCOL.md. Needs NO collected data. autonomous:true,
-                          depends_on []. Awaiting approval.
+  ✓        ○        ○     [53-01 created 2026-08-03, REVISED 2026-08-10 — Track-A5
+                          repeatability/saturation analyzer + pool-day collection protocol. NEW
+                          repeatability.py (pure) + tools/analyze_repeatability.py (offline CLI) +
+                          tests/test_repeatability.py + COLLECTION-PROTOCOL.md. Needs NO collected
+                          data. autonomous:true, depends_on []. Awaiting approval.
+                          ⚠ **2026-08-10 REVISION via /paul:assumptions, before any APPLY:**
+                          (1) Task 2 originally called `compute_session_metrics(t_dec, vel, dist_dec)`
+                          with no `stroke_type`, mirroring `seed_demo_team.py:271-272` — but that
+                          call predates Phase 59 and `resolve_segmenter(None)` falls through to the
+                          bare unpaired wavelet, not `SEGMENTER_BY_STROKE["freestyle"]`. Since Track
+                          A3 is freestyle-only, this would have reintroduced the exact
+                          ~1.75×-stroke-rate bug 59-03/59-05 fixed, disguised as measurement noise in
+                          the repeatability analysis A5 exists to produce. FIXED: `--stroke-type` is
+                          now a required CLI flag, threaded through; new AC-7 pins it.
+                          (2) The "Phase 51/52 concurrent, sequence after" boundary note was stale —
+                          both are complete as of 2026-08-05; removed.
+                          (3) COLLECTION-PROTOCOL.md task now flags two things the 2026-08-03 CONTEXT
+                          couldn't have known: A1's checkpoint (44-03) is recorded ◐ partial in this
+                          file with no ACs confirmed, despite ROADMAP's Phase-55 entry implying it
+                          cleared — don't trust the roadmap line, re-verify; and Phase 58 (discussed
+                          2026-08-05, two days after this CONTEXT) found freestyle arm entries aren't
+                          always legible from the trace even with video (R1 still open) — the
+                          protocol's "~1 h to annotate 10" freestyle estimate may not hold.
+                          seed_demo_team.py itself still has the same missing-stroke_type bug — noted
+                          here, NOT fixed by this plan (out of scope, different file).
                           Plan: 53-attention-allocation/53-01-PLAN.md]
 ```
 

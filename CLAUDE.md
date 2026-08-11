@@ -104,8 +104,20 @@ the authoritative per-session rate**, written by `/process` and by `seed_demo_te
 - Historical note: before Phase 52 the rate was discarded at write time and six consumers assumed
   100, which made the annotate page under-report duration by ~11% and shifted every time-derived
   metric on any session recomputed from an annotation (API-AUDIT.md F2 + F3).
-- Still assuming 100, both out of scope in Phase 52: iOS `ReportCardScreen.js` client-side CSV
-  export, and `web/components/portal/CompareChart.js` (two sessions may have two different rates).
+- ⚠ **Phase 52 fixed the web only — the mobile report card kept assuming 100 for two more months**
+  (fixed in Phase 60-01, 2026-08-10). `89205ca` is a `myswimcoach` commit and the separately-owned
+  `swimnetics-mobile` repo was never in its diff, so `sample_rate_hz` appeared **zero times** in the
+  entire mobile `src/`. This note previously scoped the gap to "client-side CSV export"; that was
+  **wrong in a way that made it look cosmetic**. `ReportCardScreen.js:170` built the whole `time`
+  array as `i / 100`, and **four** consumers read it: the velocity chart x-axis (a 47.1 s swim drawn
+  as 42.2 s), the cycle-boundary overlay, **Time-to-Distance** (7.16 s shown for a true 8.0 s), and
+  the CSV export. Time-to-Distance carried a *second, compounding* error — `baseline_end_s` is in
+  true seconds and was compared against the fake array, so the baseline index was wrong rather than
+  merely scaled. Mobile now derives one `fsHz` exactly as `web/app/app/sessions/[id]/page.js:120`
+  does. The `/process` path was never affected (`RecordScreen` uses the server's real `t_dec`), nor
+  is mobile `CompareScreen` (metrics only, no velocity profile).
+- Still assuming 100, deliberately: `web/components/portal/CompareChart.js` — two sessions may have
+  two different rates, so there is no single axis to draw them on.
 
 ## Signal processing architecture
 

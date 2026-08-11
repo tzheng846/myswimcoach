@@ -60,7 +60,13 @@ Swim academies and competitive programs. Coach or operator runs the device; swim
 ### Nice to Have
 - PDF report generation (server-side, emailed to coach)
 - Session compare in iOS app (✓ shipped on web portal instead — Phase 23)
-- Per-cycle charts in iOS app (✓ shipped on web portal instead — Phase 23)
+- ✓ **Per-cycle charts in iOS app — actually shipped on iOS in Phase 60-01 (2026-08-11)**, no longer
+  substituted by the web. Four hand-rolled SVG panels (distance per stroke, coast, cycle duration,
+  arm peak velocity), each captioned with the mean or CV it summarizes. The phase also fixed a live
+  **−10% time-axis error** on the mobile report card that Phase 52 had corrected on the web and
+  never carried across (`89205ca` is a `myswimcoach` commit; the mobile repo was never in its diff),
+  replaced pinch-to-zoom with a scrubbable window bar, and made session video reachable from any
+  saved session rather than only in the moments after recording.
 
 ## Constraints
 
@@ -95,6 +101,19 @@ known drift (Railway pre-Phase-24, committed SQL ≠ live DB, git coverage gaps)
 - First paying customer (swim academy) using the system
 
 ---
+*Updated: 2026-08-11 after Phase 60 — Mobile App Rework (3/3 plans). The coach's poolside device no
+longer shows less than the laptop, and no longer shows one number wrong. **A live −10% time-axis
+error** on the mobile report card was found and fixed: Phase 52 corrected it on the web, but
+`89205ca` is a `myswimcoach` commit and the separately-owned mobile repo was never in its diff, so
+four consumers stayed wrong for two months (chart axis, cycle overlay, Time-to-Distance, CSV) —
+measured against the live DB at **−10.0% → +0.0%**, 4 sessions of 4. Also shipped: four per-cycle
+charts (the "Per-cycle charts in iOS app" nice-to-have, previously substituted by the web), a
+scrubbable window bar replacing pinch-to-zoom, session video reachable from any saved session rather
+than only just after recording, and a user-dropped start marker for Time-to-Distance. Zero Python
+touched; suite held at 273 throughout. ⚠ Two things carried out: **58-04 is still owed and homeless**
+(the web annotate page still cannot compute a video origin of its own), and **Phase 52-02 gained
+motivation** — most NULL-rate sessions are ~90 Hz, not ~100, correcting a generalization in the
+Phase 59 record.*
 *Updated: 2026-08-05 after Phase 55 — athlete flow repaired end-to-end. Phase 51-02 fixed the phantom
 `athletes.coach_id` that made `POST /athletes` 500 (shipped `dedac17`); Phase 55-01 then fixed the two
 defects that failure had been hiding, both consequences of `RecordingConfig` being a tab screen that
