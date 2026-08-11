@@ -21,9 +21,13 @@ hardening, planned 2026-07-20, never applied), **56** (coach-chat athlete scopin
 documented only).
 
 ### Git State
-Last commit (myswimcoach): see `feat(60-mobile-app-rework)` below
+Last commit (myswimcoach): **`5e2bde0`** — `feat(60-mobile-app-rework): per-cycle analytics, chart
+windowing, video access`. Branch `main`. No feature branches. Staged selectively: pre-existing
+unrelated dirt was left alone (`web/components/Footer.js`, `web/components/Nav.js`,
+`web/app/blog/`, `web/lib/blog.js`, `.paul/phases/53-attention-allocation/53-01-PLAN.md`).
 Mobile repo (`swimnetics-mobile`, separate + user-owned): `4a03f2c` (58-01), `098f345` (60-01),
-`8c4a4c0` (60-02), plus 60-03. **No remote push performed for either repo in this session.**
+`8c4a4c0` (60-02), **`a82799d` (60-03)** — working tree clean.
+⚠ **No remote push performed for either repo in this session.**
 ⚠ **Phase 60 has NOT been verified on a device.** All three plans rest on device-independent
 evidence plus user approvals; one EAS build is owed and would also be the first hardware exposure
 for several deferred iOS checks.
