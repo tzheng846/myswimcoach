@@ -3,22 +3,40 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **60 (Mobile App Rework) — ✅ COMPLETE (3/3 plans) 2026-08-11 · TRANSITIONED**
-Plan: none open. **Phase 60 closed and transitioned.**
-Status: Ready to plan the next phase.
-Last activity: 2026-08-11 — Phase 60 unified + transitioned (PROJECT.md evolved, phase commit made)
+Phase: **61 (Web Portal Rework) — In progress (1 of 4 plans)**
+Plan: **61-01 ✅ COMPLETE + CLOSED 2026-08-11.** Next: 61-02 (report card) — scoped, not written.
+Status: Ready for `/paul:plan 61` (61-02)
+Last activity: 2026-08-11 — 61-01 loop closed; suite 274; ⚠ **not committed, not deployed**
 
 Progress:
-- Phase 60: [██████████] 100% (3 of 3 plans)
+- Milestone v0.5: [█████████░] in progress
+- Phase 61: [██░░░░░░░░] 25% (1 of 4 plans)
 
-**NEXT RECOMMENDED: Phase 53-01** (repeatability) — written 2026-08-03, `autonomous:true`, needs NO
-new data. It has been the standing recommendation since Phase 59 closed, and Phase 60 added two
-inputs to it: the user's *"I don't trust auto detect baseline"* (now three unconnected notions of
-when a swim starts), and a report card that finally displays per-cycle spread rather than averages
-of it. Other open candidates: **58-04** (`VideoPane` end-anchor — owed, homeless, web-only),
-**52-02** (measure + backfill NULL sample rates — newly better motivated), **49** (security
-hardening, planned 2026-07-20, never applied), **56** (coach-chat athlete scoping — open defect,
-documented only).
+⚠ **DEPLOY OWED BEFORE 61-02 IS MEANINGFUL IN PRODUCTION.** 61-01 changed `metrics.py`,
+`coach.py` and `ratings.py` — all on the Railway path. Until deployed, the live portal serves
+metrics from the OLD code, so 61-02's charts would be correct in the repo and wrong in prod.
+Nothing has been committed or pushed.
+
+⚠ **61-01 IS A PIPELINE PLAN INSIDE A WEB PHASE.** D5 removes the `steady`/`ramp_up` cycle split
+from `metrics.py`; D15 re-anchors the two `ratings.py` bands it invalidates. It is wave 1 and
+everything else in Phase 61 depends on it. `autonomous:false` — one decision checkpoint on the
+final band anchors.
+
+⭐ **GRILLING FOUND THE PHASE'S CENTRAL FACT: `ramp_up` is not ramp-up.** Measured on both the
+`raw/` corpus (0 of 13 affected sessions have a leading run; 13/13 scattered) and the live DB
+(median excluded-cycle position **0.91**, 59% in the final 20% of the swim). It is a velocity gate
+that in practice catches **the swimmer decelerating into the wall**. Removing it therefore counts
+the wall-touch as a stroke, which detonates `cv_arm_peak_vel` (p90 0.277 → 0.638) and
+`fatigue_index_pct` (p90 35.4 → 73.6) and would put Consistency at `needs_work` on 11/11 measured
+sessions. **D5 was reaffirmed three times with those numbers on screen — it is settled. D15 is its
+mandatory mitigation and must ship in the same commit.**
+
+Phase 61 plan map: **61-01** D5+D15 backend (this one) → **61-02** report card (D3/D4/D7/D12) →
+**61-03** video route + closes 58-04 (D1/D2/D13) → **61-04** Compare redesign (D8/D9/D10/D11).
+
+Other open candidates, unchanged: **53-01** (repeatability — still the standing recommendation and
+now holds three Phase-60/61 inputs), **52-02** (NULL sample rates — 6 of 67 live sessions, newly
+confirmed), **49** (security hardening, never applied), **56** (coach-chat athlete scoping).
 
 ### Git State
 Last commit (myswimcoach): **`5e2bde0`** — `feat(60-mobile-app-rework): per-cycle analytics, chart
@@ -31,6 +49,23 @@ Mobile repo (`swimnetics-mobile`, separate + user-owned): `4a03f2c` (58-01), `09
 ⚠ **Phase 60 has NOT been verified on a device.** All three plans rest on device-independent
 evidence plus user approvals; one EAS build is owed and would also be the first hardware exposure
 for several deferred iOS checks.
+
+## Loop Position (61-01) — CLOSED
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [61-01 CLOSED 2026-08-11 — all 5 ACs met, suite 274]
+```
+⚠ **PHASE 61 IS NOT COMPLETE — no phase transition run.** 1 of 4 plans done. The unify workflow's
+file-count heuristic (1 PLAN == 1 SUMMARY) would have fired a transition; it counts files, not
+intent, and ROADMAP lists 61-02/03/04 as scoped-but-unwritten. PROJECT.md deliberately NOT evolved
+and no phase commit made.
+
+### Decisions (61-01)
+| Decision | Phase | Impact |
+|---|---|---|
+| 2026-08-11: band anchors = `percentile-clamped` | 61-01 | cv `0.65/0.22/0.09/0.05`, fatigue `75/24/5/0`; fatigue `best` clamped at 0 so "held your speed" scores 100 rather than requiring acceleration |
+| 2026-08-11: added `test_consistency_bands` | 61-01 | Mutation check found cv anchors were wholly untested — 10× scaling left all 273 green. Addition, not a re-baseline |
+| 2026-08-11: CORRECTION — bands never collapsed | 61-01 | The grilling claim "Consistency 11/11 needs_work" was an affected-subset stat on an untrusted corpus. D15 shipped on the real finding instead: the 0–100 **score** floors out (8%→36% at zero) |
 
 ## Loop Position (60-03) — CLOSED
 ```

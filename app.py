@@ -350,8 +350,8 @@ def _build_line_chart(labels, values, is_outlier_flags, title, y_label):
 # ── Question-card system ──────────────────────────────────────────────────────
 
 def _compute_q1_q4(cycles):
-    """First- and last-quarter mean arm-peak velocity from steady cycles."""
-    ss = [c for c in cycles if c.get("phase") == "steady"]
+    """First- and last-quarter mean arm-peak velocity (all cycles, Phase 61-01)."""
+    ss = list(cycles)
     if len(ss) < 2:
         return None, None
     q = max(1, len(ss) // 4)

@@ -292,13 +292,12 @@ def _build_user_message(stroke: str, session: dict, cycles: list) -> str:
     # Per-cycle table
     if cycles:
         med_dur = np.median([c["duration_s"] for c in cycles])
-        lines += ["", f"Per-Cycle Data ({len(cycles)} cycles, * = short outlier, ph: S=steady R=ramp_up):"]
-        header = f"  {'#':>4}  ph  t_peak  arm_pk  trough  coast%   dur    dps"
+        lines += ["", f"Per-Cycle Data ({len(cycles)} cycles, * = short outlier):"]
+        header = f"  {'#':>4}  t_peak  arm_pk  trough  coast%   dur    dps"
         lines.append(header)
         lines.append("  " + "-" * (len(header) - 2))
         for i, c in enumerate(cycles, 1):
             outlier = "*" if c["duration_s"] < 0.80 * med_dur else " "
-            ph = "S" if c.get("phase") == "steady" else "R"
             cycle_num = c.get("abs_num") or i
             arm_pk = c.get("arm_peak_vel", float("nan"))
             trough = c.get("trough_vel_ms", float("nan"))
@@ -306,7 +305,7 @@ def _build_user_message(stroke: str, session: dict, cycles: list) -> str:
             dur    = c.get("duration_s", float("nan"))
             dps    = c.get("dist_m", float("nan"))
             lines.append(
-                f"  {outlier}{cycle_num:>3}  {ph}   {c.get('t_peak_s', float('nan')):6.2f}"
+                f"  {outlier}{cycle_num:>3}  {c.get('t_peak_s', float('nan')):6.2f}"
                 f"  {arm_pk:6.3f}  {trough:6.3f}  {int(coast*100):5}%"
                 f"  {dur:5.2f}  {dps:5.3f}"
             )

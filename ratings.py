@@ -109,8 +109,30 @@ THRESHOLDS = {
     "breaststroke": {
         "mean_vel_ms":      {"worst": 0.40, "ok": 0.80, "good": 1.20, "best": 1.80},
         "mean_dps_m":       {"worst": 0.50, "ok": 1.00, "good": 1.50, "best": 2.20},
-        "cv_arm_peak_vel":  {"worst": 0.30, "ok": 0.20, "good": 0.10, "best": 0.03},
-        "fatigue_index_pct": {"worst": 40.0, "ok": 20.0, "good": 8.0, "best": 0.0},
+        # ⚠ RE-ANCHORED 2026-08-11 (Phase 61-01, D15). These two are the only anchors
+        # derived from MEASURED DATA rather than the Phase-2 app.py ranges — they are
+        # percentiles (p90/p60/p30/p10) of the live corpus, n=53, computed by
+        # tools/rampup_impact.py. Corpus percentiles are NOT coaching judgement: they make
+        # the scale discriminate, they do not make it correct. Coach review still owed.
+        #
+        # WHY: Phase 61-01 (D5) removed the steady/ramp_up cycle split, so the wall-touch
+        # cycle now counts. That doubled the upper tail of both metrics — cv p90
+        # 0.277→0.638, fatigue p90 35.4→73.6 — and against the OLD anchors the 0–100 score
+        # floored out: sessions scoring exactly 0 went 8%→36% (cv) and 4%→26% (fatigue).
+        # The BANDS never collapsed (max share 43%); the SCORE did. Re-anchoring returns
+        # both to 11% at the floor with 36–37 distinct scores.
+        #
+        # `fatigue` best is CLAMPED AT 0, not the measured p10 of −15.8 (user decision):
+        # negative fatigue means the swimmer sped up, and −15.8 would make "you must
+        # accelerate through the swim" the price of a 100. Cost: 23% tie at 100.
+        #
+        # ⚠ Two anchors sit exactly on a test fixture value — cv good 0.09 vs
+        # test_api.py's 0.09, fatigue good 5.0 vs test_ratings.py's 5.0 — and _band uses
+        # `value <= thr[...]`, so those land in the good band by equality. Deterministic
+        # (identical literals parse to identical doubles) but fragile: if you move either
+        # anchor, re-check those fixtures rather than assuming they still hold.
+        "cv_arm_peak_vel":  {"worst": 0.65, "ok": 0.22, "good": 0.09, "best": 0.05},
+        "fatigue_index_pct": {"worst": 75.0, "ok": 24.0, "good": 5.0, "best": 0.0},
     },
 }
 

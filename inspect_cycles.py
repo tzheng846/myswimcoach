@@ -43,7 +43,9 @@ def _load(csv_path):
 
 
 def _steady(result):
-    return [c for c in result["cycles"] if c.get("phase") == "steady"]
+    # Phase 61-01 removed the steady/ramp_up split; every cycle counts. Name kept so
+    # the ~20 call sites below stay untouched.
+    return list(result["cycles"])
 
 
 # ── subplot renderers ─────────────────────────────────────────────────────────
@@ -150,7 +152,7 @@ def _print_summary(name, steady, plot_cycles):
     arm_vels  = [c["arm_peak_vel"] for c in plot_cycles]
     kick_vels = [c["kick_peak_vel"] for c in plot_cycles if c.get("kick_peak_vel") is not None]
     print(f"\n-- {name} --")
-    print(f"  Steady cycles   : {len(steady)}")
+    print(f"  Cycles          : {len(steady)}")
     print(f"  Plotted cycles  : {len(plot_cycles)}")
     print(f"  Kick detected   : {n_kick}/{len(plot_cycles)}")
     if arm_vels:
@@ -172,7 +174,7 @@ def main():
     parser.add_argument(
         "--cycles", nargs=2, type=int, default=[2, 8],
         metavar=("START", "END"),
-        help="0-indexed steady-state cycle range to plot (default: 2 8)",
+        help="0-indexed cycle range to plot (default: 2 8)",
     )
     args = parser.parse_args()
     cyc_start, cyc_end = args.cycles
@@ -234,7 +236,7 @@ def main():
         title=dict(
             text=(
                 f"Per-cycle velocity inspection — arm-pull (▲)  kick (▼)"
-                f"  |  steady cycles {cyc_start}–{cyc_end - 1}"
+                f"  |  cycles {cyc_start}–{cyc_end - 1}"
             ),
             font=dict(size=13),
         ),

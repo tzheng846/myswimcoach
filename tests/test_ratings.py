@@ -47,10 +47,25 @@ class TestBands:
         assert _pillar(ratings.rate_session({"mean_vel_ms": 0.50}, None, "breaststroke"), "speed")["band"] == "needs_work"
 
     def test_lower_is_better_bands(self):
-        # fatigue: good < 8, ok < 20
+        # fatigue: good <= 5, ok <= 24 (re-anchored Phase 61-01 D15)
         assert _pillar(ratings.rate_session({"fatigue_index_pct": 4.0}, None, "breaststroke"), "endurance")["band"] == "good"
         assert _pillar(ratings.rate_session({"fatigue_index_pct": 15.0}, None, "breaststroke"), "endurance")["band"] == "ok"
         assert _pillar(ratings.rate_session({"fatigue_index_pct": 30.0}, None, "breaststroke"), "endurance")["band"] == "needs_work"
+
+    def test_consistency_bands(self):
+        """Pins cv_arm_peak_vel's band boundaries — good <= 0.09, ok <= 0.22 (Phase 61-01 D15).
+
+        ⚠ ADDED because a mutation check during 61-01 found these anchors were entirely
+        unconstrained: scaling all four by 10x left the whole 273-test suite green, so the
+        Consistency pillar could be silently mis-banded. Endurance had this coverage
+        (test_lower_is_better_bands above); Consistency did not.
+        """
+        def band(v):
+            return _pillar(ratings.rate_session({"cv_arm_peak_vel": v}, None, "breaststroke"),
+                           "consistency")["band"]
+        assert band(0.05) == "good"
+        assert band(0.15) == "ok"
+        assert band(0.40) == "needs_work"
 
     def test_score_orders_with_band(self):
         good = _pillar(ratings.rate_session({"mean_vel_ms": 1.30}, None, "breaststroke"), "speed")["score"]

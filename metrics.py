@@ -54,7 +54,8 @@ def detect_phases(t, vel):
 
     Returns dict with integer indices into t/vel:
         baseline_end   – last index of the near-zero baseline
-        steady_start   – same as baseline_end (ramp-up flagged per-cycle later)
+        steady_start   – same as baseline_end (kept for callers; no per-cycle split
+                         exists since Phase 61-01 removed the steady/ramp_up tagging)
     """
     fs  = _compute_fs(t)
     win = max(1, int(_BASELINE_WIN_S * fs))
@@ -838,20 +839,22 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
             c["end_idx"]   += ip_end
             c["peak_idx"]  += ip_end
 
-    # Tag cycles as ramp-up or steady based on arm-pull velocity.
-    # steady_floor = 50% of the 75th-pct peak velocity across all cycles.
-    # After initial tagging, promote isolated ramp_up cycles surrounded by steady cycles.
-    if cycles:
-        arm_vels     = np.array([vel[c["peak_idx"]] for c in cycles])
-        steady_floor = 0.50 * float(np.percentile(arm_vels, 75))
-        phases_raw   = [vel[c["peak_idx"]] >= steady_floor for c in cycles]
-        # Smooth: an isolated False surrounded by True on both sides becomes True
-        phases_smooth = list(phases_raw)
-        for i in range(1, len(phases_raw) - 1):
-            if not phases_raw[i] and phases_raw[i - 1] and phases_raw[i + 1]:
-                phases_smooth[i] = True
-        for cyc, is_steady in zip(cycles, phases_smooth):
-            cyc["phase"] = "steady" if is_steady else "ramp_up"
+    # Phase 61-01 (D5) REMOVED the steady/ramp_up cycle split that used to live here.
+    # Every cycle now counts toward every session metric, so the per-cycle charts and the
+    # session summary describe the same population — the coach's report that "the numbers
+    # don't reflect what's shown on the graph" was literally true of the old split.
+    #
+    # ⚠ THE OLD FILTER WAS MISNAMED. It gated on arm_peak < 0.50 x p75 — a velocity test,
+    # not a positional one — and measurement (tools/rampup_impact.py, 2026-08-11) showed it
+    # overwhelmingly marked the swimmer DECELERATING INTO THE WALL, not accelerating from
+    # rest: median normalized position 0.91, 59% in the final 20% of the swim, and 0 of 13
+    # affected sessions in the raw/ corpus had a leading run. Do not reintroduce it under
+    # its old name expecting it to mean "ramp up".
+    #
+    # ⚠ CONSEQUENCE, ACCEPTED: the wall-touch cycle is now a stroke. On the 20 affected
+    # sessions of 53 measured, cv_arm_peak_vel +70% and fatigue_index_pct +110%. Sessions
+    # stored before this change are on the old scale — the fourth such break after Phases
+    # 57, 59-03 and 59-05.
 
     # ── sub-peak extraction ───────────────────────────────────────────────
     extract_cycle_peaks(vel, cycles)
@@ -888,12 +891,13 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
             cyc["arm_kick_delay_s"]    = None
             cyc["arm_kick_vel_ratio"]  = None
 
-    # ── session-level summary (steady-state cycles only) ──────────────────
-    ss_cycles  = [c for c in cycles if c.get("phase") == "steady"]
-    n_ss       = len(ss_cycles)
+    # ── session-level summary (ALL cycles — Phase 61-01 D5) ───────────────
+    # stroke_count IS the total cycle count. Before 61-01 it was the steady-state count,
+    # which is why the per-cycle charts showed more dots than the number beside them.
+    n_cycles   = len(cycles)
 
-    if ss_cycles:
-        mean_dur        = float(np.mean([c["duration_s"] for c in ss_cycles]))
+    if cycles:
+        mean_dur        = float(np.mean([c["duration_s"] for c in cycles]))
         stroke_rate_spm = 60.0 / mean_dur
     else:
         stroke_rate_spm = float("nan")
@@ -903,40 +907,40 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
         "total_dist_m":        float(dist[-1]),
         "baseline_end_s":      float(t[b_end]),
         "stroke_rate_spm":     stroke_rate_spm,
-        "stroke_count":        n_ss,
+        "stroke_count":        n_cycles,
         "mean_vel_ms":         float(np.mean(vel_swim[vel_swim > 0])) if vel_swim.size else float("nan"),
         "max_vel_ms":          float(np.max(vel_swim)) if vel_swim.size else float("nan"),
     }
 
-    if n_ss > 0:
-        arm_vels_ss  = np.array([c["arm_peak_vel"] for c in ss_cycles])
-        durations_ss = np.array([c["duration_s"]   for c in ss_cycles])
-        dists_ss     = np.array([c["dist_m"]         for c in ss_cycles])
-        impulses_ss  = np.array([c["impulse_m"]      for c in ss_cycles])
-        coast_ss     = np.array([c["coast_fraction"] for c in ss_cycles])
-        trough_ss    = np.array([c["trough_vel_ms"]  for c in ss_cycles])
+    if n_cycles > 0:
+        arm_vels   = np.array([c["arm_peak_vel"]   for c in cycles])
+        durations  = np.array([c["duration_s"]     for c in cycles])
+        dists      = np.array([c["dist_m"]         for c in cycles])
+        impulses   = np.array([c["impulse_m"]      for c in cycles])
+        coast_vals = np.array([c["coast_fraction"] for c in cycles])
+        trough     = np.array([c["trough_vel_ms"]  for c in cycles])
 
-        session["mean_arm_peak_vel_ms"] = float(arm_vels_ss.mean())
-        session["cv_arm_peak_vel"]      = float(arm_vels_ss.std() / arm_vels_ss.mean())
-        session["mean_isi_s"]           = float(durations_ss.mean())
-        session["cv_isi"]               = float(durations_ss.std() / durations_ss.mean())
-        session["mean_dps_m"]           = float(dists_ss.mean())
-        session["mean_impulse_m"]       = float(impulses_ss.mean())
-        session["mean_coast_fraction"]  = float(coast_ss.mean())
-        session["mean_trough_vel_ms"]   = float(trough_ss.mean())
+        session["mean_arm_peak_vel_ms"] = float(arm_vels.mean())
+        session["cv_arm_peak_vel"]      = float(arm_vels.std() / arm_vels.mean())
+        session["mean_isi_s"]           = float(durations.mean())
+        session["cv_isi"]               = float(durations.std() / durations.mean())
+        session["mean_dps_m"]           = float(dists.mean())
+        session["mean_impulse_m"]       = float(impulses.mean())
+        session["mean_coast_fraction"]  = float(coast_vals.mean())
+        session["mean_trough_vel_ms"]   = float(trough.mean())
 
         # Fatigue index: (mean of first quarter peak vel − last quarter) / first quarter
-        q    = max(1, n_ss // 4)
-        q1   = float(arm_vels_ss[:q].mean())
-        q4   = float(arm_vels_ss[-q:].mean())
+        q    = max(1, n_cycles // 4)
+        q1   = float(arm_vels[:q].mean())
+        q4   = float(arm_vels[-q:].mean())
         session["fatigue_index_pct"] = (q1 - q4) / q1 * 100.0
 
         # Kick metrics (only cycles where kick was detected)
-        kick_ratios = [c["arm_kick_vel_ratio"] for c in ss_cycles
+        kick_ratios = [c["arm_kick_vel_ratio"] for c in cycles
                        if c["arm_kick_vel_ratio"] is not None]
-        kick_delays = [c["arm_kick_delay_s"]   for c in ss_cycles
+        kick_delays = [c["arm_kick_delay_s"]   for c in cycles
                        if c["arm_kick_delay_s"]   is not None]
-        session["pct_cycles_with_kick"] = len(kick_ratios) / n_ss * 100.0
+        session["pct_cycles_with_kick"] = len(kick_ratios) / n_cycles * 100.0
         if kick_ratios:
             session["mean_arm_kick_ratio"]  = float(np.mean(kick_ratios))
             session["mean_arm_kick_delay_s"] = float(np.mean(kick_delays))
@@ -953,11 +957,11 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
     # ── cycle quality ─────────────────────────────────────────────────────────
     total_cycles_raw = len(cycles)
 
-    # Outlier: steady-state cycle with duration < 80% of median (matches _plot_results)
+    # Outlier: cycle with duration < 80% of median (all cycles since Phase 61-01)
     outlier_cycle_count = 0
-    if ss_cycles:
-        med_dur = float(np.median([c["duration_s"] for c in ss_cycles]))
-        outlier_cycle_count = sum(1 for c in ss_cycles if c["duration_s"] < 0.80 * med_dur)
+    if cycles:
+        med_dur = float(np.median([c["duration_s"] for c in cycles]))
+        outlier_cycle_count = sum(1 for c in cycles if c["duration_s"] < 0.80 * med_dur)
 
     # Implausible: any cycle outside physically reasonable breaststroke range
     implausible_cycle_count = sum(
@@ -1117,8 +1121,8 @@ def _print_results(csv_file, result):
         print(f"  {k:<32}  {val}")
 
     if result.get("_print_cycles"):
-        ss = [c for c in result["cycles"] if c.get("phase") == "steady"]
-        print(f"\n  Per-cycle  (steady, n={len(ss)})")
+        ss = result["cycles"]
+        print(f"\n  Per-cycle  (n={len(ss)})")
         print(f"  {'#':<4} {'t_peak':>7} {'v_arm':>7} {'trough':>8} {'coast%':>7} {'dur':>6} {'dps':>6}")
         for i, c in enumerate(ss):
             print(f"  {i+1:<4} {t[c['peak_idx']]:7.2f} {c['arm_peak_vel']:7.3f}"
@@ -1130,8 +1134,7 @@ def _plot_results(title, t_full, vel_full, dist_full, t_start=None, t_end=None):
     from matplotlib.widgets import RangeSlider
     from matplotlib.patches import Patch
 
-    _RAMP_COLOR    = "#f5a623"
-    _STEADY_COLOR  = "#4a90d9"
+    _CYCLE_COLOR   = "#4a90d9"
     _PARTIAL_COLOR = "#aaaaaa"
     _OUTLIER_COLOR = "#e8a0a0"   # pinkish — short/suspect cycles shown but flagged
     _EXCL_COLOR    = "#dddddd"
@@ -1202,7 +1205,7 @@ def _plot_results(title, t_full, vel_full, dist_full, t_start=None, t_end=None):
             elif is_outlier:
                 c_shade = _OUTLIER_COLOR
             else:
-                c_shade = _STEADY_COLOR if cyc.get("phase") == "steady" else _RAMP_COLOR
+                c_shade = _CYCLE_COLOR
 
             # Shade cycle region on the velocity trace
             ax_vel.axvspan(t_w[a], t_w[b], alpha=0.18, color=c_shade, zorder=2)
@@ -1228,8 +1231,7 @@ def _plot_results(title, t_full, vel_full, dist_full, t_start=None, t_end=None):
         ax_vel.grid(**_GRID_KW)
         ax_vel.set_xlim(t_full[0], t_full[-1])
         ax_vel.legend(
-            handles=[Patch(color=_STEADY_COLOR,  alpha=0.5, label="steady"),
-                     Patch(color=_RAMP_COLOR,    alpha=0.5, label="ramp-up"),
+            handles=[Patch(color=_CYCLE_COLOR,   alpha=0.5, label="cycle"),
                      Patch(color=_OUTLIER_COLOR, alpha=0.5, label="short cycle (flagged)"),
                      Patch(color=_PARTIAL_COLOR, alpha=0.5, label="boundary (excluded)"),
                      Patch(color=_EXCL_COLOR,    alpha=0.6, label="outside window")],
@@ -1245,12 +1247,7 @@ def _plot_results(title, t_full, vel_full, dist_full, t_start=None, t_end=None):
         labels = [str(i + 1) for i in range(len(interior))]
         bar_colors = []
         for cyc, out in zip(interior, is_out):
-            if out:
-                bar_colors.append(_OUTLIER_COLOR)
-            elif cyc.get("phase") == "steady":
-                bar_colors.append(_STEADY_COLOR)
-            else:
-                bar_colors.append(_RAMP_COLOR)
+            bar_colors.append(_OUTLIER_COLOR if out else _CYCLE_COLOR)
 
         def _bar(ax, values, ylabel, title_str, fmt=".2f", scale=1.0, mean_val=None):
             ax.cla()

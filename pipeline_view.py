@@ -47,7 +47,6 @@ import metrics as m
 # ── colours ──────────────────────────────────────────────────────────────────
 _C_VEL    = "#185fa5"
 _C_STEADY = "#4a90d9"
-_C_RAMP   = "#f5a623"
 _C_TROUGH = "#888888"
 _C_ARM    = "#2ca02c"
 _C_KICK   = "#d62728"
@@ -166,7 +165,7 @@ def build_figure(session_label, t, vel, dist):
     for cyc in cycles:
         a   = cyc["start_idx"]
         b   = min(cyc["end_idx"], len(t) - 1)
-        col = _C_STEADY if cyc.get("phase") == "steady" else _C_RAMP
+        col = _C_STEADY
         fig.add_trace(go.Scatter(
             x=[t[a], t[a], t[b], t[b], t[a]],
             y=[0,    v_max, v_max, 0,    0],
@@ -237,7 +236,7 @@ def build_figure(session_label, t, vel, dist):
 
     # Cycle number annotations
     for i, cyc in enumerate(cycles):
-        col = _C_STEADY if cyc.get("phase") == "steady" else _C_RAMP
+        col = _C_STEADY
         fig.add_annotation(
             x=t[cyc["arm_peak_idx"]],
             y=vel[cyc["arm_peak_idx"]],
@@ -283,7 +282,7 @@ def build_figure(session_label, t, vel, dist):
         except (TypeError, ValueError):
             return str(v)
 
-    col_headers = ["#", "phase", "t_start(s)", "dur(s)",
+    col_headers = ["#", "t_start(s)", "dur(s)",
                    "arm_vel(m/s)", "kick_vel(m/s)",
                    "dps(m)", "coast%", "impulse(m)"]
     col_data = [[] for _ in col_headers]
@@ -291,16 +290,15 @@ def build_figure(session_label, t, vel, dist):
 
     for i, cyc in enumerate(cycles):
         col_data[0].append(str(i))
-        col_data[1].append(cyc.get("phase", "-"))
-        col_data[2].append(_f(t[cyc["start_idx"]], ".2f"))
-        col_data[3].append(_f(cyc.get("duration_s"), ".2f"))
-        col_data[4].append(_f(cyc.get("arm_peak_vel")))
-        col_data[5].append(_f(cyc.get("kick_peak_vel")))
-        col_data[6].append(_f(cyc.get("dist_m"), ".2f"))
+        col_data[1].append(_f(t[cyc["start_idx"]], ".2f"))
+        col_data[2].append(_f(cyc.get("duration_s"), ".2f"))
+        col_data[3].append(_f(cyc.get("arm_peak_vel")))
+        col_data[4].append(_f(cyc.get("kick_peak_vel")))
+        col_data[5].append(_f(cyc.get("dist_m"), ".2f"))
         coast = cyc.get("coast_fraction")
-        col_data[7].append(_f(coast * 100 if coast is not None else None, ".1f"))
-        col_data[8].append(_f(cyc.get("impulse_m")))
-        row_colors.append("#ddeeff" if cyc.get("phase") == "steady" else "#fff3e0")
+        col_data[6].append(_f(coast * 100 if coast is not None else None, ".1f"))
+        col_data[7].append(_f(cyc.get("impulse_m")))
+        row_colors.append("#ddeeff")
 
     fig.add_trace(go.Table(
         header=dict(
@@ -322,10 +320,10 @@ def build_figure(session_label, t, vel, dist):
     # ── layout ────────────────────────────────────────────────────────────────
     name   = session_label
     sr     = session.get("stroke_rate_spm")
-    n_ss   = session.get("stroke_count", 0)
+    n_cyc  = session.get("stroke_count", 0)
     arm_v  = session.get("mean_arm_peak_vel_ms")
     title  = (
-        f"{name}  |  {n_ss} steady cycles"
+        f"{name}  |  {n_cyc} cycles"
         + (f"  |  {sr:.1f} SPM" if sr else "")
         + (f"  |  arm-pull {arm_v:.2f} m/s" if arm_v else "")
     )
