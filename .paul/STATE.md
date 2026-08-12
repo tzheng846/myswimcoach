@@ -3,19 +3,35 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **61 (Web Portal Rework) — In progress (2 of 4 plans complete)**
-Plan: **61-02 ✅ COMPLETE + CLOSED 2026-08-11.** Next: 61-03 (video route + 58-04) — scoped, not written.
-Status: Ready for `/paul:plan 61` (61-03)
-Last activity: 2026-08-11 — 61-02 loop closed; build clean, suite 274; ⚠ **nothing committed or deployed**
+Phase: **61 (Web Portal Rework) — In progress (3 of 4 plans complete)**
+Plan: **61-03 ✅ COMPLETE + CLOSED 2026-08-11** (user: *"everything works"*). Next: 61-04 (Compare
+redesign) — scoped, not written. 61-01 + 61-02 committed and DEPLOYED.
+Status: Ready for `/paul:plan 61` (61-04)
+Last activity: 2026-08-11 — 61-03 loop closed; **58-04 CLOSED**; build clean, suite 274
+
+### Git State (checked, not assumed)
+`c85d4fd` feat(61): remove cycle-phase split, re-anchor bands, rework report card
+`d9cf0fa` feat(61-01): remove steady/ramp_up cycle split, re-anchor two rating bands
+Working tree clean. ⚠ `c85d4fd` also swept in the pre-existing untracked blog files
+(`web/app/blog/`, `web/lib/blog.js`) and `Nav.js`/`Footer.js` that Phase 60 had left alone.
+⚠ Mobile repo (`swimnetics-mobile`) has 61-02's D5c comment fix **uncommitted**; needs an EAS
+build to reach a device.
 
 Progress:
 - Milestone v0.5: [█████████░] in progress
-- Phase 61: [█████░░░░░] 50% (2 of 4 plans)
+- Phase 61: [████████░░] 75% (3 of 4 plans)
 
-⚠ **OPEN OBSERVATION OWED (61-02 AC-6):** whether the Simple/Advanced and m/yd toggles survive
-prev/next navigation. The checkpoint asked; the reply was "approved" without the answer. Recorded
-as unknown rather than guessed. Cheap to settle: open a session, switch to Advanced + yd, press an
-arrow, see whether both stick.
+✅ **61-02's open observation is ANSWERED and FIXED.** The toggles did NOT survive prev/next; the
+route remounts per session id so component state cannot. Both now persist to `localStorage` and
+restore on mount (fixed in 61-03).
+
+⭐ **58-04 IS CLOSED** — owed since 2026-08-07 and described as "homeless" in both the Phase 58 and
+Phase 60 close-outs. The phone's `VideoOverlayScreen` is no longer the only thing in the system
+that writes `video_origin_s`.
+
+⚠ **CONTEXT D16 WITHDRAWN at the 61-03 checkpoint** — the 1s/2s/5s/All span presets were removed as
+redundant against the brush. **The video chart no longer auto-follows the playhead**; revisit this
+first if playback reads badly with a narrow brush.
 
 ⚠ **DEPLOY OWED BEFORE 61-02 IS MEANINGFUL IN PRODUCTION.** 61-01 changed `metrics.py`,
 `coach.py` and `ratings.py` — all on the Railway path. Until deployed, the live portal serves
@@ -54,6 +70,15 @@ Mobile repo (`swimnetics-mobile`, separate + user-owned): `4a03f2c` (58-01), `09
 ⚠ **Phase 60 has NOT been verified on a device.** All three plans rest on device-independent
 evidence plus user approvals; one EAS build is owed and would also be the first hardware exposure
 for several deferred iOS checks.
+
+## Loop Position (61-03) — CLOSED
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [61-03 CLOSED 2026-08-11 — 6 of 7 ACs met, AC-4 withdrawn]
+```
+⚠ **PHASE 61 STILL NOT COMPLETE — no phase transition run.** 3 of 4 plans. The unify file-count
+heuristic (3 PLANs == 3 SUMMARYs) would fire a third time; it counts files, not intent. 61-04
+(Compare redesign, D8–D11) remains scoped-but-unwritten. PROJECT.md deliberately NOT evolved.
 
 ## Loop Position (61-02) — CLOSED
 ```

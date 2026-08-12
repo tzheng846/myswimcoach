@@ -16,19 +16,44 @@ const RATES = [0.25, 0.5, 1];
 // No video attached → an upload input (velocity-only annotation stays fully usable).
 export default function VideoPane({
   sessionId,
-  video, // {path, origin_s} | null
+  video, // {path, origin_s} | null — origin_s null means NEVER STORED, not zero
   onPlayhead, // (sessionTimeS | null) => void
   seekRef, // ref; pane assigns seekRef.current = (sessionTimeS) => void
   frameStepRef, // ref; pane assigns frameStepRef.current = (frames) => void
   onVideoChange, // ({path, origin_s}) => void
+  sessionDurationS = null, // encoder-trace duration; drives the end-anchored origin (58-04)
 }) {
   const videoRef = useRef(null);
   const [url, setUrl] = useState(null);
-  const [originS, setOriginS] = useState(video?.origin_s ?? 0);
-  const [savedOrigin, setSavedOrigin] = useState(video?.origin_s ?? 0);
+  // ⚠ 58-04: this used to be `useState(video?.origin_s ?? 0)`. A session whose video arrived via
+  // the mobile background upload queue has NO stored origin — that queue posts the file only —
+  // so it defaulted to 0 and the video sat silently out of sync by the whole pre-roll. null now
+  // means "never stored", and the end-anchored value below is computed instead.
+  // ⚠ `??` NOT `||`: a stored origin of exactly 0 is a real, deliberate value.
+  const [originS, setOriginS] = useState(video?.origin_s ?? null);
+  const [savedOrigin, setSavedOrigin] = useState(video?.origin_s ?? null);
+  const [videoDurationS, setVideoDurationS] = useState(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [rate, setRate] = useState(1);
+
+  // End-anchored convention (44-03): recording and filming stop together, so the video's FIRST
+  // frame sits at (sessionDuration − videoDuration) on the session clock. Mirrors
+  // swimnetics-mobile VideoOverlayScreen.js:69.
+  const endAnchoredOriginS =
+    sessionDurationS != null && videoDurationS != null
+      ? sessionDurationS - videoDurationS
+      : null;
+
+  // The origin actually in effect. Stored ALWAYS wins (Phase 60-03 D11 as amended: never
+  // overwrite an existing origin); otherwise fall back to the computed one. Stays null until
+  // video metadata arrives — deliberately NOT 0, or the trace would jump when it loads.
+  const effectiveOriginS = originS ?? endAnchoredOriginS;
+
+  // Separate refs on purpose. Phase 60-03 hit a real bug by sharing one: the manual-nudge save
+  // was gated on the ref the auto-post set, so skipping the auto-post silently swallowed the
+  // user's first nudge — losing the only way to repair a bad origin by hand.
+  const autoSavedRef = useRef(false);
 
   // Signed URL expires (3600 s) — always refetched on mount, never persisted.
   useEffect(() => {
@@ -60,15 +85,15 @@ export default function VideoPane({
     if (!seekRef) return;
     seekRef.current = (sessionT) => {
       const v = videoRef.current;
-      if (!v) return;
+      if (!v || effectiveOriginS == null) return; // no origin yet — a seek would land at NaN
       const dur = Number.isFinite(v.duration) ? v.duration : 0;
-      v.currentTime = Math.min(Math.max(sessionT - originS, 0), dur);
-      onPlayhead?.(originS + v.currentTime);
+      v.currentTime = Math.min(Math.max(sessionT - effectiveOriginS, 0), dur);
+      onPlayhead?.(effectiveOriginS + v.currentTime);
     };
     return () => {
       seekRef.current = null;
     };
-  }, [seekRef, originS, url, onPlayhead]);
+  }, [seekRef, effectiveOriginS, url, onPlayhead]);
 
   // Frame step. Pause FIRST — stepping while playing fights the playhead — and push the
   // new time to the chart explicitly: `timeupdate` is throttled to ~4 Hz and does not
@@ -81,9 +106,9 @@ export default function VideoPane({
       v.pause();
       const dur = Number.isFinite(v.duration) ? v.duration : 0;
       v.currentTime = Math.min(Math.max(v.currentTime + frames * FRAME_S, 0), dur);
-      onPlayhead?.(originS + v.currentTime);
+      if (effectiveOriginS != null) onPlayhead?.(effectiveOriginS + v.currentTime);
     },
-    [originS, onPlayhead]
+    [effectiveOriginS, onPlayhead]
   );
 
   // Expose frame stepping to the page, mirroring the seekRef contract above — the
@@ -103,8 +128,35 @@ export default function VideoPane({
     if (v) v.playbackRate = rate;
   }, [url, rate]);
 
+  // 58-04: persist the computed origin ONCE, and only when nothing was stored. This is what
+  // stops a phone-uploaded video from arriving at 0 forever — mobile's VideoOverlayScreen has
+  // been the only writer of video_origin_s in the whole system until now.
+  // ⚠ Guarded on `savedOrigin == null`, so a stored origin (including a stored 0) is never
+  // overwritten. Uses its own ref, never the manual-save path's.
+  useEffect(() => {
+    if (autoSavedRef.current) return;
+    if (savedOrigin != null) return; // already stored — never clobber
+    if (endAnchoredOriginS == null || !video?.path) return; // metadata not in yet
+    autoSavedRef.current = true;
+    (async () => {
+      try {
+        const fd = new FormData();
+        fd.append("video_origin_s", String(endAnchoredOriginS));
+        await apiUpload(`/sessions/${sessionId}/video`, fd);
+        setSavedOrigin(endAnchoredOriginS);
+        onVideoChange?.({ path: video.path, origin_s: endAnchoredOriginS });
+      } catch {
+        // Non-fatal: playback still works off the computed value; only persistence failed.
+        autoSavedRef.current = false;
+      }
+    })();
+  }, [endAnchoredOriginS, savedOrigin, sessionId, video?.path, onVideoChange]);
+
+  // Nudging a COMPUTED origin promotes it to an explicit one — that is the repair path for a
+  // bad end-anchor, and it must keep working whether or not the auto-save has run.
   const nudge = (d) => {
-    const next = Math.round((originS + d) * 100) / 100;
+    if (effectiveOriginS == null) return;
+    const next = Math.round((effectiveOriginS + d) * 100) / 100;
     setOriginS(next);
     const v = videoRef.current;
     if (v) onPlayhead?.(next + v.currentTime);
@@ -115,10 +167,11 @@ export default function VideoPane({
     setMsg(null);
     try {
       const fd = new FormData();
-      fd.append("video_origin_s", String(originS));
+      fd.append("video_origin_s", String(effectiveOriginS));
       await apiUpload(`/sessions/${sessionId}/video`, fd);
-      setSavedOrigin(originS);
-      onVideoChange?.({ path: video.path, origin_s: originS });
+      setSavedOrigin(effectiveOriginS);
+      setOriginS(effectiveOriginS);
+      onVideoChange?.({ path: video.path, origin_s: effectiveOriginS });
       setMsg("Sync saved.");
     } catch (e) {
       setMsg(`Save failed: ${e.message}`);
@@ -138,8 +191,13 @@ export default function VideoPane({
       setMsg(null);
       onVideoChange?.({
         path: r.video_path,
-        origin_s: r.video_origin_s ?? 0,
+        // ⚠ was `?? 0` — the same 58-04 defect at a second site. A freshly attached video has
+        // no origin, and forcing 0 here would defeat the end-anchor computation entirely.
+        origin_s: r.video_origin_s ?? null,
       });
+      setOriginS(r.video_origin_s ?? null);
+      setSavedOrigin(r.video_origin_s ?? null);
+      autoSavedRef.current = false; // a new file needs a fresh end-anchor
     } catch (e) {
       setMsg(`Upload failed: ${e.message}`);
     } finally {
@@ -189,11 +247,16 @@ export default function VideoPane({
           className="w-full max-h-[clamp(140px,26vh,420px)] rounded-lg bg-black object-contain"
           onLoadedMetadata={() => {
             const v = videoRef.current;
-            if (v) v.playbackRate = rate;
+            if (!v) return;
+            v.playbackRate = rate;
+            // The end-anchored origin is unknowable until this fires (58-04).
+            if (Number.isFinite(v.duration)) setVideoDurationS(v.duration);
           }}
           onTimeUpdate={() => {
             const v = videoRef.current;
-            if (v) onPlayhead?.(originS + v.currentTime);
+            if (v && effectiveOriginS != null) {
+              onPlayhead?.(effectiveOriginS + v.currentTime);
+            }
           }}
         />
       ) : (
@@ -240,7 +303,7 @@ export default function VideoPane({
           −0.1s
         </button>
         <span className="w-16 text-center font-mono text-ink">
-          {originS.toFixed(2)} s
+          {effectiveOriginS != null ? `${effectiveOriginS.toFixed(2)} s` : "—"}
         </span>
         <button
           onClick={() => nudge(0.1)}
@@ -250,9 +313,9 @@ export default function VideoPane({
         </button>
         <button
           onClick={saveSync}
-          disabled={busy || originS === savedOrigin}
+          disabled={busy || effectiveOriginS == null || effectiveOriginS === savedOrigin}
           className={`rounded-md px-2.5 py-1 font-semibold ${
-            originS !== savedOrigin
+            effectiveOriginS != null && effectiveOriginS !== savedOrigin
               ? "bg-accent text-white"
               : "bg-surface-2 text-muted"
           }`}
@@ -260,6 +323,16 @@ export default function VideoPane({
           {busy ? "…" : "Save sync"}
         </button>
       </div>
+      {/* Which origin is in effect. With two possible sources — stored vs end-anchored — this
+          is the only way to tell a saved sync from a computed one when a video looks wrong.
+          Mobile added the same line in Phase 60-03 for the same reason. */}
+      <p className="mt-2 font-mono text-[10px] text-muted">
+        {savedOrigin != null ? "stored" : "computed (end-anchored)"}
+        {" · session "}
+        {sessionDurationS != null ? `${sessionDurationS.toFixed(1)} s` : "—"}
+        {" · video "}
+        {videoDurationS != null ? `${videoDurationS.toFixed(1)} s` : "—"}
+      </p>
       {msg && <p className="mt-2 text-xs text-muted">{msg}</p>}
     </div>
   );

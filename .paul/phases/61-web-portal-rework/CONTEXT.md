@@ -314,6 +314,15 @@ nothing that was ever validated.
 ⚠ `ratings.py` is therefore **in scope for this phase**, contrary to the pre-grilling draft which
 said "untouched but affected."
 
+### D16 — The video page's chart is a rolling playhead window  ⚠ RECORDED LATE 2026-08-11
+Presets **1 / 2 / 5 s / All**, default 2 s, centred on the video playhead — mobile 60-03 parity.
+**The user chose this during the discussion (round 2) and it was never written down as a numbered
+decision**; it survived only as a passing mention in Constraints. Recorded here at 61-03 plan time
+so the plan has a basis rather than an inference.
+⚠ Phase 60's close-out records this as **specifically unverified on a device** — "whether the 2 s
+rolling window reads well during playback" was the point of the original ask and was never
+confirmed. The web is its first real read.
+
 ### Explicitly declined by the user
 - CSV export button (`GET /sessions/{id}/export`, still caller-less system-wide)
 - "Borrowed bands" caveat on non-breaststroke sessions (58-03's accepted gap — stays Phase 53's)

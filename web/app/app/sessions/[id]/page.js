@@ -54,6 +54,47 @@ export default function ReportCardPage({ params }) {
   const [markerTimeS, setMarkerTimeS] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
 
+  // 61-03: these used to reset on every prev/next hop. The route remounts per session id, so
+  // component state cannot survive it — the coach had to re-pick Advanced and yards on each
+  // session while comparing a series, which is exactly when they are comparing them.
+  // Persisted rather than URL-encoded because they are a standing preference, not a property of
+  // the session being viewed. Read in an effect, not a lazy initializer: localStorage does not
+  // exist during SSR and reading it during render would desync hydration.
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem("swimnetics.view");
+      const u = window.localStorage.getItem("swimnetics.unit");
+      if (v === "simple" || v === "advanced") setView(v);
+      if (u === "metric" || u === "imperial") setUnit(u);
+    } catch {
+      // Private mode / storage disabled — defaults are fine.
+    }
+  }, []);
+
+  const persist = useCallback((key, value) => {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch {
+      // Non-fatal: the toggle still works for this page view.
+    }
+  }, []);
+
+  const chooseView = useCallback(
+    (v) => {
+      setView(v);
+      persist("swimnetics.view", v);
+    },
+    [persist]
+  );
+
+  const chooseUnit = useCallback(
+    (u) => {
+      setUnit(u);
+      persist("swimnetics.unit", u);
+    },
+    [persist]
+  );
+
   // Sequence guard: load() can now be triggered from three places, so a slow earlier
   // response must not overwrite a newer one.
   const reqRef = useRef(0);
@@ -275,7 +316,7 @@ export default function ReportCardPage({ params }) {
             {["simple", "advanced"].map((v) => (
               <button
                 key={v}
-                onClick={() => setView(v)}
+                onClick={() => chooseView(v)}
                 className={`rounded-md px-3.5 py-1.5 text-xs font-semibold capitalize transition-colors ${
                   view === v ? "bg-accent text-white" : "text-subtle hover:text-ink"
                 }`}
@@ -332,6 +373,19 @@ export default function ReportCardPage({ params }) {
           </div>
         )}
 
+        {/* 61-03 D1 — a full-width control directly above the velocity card, not a small link in
+            the header. The original ask was for video NOT to be hidden; a header link was still
+            hidden, just somewhere else. Rendered unconditionally, not gated on video_path: D13
+            makes this route the place video gets ATTACHED, so hiding it when a session has no
+            video would make attaching impossible from here. */}
+        <Link
+          href={`/app/sessions/${sessionId}/video`}
+          className="flex items-center justify-center gap-2 rounded-xl border border-accent/50 bg-accent/10 px-4 py-3 text-sm font-semibold text-primary transition-colors hover:bg-accent/20"
+        >
+          <span aria-hidden="true">▶</span>
+          Video + Velocity
+        </Link>
+
         {/* Velocity chart + unit toggle */}
         <div>
           <div className="mb-2 flex items-center justify-between">
@@ -342,7 +396,7 @@ export default function ReportCardPage({ params }) {
               {["metric", "imperial"].map((u) => (
                 <button
                   key={u}
-                  onClick={() => setUnit(u)}
+                  onClick={() => chooseUnit(u)}
                   className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${
                     unit === u
                       ? "border-accent bg-accent text-white"

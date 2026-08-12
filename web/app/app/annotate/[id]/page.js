@@ -430,6 +430,10 @@ export default function AnnotatePage({ params }) {
             seekRef={seekRef}
             frameStepRef={frameStepRef}
             onVideoChange={setVideo}
+            // 58-04: without this the pane cannot compute an end-anchored origin, and a
+            // phone-uploaded video (no stored origin) opens here silently unsynced — which is
+            // exactly the case this page exists to serve.
+            sessionDurationS={time.length ? time[time.length - 1] : null}
           />
           <AnnotationChart
             time={time}

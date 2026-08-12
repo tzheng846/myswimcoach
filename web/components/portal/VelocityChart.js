@@ -28,6 +28,9 @@ export default function VelocityChart({
   // sessions recorded before Phase 52, which have no recorded rate.
   fsHz = 100,
   height = 320,
+  // Optional recharts click handler (61-03). Absent on the report card, so its behaviour there
+  // is unchanged; the video page uses it to seek playback from the trace.
+  onClick = undefined,
 }) {
   const data = useMemo(() => {
     const n = Math.min(time.length, velocity.length);
@@ -70,7 +73,11 @@ export default function VelocityChart({
         height="100%"
         initialDimension={{ width: 520, height }}
       >
-        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+        <LineChart
+          data={data}
+          margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
+          onClick={onClick}
+        >
           <CartesianGrid stroke="#1e3a5f" strokeOpacity={0.25} />
           <XAxis
             dataKey="t"
