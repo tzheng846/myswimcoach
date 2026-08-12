@@ -12,6 +12,14 @@ Progress:
 - Milestone v0.5: [█████████░] in progress
 - Phase 61: [██████████] 100% (5 of 5 plans)
 
+⚠ **TODO, NOT PLANNED (user's explicit instruction): PROGRESS REPORT REWORK — ROADMAP row 62.**
+Raised 2026-08-11 from a live parent report. (1) The trend tooltip is indistinguishable on same-day
+sessions — `MetricTrend.js:57` renders a DATE label, so ten Aug-5 sessions all hover as "Aug 5";
+**same defect 61-04 fixed on Compare**, and `lib/sessionName.js` already has the helper to reuse.
+(2) All strokes are averaged into one series, which also makes the hero deltas suspect — a change
+in stroke MIX alone would move "−4.4% distance per stroke". (3) Unverified: traces dip to exactly 0,
+possibly missing metrics plotted as 0 rather than skipped.
+
 ⚠ **DEFERRED TODO, NOT PLANNED (user's explicit instruction): synced playback on Compare.** Play
 both videos and both trace playheads together off the D9 alignment offset. Blocked on a
 `VideoPane` play/pause API (it has only `seekRef`/`frameStepRef`), per-panel playheads in
