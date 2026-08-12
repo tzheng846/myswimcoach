@@ -7,6 +7,7 @@ import ContactDialog from "@/components/marketing/ContactDialog";
 const links = [
   { href: "/#how-it-works", label: "How it works" },
   { href: "/#features", label: "Features" },
+  { href: "/blog", label: "Blog" },
   { href: "/faq", label: "FAQ" },
 ];
 

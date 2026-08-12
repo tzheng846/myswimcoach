@@ -21,6 +21,11 @@ export default function Footer() {
             {CONTACT_EMAIL}
           </a>
           <p className="mt-2">
+            <Link href="/blog" className="text-ink-600 transition-colors hover:text-brand">
+              Blog
+            </Link>
+          </p>
+          <p className="mt-2">
             <Link href="/faq" className="text-ink-600 transition-colors hover:text-brand">
               FAQ
             </Link>

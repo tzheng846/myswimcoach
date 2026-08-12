@@ -3,14 +3,19 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **61 (Web Portal Rework) — In progress (1 of 4 plans)**
-Plan: **61-01 ✅ COMPLETE + CLOSED 2026-08-11.** Next: 61-02 (report card) — scoped, not written.
-Status: Ready for `/paul:plan 61` (61-02)
-Last activity: 2026-08-11 — 61-01 loop closed; suite 274; ⚠ **not committed, not deployed**
+Phase: **61 (Web Portal Rework) — In progress (2 of 4 plans complete)**
+Plan: **61-02 ✅ COMPLETE + CLOSED 2026-08-11.** Next: 61-03 (video route + 58-04) — scoped, not written.
+Status: Ready for `/paul:plan 61` (61-03)
+Last activity: 2026-08-11 — 61-02 loop closed; build clean, suite 274; ⚠ **nothing committed or deployed**
 
 Progress:
 - Milestone v0.5: [█████████░] in progress
-- Phase 61: [██░░░░░░░░] 25% (1 of 4 plans)
+- Phase 61: [█████░░░░░] 50% (2 of 4 plans)
+
+⚠ **OPEN OBSERVATION OWED (61-02 AC-6):** whether the Simple/Advanced and m/yd toggles survive
+prev/next navigation. The checkpoint asked; the reply was "approved" without the answer. Recorded
+as unknown rather than guessed. Cheap to settle: open a session, switch to Advanced + yd, press an
+arrow, see whether both stick.
 
 ⚠ **DEPLOY OWED BEFORE 61-02 IS MEANINGFUL IN PRODUCTION.** 61-01 changed `metrics.py`,
 `coach.py` and `ratings.py` — all on the Railway path. Until deployed, the live portal serves
@@ -49,6 +54,15 @@ Mobile repo (`swimnetics-mobile`, separate + user-owned): `4a03f2c` (58-01), `09
 ⚠ **Phase 60 has NOT been verified on a device.** All three plans rest on device-independent
 evidence plus user approvals; one EAS build is owed and would also be the first hardware exposure
 for several deferred iOS checks.
+
+## Loop Position (61-02) — CLOSED
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [61-02 CLOSED 2026-08-11 — 7 ACs, build clean, suite 274]
+```
+⚠ **PHASE 61 STILL NOT COMPLETE — no phase transition run.** 2 of 4 plans. The unify file-count
+heuristic (2 PLANs == 2 SUMMARYs) would fire again; it counts files, not intent. 61-03/04 remain
+scoped-but-unwritten in ROADMAP. PROJECT.md deliberately NOT evolved, no phase commit made.
 
 ## Loop Position (61-01) — CLOSED
 ```

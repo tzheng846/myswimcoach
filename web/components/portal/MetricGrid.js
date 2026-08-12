@@ -124,12 +124,15 @@ export default function MetricGrid({ metrics, unit }) {
       </SectionCard>
 
       <SectionCard title="Efficiency">
-        {efficiencyUnreliable ? (
-          <p className="text-sm italic leading-relaxed text-warning-2">
-            Stroke detection may be unreliable for this session. Check
-            recording conditions or technique consistency.
+        {/* 61-02 D4: this used to REPLACE every efficiency metric with the warning below.
+            It is now a banner and the numbers always render — matching mobile, which made the
+            same change in Phase 60-01 D10 so the two clients stop disagreeing about a session. */}
+        {efficiencyUnreliable && (
+          <p className="mb-3 rounded-md bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning-2">
+            ⚠ Stroke detection may be unreliable for this session — the figures below are
+            shown for reference. Check recording conditions or technique consistency.
           </p>
-        ) : (
+        )}
           <>
             <div className="flex">
               <MetricItem
@@ -174,7 +177,6 @@ export default function MetricGrid({ metrics, unit }) {
               />
             </div>
           </>
-        )}
       </SectionCard>
     </div>
   );

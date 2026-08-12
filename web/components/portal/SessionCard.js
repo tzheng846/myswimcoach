@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { DROPOUT_WARN_PCT } from "@/lib/dropoutWarning";
 
 export const STROKE_LABELS = {
   breaststroke: "Breaststroke",
@@ -44,21 +45,29 @@ function formatWhen(iso) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getFullYear() % 100)}`;
 }
 
-// Mirrors DataQualityCard's thresholds so the two surfaces cannot disagree.
-// ⚠ The kick exclusion is load-bearing, not tidiness: metrics.py sets kick_metrics_reliable =
-// False on EVERY session, so counting that warning would put a ⚠ on literally every card and the
-// indicator would carry no information at all. Same test DataQualityCard uses.
+// Shares its dropout threshold with lib/dropoutWarning.js so the list and the report card cannot
+// disagree. (It used to say "mirrors DataQualityCard"; 61-02 D4 deleted that card.)
+//
+// ⚠ THE WARNING EXCLUSIONS ARE LOAD-BEARING, NOT TIDINESS. api.py emits two warnings that fire on
+// essentially every session, so counting either would put a ⚠ on literally every card and the
+// indicator would carry no information at all:
+//   - kick: metrics.py sets kick_metrics_reliable = False on EVERY session (api.py:181 appends
+//     it unconditionally)
+//   - segmentation: api.py:193 appends it whenever segmentation_reliable is false, and that flag
+//     is hardcoded false for every auto-segmented session
+// ⚠ The segmentation exclusion was ADDED in 61-02. Before it, this indicator did flag every card.
 function qualityIssue(dq) {
   if (!dq) return null;
-  if ((dq.magnet_dropout_pct ?? 0) > 5)
+  if ((dq.magnet_dropout_pct ?? 0) > DROPOUT_WARN_PCT)
     return `${dq.magnet_dropout_pct.toFixed(1)}% signal dropout`;
   if ((dq.implausible_cycle_count ?? 0) > 0)
     return `${dq.implausible_cycle_count} implausible cycle${
       dq.implausible_cycle_count === 1 ? "" : "s"
     }`;
-  const real = (dq.warnings ?? []).filter(
-    (w) => !w.toLowerCase().includes("kick")
-  );
+  const real = (dq.warnings ?? []).filter((w) => {
+    const t = w.toLowerCase();
+    return !t.includes("kick") && !t.includes("segmentation");
+  });
   return real.length ? real[0] : null;
 }
 

@@ -5,14 +5,36 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api";
 import MetricGrid, { SessionSummaryCard } from "@/components/portal/MetricGrid";
-import DataQualityCard from "@/components/portal/DataQualityCard";
 import VelocityChart from "@/components/portal/VelocityChart";
 import TimeToX from "@/components/portal/TimeToX";
-import CycleTable from "@/components/portal/CycleTable";
 import CycleCharts from "@/components/portal/CycleCharts";
 import CoachChat from "@/components/portal/CoachChat";
 import PillarCards from "@/components/portal/PillarCards";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
+import { dropoutWarning } from "@/lib/dropoutWarning";
+
+// One chronological neighbour. Rendered as a disabled span at the ends rather than omitted, so
+// the header keeps the same shape on the first and last session of an athlete.
+function SiblingLink({ id, label, title }) {
+  const base = "rounded-md px-2 py-1 text-lg leading-none";
+  if (!id) {
+    return (
+      <span className={`${base} text-muted/30`} aria-hidden="true">
+        {label}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={`/app/sessions/${id}`}
+      title={title}
+      aria-label={title}
+      className={`${base} text-primary hover:bg-surface-2`}
+    >
+      {label}
+    </Link>
+  );
+}
 
 export default function ReportCardPage({ params }) {
   const { id: sessionId } = use(params);
@@ -20,6 +42,8 @@ export default function ReportCardPage({ params }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [athlete, setAthlete] = useState(null);
+  // The athlete's other sessions, newest first — drives prev/next (D12).
+  const [siblings, setSiblings] = useState([]);
 
   const [sessionName, setSessionName] = useState("");
   const [editingName, setEditingName] = useState(false);
@@ -59,13 +83,27 @@ export default function ReportCardPage({ params }) {
         setNotes(row.notes ?? "");
       }
       if (row.athlete_id) {
-        const { data: ath } = await supabase
-          .from("athletes")
-          .select("name, head_waist_m")
-          .eq("id", row.athlete_id)
-          .single();
+        // Athlete + sibling session list, fetched together so they cannot disagree about which
+        // athlete this session belongs to. Both live inside `load()` deliberately: it already
+        // holds the `reqRef` sequence guard, and a separate effect would reintroduce exactly the
+        // out-of-order race that guard exists to prevent (61-02 D12).
+        const [{ data: ath }, { data: sibs }] = await Promise.all([
+          supabase
+            .from("athletes")
+            .select("name, head_waist_m")
+            .eq("id", row.athlete_id)
+            .single(),
+          supabase
+            .from("sessions")
+            .select("id, created_at, name")
+            .eq("athlete_id", row.athlete_id)
+            .order("created_at", { ascending: false }),
+        ]);
         if (seq !== reqRef.current) return;
         setAthlete(ath);
+        setSiblings(sibs ?? []);
+      } else {
+        setSiblings([]);
       }
     },
     [sessionId]
@@ -123,6 +161,18 @@ export default function ReportCardPage({ params }) {
     [vel.length, fsHz]
   );
 
+  // Chronological neighbours. `siblings` is newest-first, so the NEWER session is the previous
+  // array entry. Either end yields null and the control is disabled rather than hidden, so the
+  // controls do not jump around between sessions.
+  const { newerId, olderId } = useMemo(() => {
+    const i = siblings.findIndex((s) => s.id === sessionId);
+    if (i < 0) return { newerId: null, olderId: null };
+    return {
+      newerId: i > 0 ? siblings[i - 1].id : null,
+      olderId: i < siblings.length - 1 ? siblings[i + 1].id : null,
+    };
+  }, [siblings, sessionId]);
+
   if (error)
     return (
       <p className="mt-10 text-center text-danger">{error}</p>
@@ -164,9 +214,16 @@ export default function ReportCardPage({ params }) {
         >
           ‹ Sessions
         </Link>
-        <div className="text-center">
-          <p className="font-semibold">{athlete?.name ?? ""}</p>
-          <p className="text-xs text-muted">{date}</p>
+        {/* Prev/next across THIS athlete's sessions (61-02 D12). Older is to the left of the
+            date, newer to the right, so the arrows read chronologically rather than as
+            list-order. Disabled (not hidden) at each end so the header doesn't reflow. */}
+        <div className="flex items-center gap-2">
+          <SiblingLink id={olderId} label="‹" title="Older session" />
+          <div className="text-center">
+            <p className="font-semibold">{athlete?.name ?? ""}</p>
+            <p className="text-xs text-muted">{date}</p>
+          </div>
+          <SiblingLink id={newerId} label="›" title="Newer session" />
         </div>
         <button
           onClick={() => {
@@ -322,10 +379,39 @@ export default function ReportCardPage({ params }) {
               onMarkerChange={onMarkerChange}
               unit={unit}
             />
+            {/* 61-02 D7: every split here is measured FROM this instant, and until now nothing
+                said where it came from. The chain is dive_start_s → manual.baseline_end_idx →
+                session.baseline_end_s (annotations.py → metrics.py), so an annotated session's
+                start IS the coach's own mark. When it is not, the caveat doubles as the fix. */}
+            {metrics.session?.baseline_end_s != null && (
+              <p className="mt-3 border-t border-navy/30 pt-2.5 text-center text-[11px] leading-relaxed text-muted">
+                Start: {metrics.session.baseline_end_s.toFixed(2)} s —{" "}
+                {metrics.data_quality?.recomputed_from_annotation ? (
+                  "from your annotation"
+                ) : (
+                  <>
+                    auto-detected.{" "}
+                    <Link
+                      href={`/app/annotate/${sessionId}`}
+                      className="font-semibold text-primary"
+                    >
+                      Set it yourself ›
+                    </Link>
+                  </>
+                )}
+              </p>
+            )}
           </div>
         )}
 
-        <DataQualityCard dataQuality={metrics.data_quality} />
+        {/* The Data Quality card was retired here (61-02 D4). Dropout is the one stat on it that
+            never touched the segmenter — see lib/dropoutWarning.js for why the other three went,
+            and why this must never be gated on `warnings.length`. */}
+        {dropoutWarning(metrics.data_quality) && (
+          <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning-2">
+            ⚠ {dropoutWarning(metrics.data_quality)}
+          </p>
+        )}
 
         {/* Advanced: per-cycle breakdown (Streamlit-demo depth) */}
         {isAnalyticsReady && view === "advanced" && (
@@ -333,8 +419,11 @@ export default function ReportCardPage({ params }) {
             <p className="pt-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
               Per-Cycle Breakdown
             </p>
-            <CycleCharts cycles={metrics.cycles} session={metrics.session} />
-            <CycleTable cycles={metrics.cycles} />
+            <CycleCharts
+              cycles={metrics.cycles}
+              session={metrics.session}
+              unit={unit}
+            />
           </>
         )}
 

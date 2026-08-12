@@ -210,7 +210,53 @@ describe the same cycles.
   segmentation did not move. Nothing may be deleted, skipped, or weakened to make the suite green.
   ⚠ Knife-edge noted at plan time: `_band` uses `value <= thr["good"]` and `test_ratings.py:14`
   pins `cv_arm_peak_vel` at exactly `0.08`, so anchors must be rounded AWAY from fixture values.
-- [ ] 61-02 (scoped, not written) — report card rework (D3, D4, D7, D12). `depends_on ["61-01"]`.
+- [x] **61-02 ✅ COMPLETE 2026-08-11** — all 7 ACs met, checkpoint approved. Build clean at every
+  task boundary; **suite 274, zero Python touched**. 4 web files modified, 1 created, **2 deleted**;
+  1 mobile file (comments + one display string). **Three of the user's five original asks are now
+  on screen.**
+  ⭐ **AC-2's vintage predicate was validated against the LIVE corpus, not assumed** — 54 legacy /
+  0 new / 8 no-cycles across 62 sessions, exactly as expected while 61-01 is undeployed.
+  ⚠ **VERIFICATION HONESTY: every VISUAL criterion rests on the user's approval, not on
+  observations I made.** The coach portal is behind Supabase auth and signing in is out of bounds,
+  so AC-1/4/5/6 were not independently checked. What WAS checked without a login: build clean,
+  route 200 with no console errors, `pytest` 274, no live refs to the deleted components or to
+  `warnings.length`, `dropoutWarning` 10/10 in node, and the AC-2 predicate above.
+  ⚠ **AC-6's REQUIRED OBSERVATION WAS NOT OBTAINED** — whether the Simple/Advanced and m/yd toggles
+  survive prev/next navigation. The checkpoint asked; the reply was "approved" without it. Recorded
+  as unknown rather than guessed.
+  ⚠ DEVIATIONS (5, none harmful): prettier run on `MetricGrid.js` produced **55/50 lines of
+  unrelated churn** for a ~10-line change — prettier is NOT a repo convention (no config, not a
+  dependency), so it was reverted and redone by hand at **8/6**; an `rm` issued from a stale `web/`
+  cwd failed harmlessly; the mobile edit is comments **plus the one footnote string** D5c named, so
+  the plan's "COMMENT-ONLY" boundary was mine and too narrow; AC-6's observation missing; and the
+  flagged `SessionCard` addition below.
+  ⚠ SCOPE ADDITION, FLAGGED TWICE AND NOT OBJECTED TO: `SessionCard.qualityIssue` now filters the
+  segmentation warning as well as the kick one. Before this it put a ⚠ on essentially every card in
+  the session list, since `segmentation_reliable` is hardcoded false. Touches the sessions LIST,
+  not the report card.
+  ⚠ Impulse and Trough left the web with `CycleTable` — intended, not to be reinstated.
+  SUMMARY: 61-02-SUMMARY.md. Original scope follows.
+- [ ] ~~61-02 PLAN created 2026-08-11, awaiting approval~~ — report card rework (D3, D4, D7, D12).
+  `autonomous:false`, `depends_on ["61-01"]`, wave 2. **8 files** (7 web + 1 mobile comment-only).
+  3 auto tasks + 1 device-free human-verify. **7 ACs.**
+  ⭐ **AC-2 IS THE PLAN'S SUBTLE PART — the mean-line caption must be true for BOTH session
+  vintages.** After 61-01 the mean IS the average of the plotted dots, but only for sessions
+  computed by the new code; stored rows keep steady-only means. Vintage is detected from the data
+  (`cycles.some(c => "phase" in c)` — 61-01 stopped emitting that key), never from dates, and never
+  shown unconditionally.
+  ⚠ **CARRIES CONTEXT.md's D5c, WHICH 61-01 MISSED.** 61-01's own boundary said "any web or mobile
+  file needs no change", which contradicted D5c and won. `swimnetics-mobile`'s `CycleCharts.js`
+  header + footnote still state means exclude cycles AND instruct future developers not to fix the
+  mismatch — false since 61-01, and actively misleading. Comment-only, no EAS build.
+  ⚠⚠ **THE UNCONDITIONAL-WARNING TRAP, verified twice.** `api.py:181` appends the kick warning
+  unconditionally and `:193` appends a segmentation warning whenever `segmentation_reliable` is
+  false — hardcoded false for every auto session. So `warnings.length > 0` flags everything and
+  carries zero information; mobile's `dropoutWarning.js` documents this and the plan forbids it.
+  ⚠ SMALL ADDITION FLAGGED FOR REVIEW: `SessionCard.qualityIssue` filters the kick warning but not
+  the segmentation one, so it currently puts a ⚠ on essentially every card in the session list.
+  Same defect class, different form; fixed here because deleting `DataQualityCard` while leaving
+  its surviving sibling broken would be incoherent. Touches the sessions list, not the report card.
+  ⚠ Impulse + Trough leave the web with `CycleTable` — intended, recorded, not to be reinstated.
 - [ ] 61-03 (scoped, not written) — new video route + 58-04 origin computation (D1, D2, D13).
   `depends_on ["61-02"]`.
 - [ ] 61-04 (scoped, not written) — Compare redesign (D8, D9, D10, D11). `depends_on ["61-01"]`.
