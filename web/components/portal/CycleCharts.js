@@ -22,7 +22,22 @@ import {
 // session mean IS the average of the plotted dots. Sessions stored before it keep steady-only
 // means and will not line up. The caveat is shown per-session, never unconditionally.
 
-function TrendPanel({ title, caption, data, dataKey, unit, mean, decimals = 2 }) {
+// Exported for CompareCycleCharts (61-04 D11), which renders the same panel with two series.
+// One chart primitive, two callers — a second copy is how the report card and Compare drift into
+// looking like different products.
+export function TrendPanel({
+  title,
+  caption,
+  data,
+  dataKey,
+  unit,
+  mean,
+  decimals = 2,
+  // Optional multi-series form: [{ dataKey, color, name }]. Omitted → the original single blue
+  // line, so the report card's rendering is unchanged.
+  series = null,
+}) {
+  const lines = series ?? [{ dataKey, color: "#2196f3", name: undefined }];
   return (
     <div className="rounded-xl border border-navy/50 bg-surface p-3">
       <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-widest text-muted">
@@ -50,8 +65,26 @@ function TrendPanel({ title, caption, data, dataKey, unit, mean, decimals = 2 })
               content={({ active, payload }) =>
                 active && payload?.length ? (
                   <div className="rounded-md border border-navy bg-surface-2 px-2.5 py-1.5 font-mono text-xs text-ink">
-                    Cycle {payload[0].payload.n}:{" "}
-                    {payload[0].value?.toFixed(decimals)} {unit}
+                    {/* ⚠ The single-series form is preserved EXACTLY as 61-02 shipped it. The
+                        report card renders this component, and quietly restyling its tooltip
+                        while adding a Compare feature would be an unannounced change to a
+                        surface this plan is not supposed to touch (AC-5). */}
+                    {series ? (
+                      <>
+                        <p className="text-muted">Cycle {payload[0].payload.n}</p>
+                        {payload.map((pl) => (
+                          <p key={pl.dataKey} style={{ color: pl.stroke }}>
+                            {pl.name ? `${pl.name}: ` : ""}
+                            {pl.value?.toFixed(decimals)} {unit}
+                          </p>
+                        ))}
+                      </>
+                    ) : (
+                      <>
+                        Cycle {payload[0].payload.n}:{" "}
+                        {payload[0].value?.toFixed(decimals)} {unit}
+                      </>
+                    )}
                   </div>
                 ) : null
               }
@@ -69,14 +102,21 @@ function TrendPanel({ title, caption, data, dataKey, unit, mean, decimals = 2 })
                 }}
               />
             )}
-            <Line
-              type="monotone"
-              dataKey={dataKey}
-              stroke="#2196f3"
-              strokeWidth={2}
-              dot={{ r: 3, fill: "#2196f3" }}
-              isAnimationActive={false}
-            />
+            {lines.map((ln) => (
+              <Line
+                key={ln.dataKey}
+                type="monotone"
+                dataKey={ln.dataKey}
+                name={ln.name}
+                stroke={ln.color}
+                strokeWidth={2}
+                dot={{ r: 3, fill: ln.color }}
+                isAnimationActive={false}
+                // Two sessions have DIFFERENT cycle counts; the shorter series must simply end
+                // rather than be bridged across missing cycles it never had.
+                connectNulls={false}
+              />
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>

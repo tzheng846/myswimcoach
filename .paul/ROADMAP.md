@@ -320,7 +320,58 @@ describe the same cycles.
   annotation tools" — but seek is playback, and a chart you cannot scrub is strictly less than the
   annotate page the user is trying to escape. Remove at review if unwanted.
   ⚠ Carries forward 61-02's unanswered question (do view/unit survive prev/next).
-- [ ] 61-04 (scoped, not written) — Compare redesign (D8, D9, D10, D11). `depends_on ["61-01"]`.
+- [x] **61-04 ✅ COMPLETE 2026-08-11** — all 5 ACs met, checkpoint approved after one revision.
+  Build clean; **suite 274, zero Python**. 2 files created, 3 modified, 1 deleted.
+  ⭐ **AC-1 MEASURED ON THE REAL CORPUS, NOT ASSUMED:** the worst case is **19 sessions for one
+  athlete on one day** — exactly the user's complaint — and all 19 labels come out distinct;
+  62/62 distinct globally; deterministic across calls.
+  ⚠ **THE MNEMONIC ALONE COLLIDES 3 TIMES IN 62** (40×32 = 1280 combos; birthday paradox predicts
+  ~1.4). **Uniqueness comes from the appended TIME, not the words** — widen the word lists before
+  the corpus reaches thousands.
+  ⚠ **AC-2 FIXED AN ABSOLUTE ERROR, NOT A VISIBLE SKEW** — 56 of 62 sessions are 90.0 Hz and 6 are
+  NULL, so **none differ from each other**. The hardcoded 100 was ~11% wrong on BOTH traces
+  equally. It is the last hardcoded rate on the web and CLAUDE.md's "no single axis to draw them
+  on" note is superseded by stacked panels — but nothing visibly misaligned was repaired.
+  ⚠ **% DELTAS REMOVED ENTIRELY at the checkpoint** (user: *"two graphs of actual value - not
+  difference"*). The `A → B +13.4%` strip became 8 paired-bar cards of actual values, and
+  `MetricDeltaTable`'s direction convention (`normal`/`inverse`/`off`, ported from `app.py`) went
+  with it — **nothing in the portal now says whether a change is good or bad**. Deliberate.
+  ⭐ **ASKED INSTEAD OF GUESSING:** "two graphs… two separate lines" was ambiguous, since the four
+  per-cycle panels ALREADY drew two lines of actual values — the request could have meant they were
+  broken. They were not. Guessing would have produced the wrong work.
+  ⚠ **A SHIPPED SURFACE WAS BROKEN AND CAUGHT IN VERIFICATION:** extending `TrendPanel` to
+  multi-series changed the REPORT CARD's tooltip to a two-line form (AC-5 violation, on a surface
+  this plan must not touch). Single-series output now reproduces the original verbatim. Found by
+  reading the diff, not by testing.
+  ⚠ Bars scale by `max(|a|,|b|)` — `fatigue_index_pct` goes NEGATIVE (real value −73.9) when a
+  swimmer speeds up, and `max(a,b)` renders that zero-width or inverted. Verified over 7 cases,
+  plus 7 per-cycle merge shapes with zero throws.
+  SUMMARY: 61-04-SUMMARY.md. Original scope follows.
+- [ ] ~~61-04 PLAN created 2026-08-11, awaiting approval~~ — Compare redesign, **D8 + D9 + D11**
+  (D10 split out). `autonomous:false`, `depends_on ["61-01"]`, wave 4. 5 files. 3 auto tasks +
+  1 human-verify. 5 ACs.
+  ⚠ **PHASE RESCOPED 4 → 5 PLANS.** All four Compare decisions in one plan was 4 substantial tasks
+  on a page that roughly doubles — past the 2–3 guidance, and 61-03 showed that oversized UI plans
+  surface defects in bulk at the checkpoint. D10 is purely additive and needs 61-04's layout first.
+  ⚠⚠ **MEASURED AT PLAN TIME, AND IT DEFLATES D9's HEADLINE:** of 62 live sessions **56 are 90.0 Hz
+  and 6 are NULL — none differ from each other.** So `CompareChart.js:28`'s hardcoded 100 is an
+  ~11% error applied EQUALLY to both traces, not the differential skew CLAUDE.md's "two sessions
+  may have two rates" note implies. Fixing it removes the last hardcoded rate on the web and is
+  still right; the plan forbids writing it up as having fixed a visible misalignment.
+  ⚠ D8 names are **derived at render time and NEVER written** — `sessions.name` is coach-editable
+  and PATCHable, so generating into it would clobber typed names. Labels must include the TIME:
+  the date alone is exactly what fails to separate same-day sessions.
+  ⚠ D11 reuses 61-02's `TrendPanel` (currently module-private, to be exported) rather than growing
+  a second chart primitive. The two sessions have DIFFERENT cycle counts and must NOT be padded,
+  truncated or resampled — that would imply a correspondence between cycle N of two swims that
+  does not exist. 8 of 62 live sessions have no cycles and must degrade to a message.
+  ⚠ Deleting `MetricDeltaTable` drops the "% change from baseline" convention ported from `app.py`.
+  A real loss of information — the plan requires either keeping a compact summary or saying plainly
+  in the SUMMARY that deltas were dropped.
+- [ ] 61-05 (scoped, not written) — **D10**: video on Compare, right column, one per session,
+  colour-matched to its trace panel. `depends_on ["61-04"]`. Reuses `VideoPane` as 61-03 left it,
+  so it inherits the 58-04 fix. ⚠ Two `VideoPane` instances on one page each carry upload, frame
+  step, speed and sync controls — check the density is tolerable before committing to full reuse.
   **The last plan in Phase 61.**
 
 ### Phase 60: Mobile App Rework — ✅ COMPLETE (3/3 plans) 2026-08-11

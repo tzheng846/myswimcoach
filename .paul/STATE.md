@@ -3,11 +3,22 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **61 (Web Portal Rework) — In progress (3 of 4 plans complete)**
-Plan: **61-03 ✅ COMPLETE + CLOSED 2026-08-11** (user: *"everything works"*). Next: 61-04 (Compare
-redesign) — scoped, not written. 61-01 + 61-02 committed and DEPLOYED.
-Status: Ready for `/paul:plan 61` (61-04)
-Last activity: 2026-08-11 — 61-03 loop closed; **58-04 CLOSED**; build clean, suite 274
+Phase: **61 (Web Portal Rework) — In progress (4 of 5 plans complete)**
+Plan: **61-04 ✅ COMPLETE + CLOSED 2026-08-11.** Next: 61-05 (D10, video on Compare) — the last
+plan in the phase, scoped but not written.
+Status: Ready for `/paul:plan 61` (61-05)
+Last activity: 2026-08-11 — 61-04 loop closed; build clean, suite 274; ⚠ **uncommitted**
+
+⚠ **PHASE RESCOPED 4 → 5 PLANS.** D8+D9+D10+D11 in one plan was 4 substantial tasks on a page that
+would roughly double in size, past the 2–3 task guidance. **61-04 = D8, D9, D11** (naming, stacked
+true-rate traces, per-cycle overlays); **61-05 = D10** (video column on Compare), which is purely
+additive and depends on 61-04's layout existing.
+
+### Git State (checked)
+`bc7ce18` feat(61-03): video route, close 58-04 — **pushed to origin/main**. Working tree clean at
+commit time. ⚠ That push also carried `d9cf0fa` and `c85d4fd`, which were committed but never
+pushed — 61-01/02 were live only because they had been deployed separately.
+⚠ `swimnetics-mobile` still holds 61-02's D5c comment fix uncommitted; needs an EAS build.
 
 ### Git State (checked, not assumed)
 `c85d4fd` feat(61): remove cycle-phase split, re-anchor bands, rework report card
@@ -19,7 +30,7 @@ build to reach a device.
 
 Progress:
 - Milestone v0.5: [█████████░] in progress
-- Phase 61: [████████░░] 75% (3 of 4 plans)
+- Phase 61: [████████░░] 80% (4 of 5 plans)
 
 ✅ **61-02's open observation is ANSWERED and FIXED.** The toggles did NOT survive prev/next; the
 route remounts per session id so component state cannot. Both now persist to `localStorage` and
@@ -70,6 +81,13 @@ Mobile repo (`swimnetics-mobile`, separate + user-owned): `4a03f2c` (58-01), `09
 ⚠ **Phase 60 has NOT been verified on a device.** All three plans rest on device-independent
 evidence plus user approvals; one EAS build is owed and would also be the first hardware exposure
 for several deferred iOS checks.
+
+## Loop Position (61-04) — CLOSED
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [61-04 CLOSED 2026-08-11 — all 5 ACs met]
+```
+⚠ **PHASE 61 STILL NOT COMPLETE — no transition run.** 4 of 5 plans. 61-05 (D10) remains.
 
 ## Loop Position (61-03) — CLOSED
 ```
