@@ -12,6 +12,7 @@ import CoachChat from "@/components/portal/CoachChat";
 import PillarCards from "@/components/portal/PillarCards";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
 import { dropoutWarning } from "@/lib/dropoutWarning";
+import { displayName } from "@/lib/sessionName";
 
 // One chronological neighbour. Rendered as a disabled span at the ends rather than omitted, so
 // the header keeps the same shape on the first and last session of an athlete.
@@ -290,7 +291,7 @@ export default function ReportCardPage({ params }) {
           }}
           onKeyDown={(e) => e.key === "Enter" && e.target.blur()}
           autoFocus
-          placeholder="Session name…"
+          placeholder={displayName({ id: sessionId, created_at: data.created_at })}
           className="mt-3 w-full border-b border-accent bg-transparent pb-1 font-semibold outline-none"
         />
       ) : (
@@ -298,12 +299,16 @@ export default function ReportCardPage({ params }) {
           onClick={() => setEditingName(true)}
           className="mt-3 flex w-full items-center gap-2 text-left"
         >
+          {/* 61-05: an un-renamed session is NOT nameless — it carries its generated name, the
+              same one the sessions list and the Compare picker show. Rendering "Add session
+              name…" here while every other surface calls it "Lucid Gannet" would make one
+              session look like two things. Typing replaces the generated name outright. */}
           <span
             className={
-              sessionName ? "font-semibold text-ink" : "italic text-muted"
+              sessionName ? "font-semibold text-ink" : "font-semibold text-subtle"
             }
           >
-            {sessionName || "Add session name…"}
+            {sessionName || displayName({ id: sessionId, created_at: data.created_at })}
           </span>
           <span className="text-xs text-muted">✎</span>
         </button>

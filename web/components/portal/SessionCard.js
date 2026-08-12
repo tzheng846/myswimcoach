@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { DROPOUT_WARN_PCT } from "@/lib/dropoutWarning";
+import { displayName } from "@/lib/sessionName";
 
 export const STROKE_LABELS = {
   breaststroke: "Breaststroke",
@@ -22,16 +23,6 @@ const STROKE_ABBR = {
 };
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-// "8:24 PM". Lives in the TITLE, while the weekday/date lives in the meta line — the two are
-// deliberately split so they don't duplicate each other. Time is what separates recordings made
-// in the same session block, which is what a collection day actually produces.
-function formatTime(iso) {
-  return new Date(iso).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
 
 // Weekday inside a week ("Wed"), MM-DD-YY beyond it.
 // Safe to read the clock during render: cards only mount after the client-side fetch resolves,
@@ -110,13 +101,11 @@ export default function SessionCard({
   const dq = session.dq ?? {};
   const abbr = STROKE_ABBR[session.stroke_type] ?? session.stroke_type;
 
-  // A typed name always wins and is never decorated. Otherwise derive one — display only,
-  // sessions.name is never written, so a name entered later simply takes over.
-  const title =
-    session.name ||
-    `${STROKE_LABELS[session.stroke_type] ?? "Session"} · ${formatTime(
-      session.created_at
-    )}`;
+  // Every session has a name (61-05): a typed one if the coach entered it, otherwise its
+  // generated mnemonic. Same helper the Compare picker uses, so a session is called the same
+  // thing everywhere. Display only — sessions.name is never written, so a name entered later
+  // simply takes over.
+  const title = displayName(session);
 
   const issue = qualityIssue(dq);
   // "Annotated" and "recomputed" are different things: an annotation with fewer than two cycle

@@ -56,21 +56,49 @@ function timeOfDay(createdAt) {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+// Short stroke tags. STROKE_LABELS in SessionCard spells these out in full ("Breaststroke");
+// here they are the compact form a coach says out loud.
+const STROKE_TAGS = {
+  freestyle: "free",
+  backstroke: "back",
+  breaststroke: "breast",
+  butterfly: "fly",
+};
+
+export function strokeTag(strokeType) {
+  return STROKE_TAGS[strokeType] ?? null;
+}
+
 /**
- * Full dropdown label.
+ * THE session's name. Exactly ONE name, never a concatenation.
+ *
+ * A session is named the moment it exists: the mnemonic IS its name until a coach types
+ * something, and a typed name then replaces it outright. That is why this is not "name plus
+ * mnemonic" — a session has one name, the same way an athlete does.
+ *
+ * ⚠ STILL NEVER WRITTEN TO sessions.name. Deriving it keeps the column meaning "what the coach
+ * typed", so a generated name can never be mistaken for a deliberate one, an edit can never be
+ * clobbered, and every session already stored gets a name with no migration.
+ */
+export function displayName(session) {
+  if (!session) return "";
+  return session.name?.trim() || mnemonic(session.id);
+}
+
+/**
+ * Dropdown / picker label: the name, the stroke, and the time.
  *
  * ⚠ The TIME is the load-bearing part for same-day sessions — the date alone is exactly what
- * failed. The mnemonic makes a session sayable out loud; the time makes it findable.
- * A coach-typed name always wins the front position; the mnemonic still trails it so the two
- * naming schemes never compete for the same slot.
+ * failed. The name makes a session sayable; the time makes it findable.
  */
-export function sessionLabel(session) {
+export function sessionLabel(session, { withStroke = false } = {}) {
   if (!session) return "";
-  const words = mnemonic(session.id);
+  const parts = [displayName(session)];
+  const tag = withStroke ? strokeTag(session.stroke_type) : null;
+  if (tag) parts.push(tag);
   const t = timeOfDay(session.created_at);
-  const typed = session.name?.trim();
-  const head = typed ? `${typed} · ${words}` : words;
-  return t ? `${head} · ${t}` : head;
+  if (t) parts.push(t);
+  return parts.join(" · ");
 }
 
 /** Date line, kept separate so callers can show it without duplicating it into the label. */

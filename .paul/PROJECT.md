@@ -24,7 +24,7 @@ Swim academies and competitive programs. Coach or operator runs the device; swim
 
 ### Should Have
 - Stripe billing backend: Starter/Enterprise tiers wired (Phase 15). Internal pricing model (NOT shown publicly): **$300 one-time device (basic stroke metrics) + $20/swimmer/month optional cloud tier (video storage, long-term tracking, history, parent reports)** — Phase 29 decision (2026-06-14). As of Phase 40 (2026-06-22) public pricing is REMOVED from the website — the marketing site routes to a "Request a quote" contact form (Web3Forms → tzheng846@gmail.com) instead of publishing prices; checkout still not exposed on web.
-- ✓ Website: marketing site + coach web portal (dashboard, athletes, history, report card, compare, per-cycle analytics) — Phase 23. **Marketing site redesigned in Phase 40 (2026-06-22)** to the iOS app's light-purple "Template B" immersive-gradient theme on shadcn/ui + Tailwind v4 (plain JS); pricing replaced by a Request-a-quote ContactDialog; coach portal intentionally left on the original dark theme (future phase if a matching portal redesign is wanted).
+- ✓ Website: marketing site + coach web portal (dashboard, athletes, history, report card, compare, per-cycle analytics) — Phase 23. **Coach portal reworked in Phase 61 (2026-08-11):** report card rebuilt around four per-cycle charts (numeric table and Data Quality card retired), Time-to-Distance now states where its start came from, prev/next navigation between an athlete's sessions, a read-only `/app/sessions/[id]/video` route, and Compare rebuilt as two stacked traces on their own true sample rates with alignment, per-cycle overlays, paired value bars and optional video. Every session now carries a name — a coach-typed one or a generated mnemonic — derived, never written to `sessions.name`. **Marketing site redesigned in Phase 40 (2026-06-22)** to the iOS app's light-purple "Template B" immersive-gradient theme on shadcn/ui + Tailwind v4 (plain JS); pricing replaced by a Request-a-quote ContactDialog; coach portal intentionally left on the original dark theme (future phase if a matching portal redesign is wanted).
 - ✓ Marketing **build-log blog** — public `/blog` index + statically-generated `/blog/[slug]` post pages (Next 16 `generateStaticParams` + `notFound`), linked from Nav + Footer, on the light marketing theme. Seeded with 5 thematic founder-journal posts (lightly-polished candid voice; covers current state, past struggles, upcoming ideas). Posts live in a plain JS data file (`web/lib/blog.js`) — no CMS; adding a post = append one object — Phase 46 (2026-06-23).
 - ✓ Parent report cards: coach-curated progress reports (range + metric picks + note), tokenized public pages with animated improvement deltas + trend charts, mass dispatch via mailto/copy-link — Phase 24. Email provider (Resend) deliberately deferred.
 - Device pairing via QR code (serial number → team account claim)
@@ -101,6 +101,25 @@ known drift (Railway pre-Phase-24, committed SQL ≠ live DB, git coverage gaps)
 - First paying customer (swim academy) using the system
 
 ---
+*Updated: 2026-08-11 after Phase 61 — Web Portal Rework (5/5 plans). Delivered all five things the
+user asked for, and one they did not. **⭐ The one they did not: `ramp_up` was never ramp-up.** The
+steady/ramp_up cycle split — which every `mean_*`, `cv_*` and `stroke_count` was computed over —
+gated on `arm_peak < 0.50 × p75`, a VELOCITY test. Measured on two corpora, it overwhelmingly marked
+**the swimmer decelerating into the wall**, not accelerating from rest: 0 of 13 affected `raw/`
+sessions had a leading run, and on the live DB the median excluded-cycle position was **0.91**, with
+59% in the final 20% of the swim. Removing it (61-01, user's call, reaffirmed three times with the
+measurements on screen) made the charts and the numbers describe the same cycles — the user's report
+that *"the numbers don't reflect what's actually shown on graph"* was literally true — at the cost of
+a **fourth comparability break** and a re-anchoring of two `ratings.py` bands, since the 0–100 score
+floored out for a third of sessions once the wall-touch counted. ⭐ **58-04 CLOSED**, owed and
+"homeless" since 2026-08-07: the web computes its own end-anchored `video_origin_s`, so the phone's
+`VideoOverlayScreen` is no longer the only writer in the system — and a SECOND instance of the same
+`?? 0` defect was found in `VideoPane.attach()`. Also shipped: the last hardcoded sample rate on the
+web is gone, and per-session generated names so three sessions from one morning are no longer
+indistinguishable. Suite 273 → 274. ⚠ CARRIED OUT: **synced playback on Compare** (recorded as a
+TODO, deliberately unplanned — needs a `VideoPane` play/pause API it does not have); the video
+chart no longer auto-follows the playhead (CONTEXT D16 withdrawn at the user's request); generated
+names are derived, not persisted; and the mobile D5c comment fix remains uncommitted.*
 *Updated: 2026-08-11 after Phase 60 — Mobile App Rework (3/3 plans). The coach's poolside device no
 longer shows less than the laptop, and no longer shows one number wrong. **A live −10% time-axis
 error** on the mobile report card was found and fixed: Phase 52 corrected it on the web, but
@@ -111,9 +130,9 @@ charts (the "Per-cycle charts in iOS app" nice-to-have, previously substituted b
 scrubbable window bar replacing pinch-to-zoom, session video reachable from any saved session rather
 than only just after recording, and a user-dropped start marker for Time-to-Distance. Zero Python
 touched; suite held at 273 throughout. ⚠ Two things carried out: **58-04 is still owed and homeless**
-(the web annotate page still cannot compute a video origin of its own), and **Phase 52-02 gained
-motivation** — most NULL-rate sessions are ~90 Hz, not ~100, correcting a generalization in the
-Phase 59 record.*
+(the web annotate page still cannot compute a video origin of its own) — ✅ **CLOSED by Phase 61-03
+on 2026-08-11** — and **Phase 52-02 gained motivation** — most NULL-rate sessions are ~90 Hz, not
+~100, correcting a generalization in the Phase 59 record.*
 *Updated: 2026-08-05 after Phase 55 — athlete flow repaired end-to-end. Phase 51-02 fixed the phantom
 `athletes.coach_id` that made `POST /athletes` 500 (shipped `dedac17`); Phase 55-01 then fixed the two
 defects that failure had been hiding, both consequences of `RecordingConfig` being a tab screen that

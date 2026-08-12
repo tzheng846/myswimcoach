@@ -3,22 +3,28 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **61 (Web Portal Rework) — In progress (4 of 5 plans complete)**
-Plan: **61-04 ✅ COMPLETE + CLOSED 2026-08-11.** Next: 61-05 (D10, video on Compare) — the last
-plan in the phase, scoped but not written.
-Status: Ready for `/paul:plan 61` (61-05)
-Last activity: 2026-08-11 — 61-04 loop closed; build clean, suite 274; ⚠ **uncommitted**
+Phase: **61 (Web Portal Rework) — ✅ COMPLETE (5/5 plans) 2026-08-11 · TRANSITIONED**
+Plan: none open. **Phase 61 closed and transitioned.**
+Status: Ready to plan the next phase.
+Last activity: 2026-08-11 — Phase 61 unified + transitioned (PROJECT.md evolved, phase commit made)
 
-⚠ **PHASE RESCOPED 4 → 5 PLANS.** D8+D9+D10+D11 in one plan was 4 substantial tasks on a page that
-would roughly double in size, past the 2–3 task guidance. **61-04 = D8, D9, D11** (naming, stacked
-true-rate traces, per-cycle overlays); **61-05 = D10** (video column on Compare), which is purely
-additive and depends on 61-04's layout existing.
+Progress:
+- Milestone v0.5: [█████████░] in progress
+- Phase 61: [██████████] 100% (5 of 5 plans)
 
-### Git State (checked)
-`bc7ce18` feat(61-03): video route, close 58-04 — **pushed to origin/main**. Working tree clean at
-commit time. ⚠ That push also carried `d9cf0fa` and `c85d4fd`, which were committed but never
-pushed — 61-01/02 were live only because they had been deployed separately.
-⚠ `swimnetics-mobile` still holds 61-02's D5c comment fix uncommitted; needs an EAS build.
+⚠ **DEFERRED TODO, NOT PLANNED (user's explicit instruction): synced playback on Compare.** Play
+both videos and both trace playheads together off the D9 alignment offset. Blocked on a
+`VideoPane` play/pause API (it has only `seekRef`/`frameStepRef`), per-panel playheads in
+`CompareChart`, a master clock, and an explicit decision on **whether the align offset should also
+shift video B**. Do not plan it without that decision.
+
+**NEXT RECOMMENDED: Phase 53-01** (repeatability) — written 2026-08-03, `autonomous:true`, needs NO
+new data, and has been the standing recommendation since Phase 59 closed. Phase 61 added inputs to
+it: `ratings.py`'s bands were re-anchored from corpus percentiles rather than coaching judgement,
+and the fourth comparability break means stored sessions sit on a different cycle scale from new
+ones. Other open candidates: **52-02** (measure + backfill NULL sample rates — 6 of 67 live rows),
+**49** (security hardening, planned 2026-07-20, never applied), **56** (coach-chat athlete scoping —
+open defect, documented only).
 
 ### Git State (checked, not assumed)
 `c85d4fd` feat(61): remove cycle-phase split, re-anchor bands, rework report card
@@ -81,6 +87,12 @@ Mobile repo (`swimnetics-mobile`, separate + user-owned): `4a03f2c` (58-01), `09
 ⚠ **Phase 60 has NOT been verified on a device.** All three plans rest on device-independent
 evidence plus user approvals; one EAS build is owed and would also be the first hardware exposure
 for several deferred iOS checks.
+
+## Loop Position (61-05) — CLOSED
+```
+PLAN ──▶ APPLY ──▶ UNIFY
+  ✓        ✓        ✓     [61-05 CLOSED 2026-08-11 — 4 ACs, AC-1 amended. PHASE TRANSITIONED]
+```
 
 ## Loop Position (61-04) — CLOSED
 ```

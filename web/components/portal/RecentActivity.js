@@ -27,7 +27,7 @@ export default function RecentActivity({ items }) {
               href={`/app/sessions/${s.session_id}`}
               className="flex items-center justify-between px-4 py-3 transition-colors hover:bg-surface-2"
             >
-              <span className="font-medium text-ink">{s.name}</span>
+              <span className="font-medium text-ink">{displayName(s)}</span>
               <span className="text-xs capitalize text-muted">
                 {(s.stroke_type || "breaststroke")} · {relDate(s.date)}
               </span>
