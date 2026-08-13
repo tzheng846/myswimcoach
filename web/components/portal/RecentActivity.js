@@ -27,7 +27,15 @@ export default function RecentActivity({ items }) {
               href={`/app/sessions/${s.session_id}`}
               className="flex items-center justify-between px-4 py-3 transition-colors hover:bg-surface-2"
             >
-              <span className="font-medium text-ink">{displayName(s)}</span>
+              {/*
+                ⚠ NOT displayName(s). This feed is TEAM-WIDE and `s` is a /team/overview
+                `recent` row, not a session row: its `name` is the ATHLETE's name (joined from
+                the roster) and the id is `session_id`, not `id`. displayName would therefore
+                read the athlete name as if it were the session's, and its mnemonic fallback
+                would hash `undefined` into "Unnamed". The athlete name is also the only thing
+                on this row saying WHO swam.
+              */}
+              <span className="font-medium text-ink">{s.name}</span>
               <span className="text-xs capitalize text-muted">
                 {(s.stroke_type || "breaststroke")} · {relDate(s.date)}
               </span>
