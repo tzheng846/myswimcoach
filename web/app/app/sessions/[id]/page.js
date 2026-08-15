@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api";
 import MetricGrid, { SessionSummaryCard } from "@/components/portal/MetricGrid";
 import VelocityChart from "@/components/portal/VelocityChart";
+import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import TimeToX from "@/components/portal/TimeToX";
 import CycleCharts from "@/components/portal/CycleCharts";
 import CoachChat from "@/components/portal/CoachChat";
@@ -54,6 +55,10 @@ export default function ReportCardPage({ params }) {
   const [view, setView] = useState("simple");
   const [markerTimeS, setMarkerTimeS] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
+  // Video, for the inline VideoTracePanel above the velocity chart (Phase 64 item 3). Kept
+  // separate from `data` so an inline attach/replace updates it without a full refetch. origin_s
+  // passes through as NULL when unset — the panel must tell "never stored" from "stored 0" (58-04).
+  const [video, setVideo] = useState(null);
 
   // 61-03: these used to reset on every prev/next hop. The route remounts per session id, so
   // component state cannot survive it — the coach had to re-pick Advanced and yards on each
@@ -109,7 +114,7 @@ export default function ReportCardPage({ params }) {
       const { data: row, error: err } = await supabase
         .from("sessions")
         .select(
-          "metrics_json, velocity_profile, distance_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz"
+          "metrics_json, velocity_profile, distance_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz, video_path, video_origin_s"
         )
         .eq("id", sessionId)
         .single();
@@ -119,6 +124,11 @@ export default function ReportCardPage({ params }) {
         return;
       }
       setData(row);
+      setVideo(
+        row.video_path
+          ? { path: row.video_path, origin_s: row.video_origin_s ?? null }
+          : null
+      );
       if (resetEditable) {
         setSessionName(row.name ?? "");
         setIsStarred(row.is_starred ?? false);
@@ -378,18 +388,20 @@ export default function ReportCardPage({ params }) {
           </div>
         )}
 
-        {/* 61-03 D1 — a full-width control directly above the velocity card, not a small link in
-            the header. The original ask was for video NOT to be hidden; a header link was still
-            hidden, just somewhere else. Rendered unconditionally, not gated on video_path: D13
-            makes this route the place video gets ATTACHED, so hiding it when a session has no
-            video would make attaching impossible from here. */}
-        <Link
-          href={`/app/sessions/${sessionId}/video`}
-          className="flex items-center justify-center gap-2 rounded-xl border border-accent/50 bg-accent/10 px-4 py-3 text-sm font-semibold text-primary transition-colors hover:bg-accent/20"
-        >
-          <span aria-hidden="true">▶</span>
-          Video + Velocity
-        </Link>
+        {/* Phase 64 item 3 — the video panel ITSELF, right above the velocity chart, replacing the
+            link that redirected to /app/sessions/[id]/video. The trace is laid over the video
+            (permanent), the window is adjustable, and a button on the panel goes fullscreen. When
+            no video is attached the panel collapses to a slim "Attach video" card. The standalone
+            /video route still exists as a deep-link; it just isn't the only way in anymore. */}
+        <VideoTracePanel
+          sessionId={sessionId}
+          velocity={vel}
+          fsHz={fsHz}
+          cycles={metrics.cycles ?? []}
+          sessionDurationS={time.length ? time[time.length - 1] : null}
+          video={video}
+          onVideoChange={setVideo}
+        />
 
         {/* Velocity chart + unit toggle */}
         <div>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiUpload } from "@/lib/api";
+import PlaybackControls from "@/components/portal/PlaybackControls";
 
 // One frame, assumed. HTML5 video exposes no frame rate — requestVideoFrameCallback
 // would, and is deliberately not used: reading true frame timing is a bigger change than
@@ -22,6 +23,24 @@ export default function VideoPane({
   frameStepRef, // ref; pane assigns frameStepRef.current = (frames) => void
   onVideoChange, // ({path, origin_s}) => void
   sessionDurationS = null, // encoder-trace duration; drives the end-anchored origin (58-04)
+  // Phase 64 — panel mode, used ONLY by VideoTracePanel. ALL of these default to the pre-64
+  // behaviour, so the annotate page (which passes none of them) hits the unchanged windowed card.
+  panel = false, // render a fill-video + PlaybackControls instead of the card + native controls
+  overlay = null, // node (a <TraceOverlay/>) laid out above the controls in panel mode
+  isFullscreen = false, // is the enclosing stage currently fullscreen (label + auto-hide)
+  onToggleFullscreen, // () => void — enter/exit, owned by VideoTracePanel
+  windowSpanS = 2, // rolling-window preset, threaded through to PlaybackControls
+  onWindowSpanS, // (number|null) => void
+  lineColor, // trace colour, threaded through to PlaybackControls' swatches
+  onLineColor, // (hex) => void
+  // ⚠ NO `= null` defaults on the ref props below. `react-hooks/immutability` treats a
+  // destructured prop that has a default as a LOCAL VARIABLE, and then flags assigning to its
+  // `.current` as mutating a local after render — which is why seekRef/frameStepRef have no
+  // defaults either. `undefined` guards identically (`if (!ref) return`).
+  videoElRef, // ref; pane assigns the <video> DOM node so TraceOverlay can read currentTime
+  playToggleRef, // ref; pane assigns playToggleRef.current = () => void (Space key)
+  onOriginChange, // (effectiveOriginS | null) => void — the overlay needs the live origin
+  dimmed = false, // auto-hide: fade the CONTROL BAR only (the trace above it never dims, item 1)
 }) {
   const videoRef = useRef(null);
   const [url, setUrl] = useState(null);
@@ -36,6 +55,21 @@ export default function VideoPane({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [rate, setRate] = useState(1);
+  // Phase 64: the custom bar has no native control to read from, so play state and mute are
+  // tracked here. Both mirror the element rather than driving it — `muted` is never bound as a
+  // React prop, or the native controls in windowed mode would fight it.
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+
+  // Callback ref: keeps the internal `videoRef` (every existing consumer) AND hands the node to
+  // the stage so TraceOverlay can read `currentTime` at animation-frame rate without React.
+  const setVideoEl = useCallback(
+    (el) => {
+      videoRef.current = el;
+      if (videoElRef) videoElRef.current = el;
+    },
+    [videoElRef]
+  );
 
   // End-anchored convention (44-03): recording and filming stop together, so the video's FIRST
   // frame sits at (sessionDuration − videoDuration) on the session clock. Mirrors
@@ -121,6 +155,31 @@ export default function VideoPane({
     };
   }, [frameStepRef, step]);
 
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
+  }, []);
+
+  // Same idiom as seekRef/frameStepRef above: Space must work when the <video> has no focus,
+  // and in fullscreen there is no native control to fall back on. The bar calls `togglePlay`
+  // directly rather than going through this ref — the button must work whether or not the page
+  // wired one up.
+  useEffect(() => {
+    if (!playToggleRef) return;
+    playToggleRef.current = togglePlay;
+    return () => {
+      playToggleRef.current = null;
+    };
+  }, [playToggleRef, togglePlay]);
+
+  // The overlay draws at `originS + currentTime`, so it needs whichever origin is in effect —
+  // stored or computed. Reported, never owned: this pane remains the only writer (D9).
+  useEffect(() => {
+    onOriginChange?.(effectiveOriginS);
+  }, [effectiveOriginS, onOriginChange]);
+
   // Loading a new src resets playbackRate to 1, so setting it once on click would
   // silently revert. Applied here AND in onLoadedMetadata.
   useEffect(() => {
@@ -160,6 +219,15 @@ export default function VideoPane({
     setOriginS(next);
     const v = videoRef.current;
     if (v) onPlayhead?.(next + v.currentTime);
+  };
+
+  // Mute is driven imperatively, not bound as a React prop — binding it would let React fight
+  // the native control bar in windowed mode. `onVolumeChange` on the element keeps state honest.
+  const toggleMute = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+    setMuted(v.muted);
   };
 
   const saveSync = async () => {
@@ -230,6 +298,81 @@ export default function VideoPane({
     );
   }
 
+  // Video metadata handlers, shared by both render modes so the <video> element is byte-identical
+  // between them (playbackRate restore, end-anchor duration, playhead push, play/mute mirrors).
+  const onLoadedMetadata = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.playbackRate = rate;
+    // The end-anchored origin is unknowable until this fires (58-04).
+    if (Number.isFinite(v.duration)) setVideoDurationS(v.duration);
+  };
+  const onTimeUpdate = () => {
+    const v = videoRef.current;
+    if (v && effectiveOriginS != null) onPlayhead?.(effectiveOriginS + v.currentTime);
+  };
+
+  // PANEL MODE (Phase 64) — a fill-video stage placed inside VideoTracePanel's positioned
+  // container, used both inline on the report card and in fullscreen. object-contain never crops
+  // (D4). The bottom column stacks the PERMANENT trace (item 1) above the auto-hiding controls.
+  if (panel) {
+    return (
+      <>
+        {url ? (
+          <video
+            ref={setVideoEl}
+            src={url}
+            playsInline
+            className="absolute inset-0 h-full w-full bg-black object-contain"
+            onLoadedMetadata={onLoadedMetadata}
+            onTimeUpdate={onTimeUpdate}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onVolumeChange={() => setMuted(!!videoRef.current?.muted)}
+          />
+        ) : (
+          <div className="absolute inset-0 grid place-items-center text-xs text-muted">
+            Loading video…
+          </div>
+        )}
+        {/* Light scrim, NO blur (2026-08-14): the blurred glass covered too much of the swim, so
+            the video now shows through. Legibility comes from the high-saturation trace colour
+            (user-chosen) plus a modest bottom gradient that fades to transparent up the frame. */}
+        <div className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-4">
+          {overlay}
+          <PlaybackControls
+            isPlaying={isPlaying}
+            onTogglePlay={togglePlay}
+            onStep={step}
+            rates={RATES}
+            rate={rate}
+            onRate={setRate}
+            muted={muted}
+            onToggleMute={toggleMute}
+            originS={effectiveOriginS}
+            savedOrigin={savedOrigin}
+            onNudge={nudge}
+            onSave={saveSync}
+            busy={busy}
+            windowSpanS={windowSpanS}
+            onWindowSpanS={onWindowSpanS}
+            lineColor={lineColor}
+            onLineColor={onLineColor}
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={onToggleFullscreen}
+            dimmed={dimmed}
+          />
+        </div>
+        {msg && (
+          <p className="absolute left-4 top-4 z-40 rounded-md bg-black/70 px-2 py-1 text-xs text-ink">
+            {msg}
+          </p>
+        )}
+      </>
+    );
+  }
+
+  // WINDOWED CARD — the pre-64 layout, used by the annotate page. Unchanged in behaviour.
   return (
     <div className="rounded-xl border border-navy/50 bg-surface p-4">
       <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
@@ -237,7 +380,7 @@ export default function VideoPane({
       </p>
       {url ? (
         <video
-          ref={videoRef}
+          ref={setVideoEl}
           src={url}
           controls
           playsInline
@@ -245,19 +388,8 @@ export default function VideoPane({
           // neither collapses on a short laptop nor eats a tall monitor. object-contain
           // is what letterboxes portrait footage inside that box — without it, it crops.
           className="w-full max-h-[clamp(140px,26vh,420px)] rounded-lg bg-black object-contain"
-          onLoadedMetadata={() => {
-            const v = videoRef.current;
-            if (!v) return;
-            v.playbackRate = rate;
-            // The end-anchored origin is unknowable until this fires (58-04).
-            if (Number.isFinite(v.duration)) setVideoDurationS(v.duration);
-          }}
-          onTimeUpdate={() => {
-            const v = videoRef.current;
-            if (v && effectiveOriginS != null) {
-              onPlayhead?.(effectiveOriginS + v.currentTime);
-            }
-          }}
+          onLoadedMetadata={onLoadedMetadata}
+          onTimeUpdate={onTimeUpdate}
         />
       ) : (
         <p className="py-6 text-center text-xs text-muted">Loading video…</p>

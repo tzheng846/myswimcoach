@@ -3,18 +3,13 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import VideoPane from "@/components/portal/VideoPane";
+import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import VelocityChart from "@/components/portal/VelocityChart";
 
 // Read-only video + velocity view (61-03 D1). Deliberately NOT the annotate page: no marks, no
-// phase boundaries, no Save. The user's ask was to reach synced video "without it being hidden
-// behind annotations", so this page carries playback and nothing else.
-
-// ⚠ The 1s/2s/5s/All span presets were REMOVED at the 61-03 checkpoint (user: "redundant when
-// they can manually adjust the window"). This withdraws CONTEXT D16 and, with it, the chart's
-// auto-follow: the brush is now the only window control and does not track the playhead.
-// Removing them also deleted the controlled-window machinery from VelocityChart, which is back
-// to its pre-61-03 form plus an onClick handler.
+// phase boundaries, no Save. As of Phase 64 this route and the report card share the SAME
+// component — VideoTracePanel owns the inline+fullscreen stage, the permanent trace and the
+// adjustable window — so this page is now just the panel plus the full static chart below it.
 
 export default function SessionVideoPage({ params }) {
   const { id: sessionId } = use(params);
@@ -23,7 +18,6 @@ export default function SessionVideoPage({ params }) {
   const [athlete, setAthlete] = useState(null);
   const [error, setError] = useState(null);
   const [video, setVideo] = useState(null); // {path, origin_s} | null
-  const [playheadS, setPlayheadS] = useState(null);
   const seekRef = useRef(null);
 
   useEffect(() => {
@@ -32,7 +26,7 @@ export default function SessionVideoPage({ params }) {
       const { data, error: err } = await supabase
         .from("sessions")
         .select(
-          "velocity_profile, sample_rate_hz, name, created_at, athlete_id, video_path, video_origin_s"
+          "velocity_profile, sample_rate_hz, name, created_at, athlete_id, video_path, video_origin_s, metrics_json"
         )
         .eq("id", sessionId)
         .single();
@@ -42,8 +36,8 @@ export default function SessionVideoPage({ params }) {
         return;
       }
       setRow(data);
-      // ⚠ origin_s passes through as NULL when unset — VideoPane must be able to tell "never
-      // stored" from "stored as 0", which is the whole of 58-04.
+      // ⚠ origin_s passes through as NULL when unset — the panel must tell "never stored" from
+      // "stored as 0", which is the whole of 58-04.
       setVideo(
         data.video_path
           ? { path: data.video_path, origin_s: data.video_origin_s ?? null }
@@ -64,22 +58,21 @@ export default function SessionVideoPage({ params }) {
   }, [sessionId]);
 
   const vel = row?.velocity_profile ?? [];
-  // Same derivation as sessions/[id]/page.js:120. Never hardcode 100 — that is the defect
-  // Phase 52 fixed on the web and Phase 60-01 fixed on mobile.
+  // Same derivation as sessions/[id]/page.js:200. Never hardcode 100 — that is the defect Phase 52
+  // fixed on the web and Phase 60-01 fixed on mobile.
   const fsHz = row?.sample_rate_hz > 0 ? row.sample_rate_hz : 100;
   const time = useMemo(
     () => Array.from({ length: vel.length }, (_, i) => i / fsHz),
     [vel.length, fsHz]
   );
   const sessionDurationS = time.length ? time[time.length - 1] : null;
+  const cycles = useMemo(() => row?.metrics_json?.cycles ?? [], [row]);
 
-
-  // Clicking the trace seeks the video. VideoPane already exposes seekRef; the annotate page
-  // drives it the same way.
+  // Clicking the full static chart seeks the video, via the panel's passthrough seek ref.
   const onChartClick = useCallback((e) => {
     const t = e?.activeLabel;
     if (typeof t === "number") seekRef.current?.(t);
-  }, []);
+  }, [seekRef]);
 
   if (error) return <p className="mt-10 text-center text-danger">{error}</p>;
   if (!row) return <p className="text-muted">Loading…</p>;
@@ -116,13 +109,15 @@ export default function SessionVideoPage({ params }) {
       </h1>
 
       <div className="mt-4 space-y-3">
-        <VideoPane
+        <VideoTracePanel
           sessionId={sessionId}
-          video={video}
-          onPlayhead={setPlayheadS}
-          seekRef={seekRef}
-          onVideoChange={setVideo}
+          velocity={vel}
+          fsHz={fsHz}
+          cycles={cycles}
           sessionDurationS={sessionDurationS}
+          video={video}
+          onVideoChange={setVideo}
+          seekRef={seekRef}
         />
 
         <div>
@@ -132,8 +127,7 @@ export default function SessionVideoPage({ params }) {
           <VelocityChart
             time={time}
             velocity={vel}
-            markerTimeS={playheadS}
-            markerLabel="▶"
+            cycles={cycles}
             fsHz={fsHz}
             onClick={onChartClick}
           />

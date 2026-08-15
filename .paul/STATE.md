@@ -3,14 +3,247 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **61 (Web Portal Rework) — ✅ COMPLETE (5/5 plans) 2026-08-11 · TRANSITIONED**
-Plan: none open. **Phase 61 closed and transitioned.**
-Status: Ready to plan the next phase.
-Last activity: 2026-08-11 — Phase 61 unified + transitioned (PROJECT.md evolved, phase commit made)
+Phase: **64 (Fullscreen Video + Velocity Overlay) — Planning** · ⚠ **63 still open**
+Plan: **64-01 APPROVED + iteratively refined + COMMITTED/PUSHED to deploy**
+Status: 64-01 checkpoint approved via live iteration (user verified in browser, said "push to
+  deploy"); pushed to `main` → Vercel auto-deploys. UNIFY still owed.
+Last activity: 2026-08-14 — committed Phase 64 web feature, pushed to origin/main
+
+### 64-01 post-checkpoint refinements (2026-08-14, all user-driven, all verified in-browser)
+The plan shipped, then the user iterated on it live against real footage. Net changes beyond the
+plan:
+- **Restructured into a reusable `VideoTracePanel`** (new) — the inline+fullscreen container.
+  `FullscreenControls` was **renamed `PlaybackControls`** because item 3 put the bar inline too.
+  `VideoPane` gained a `panel` mode (fill-video + bar); its pre-64 windowed card is unchanged
+  (annotate page untouched). `VideoPane` renders the trace as an `overlay` prop so it keeps sole
+  ownership of the origin handlers — 58-04's single-writer invariant held.
+- **Item 3 — the panel is now INLINE on the report card**, right above `VelocityChart`, replacing
+  the redirect link (`page.js` gained `video_path,video_origin_s` in its select + a `video`
+  state). The `/video` route now reuses `VideoTracePanel` too. No-video → slim attach card.
+- **Adjustable rolling window** (1/2/4s/All), default 2s — reversed the plan's fixed-2s (D5).
+- **Legibility pass:** trace no longer pool-blue (invisible on water). **Colour picker** —
+  red default / high-sat green / yellow / blue, persisted to localStorage. Blur REMOVED (it
+  covered too much of the swim); strip made compact (`16vh`→`clamp(56,9vh,96)`).
+- **Stroke marks are downward triangles** at each cycle start, coloured a darker shade of the
+  trace (was white dashed lines). Rendered as an HTML layer over the svg — an in-svg polygon would
+  skew under `preserveAspectRatio="none"` — positioned per rAF frame like the playhead.
+- ⚠ **ALL of the above is confined to `TraceOverlay`** (the video overlay). `VelocityChart` and
+  `CompareChart` are untouched (explicit user scope: "only the overlay trace, not any other").
+- Verified each round in-browser via a throwaway `fs-probe` route (deleted): viewBox pan + end
+  clamps, click-to-seek exactness, colour swatches repainting the trace, triangle positions +
+  darkened colours. ⚠ Still NOT device-verified for *playback smoothness* — the Browser pane runs
+  hidden (`visibilityState:"hidden"`), so rAF/CSS-transitions were shim-driven; the user has been
+  watching real playback and approving.
+- Gates: `npm run build` exit 0 each round; lint 17→18 (one `set-state-in-effect`, the persisted-
+  colour read — same accepted idiom as the report card's view/unit prefs); Python suite untouched.
+
+⚠ **TWO LOOPS ARE OPEN AT ONCE.** Phase 63's 63-02 has its auto tasks applied but its
+checkpoint is unrun and the phase is not unified. Planning 64 on top of that is deliberate and
+low-risk — **63 is doc-only (`DATA-FLOW.md`, `CODEBASE-AUDIT.md`, `API-AUDIT.md`, `CLAUDE.md`)
+and 64 is `web/`-only, so `files_modified` cannot collide** — but 63 still owes its checkpoint
+and a `/paul:unify`. Do not let it fall off.
 
 Progress:
 - Milestone v0.5: [█████████░] in progress
-- Phase 61: [██████████] 100% (5 of 5 plans)
+- Phase 63: [█████████░] 2 of 2 plans applied, checkpoint + unify outstanding
+- Phase 64: [████████░░] 64-01 auto tasks done, checkpoint pending
+
+## Loop Position
+
+Current loop state:
+```
+Phase 64:  PLAN ──▶ APPLY ──▶ UNIFY
+             ✓        ✓        ○     [64-01 auto tasks done, checkpoint pending]
+
+Phase 63:  PLAN ──▶ APPLY ──▶ UNIFY
+             ✓        ✓        ○     [63-02 auto tasks done, checkpoint pending]
+```
+
+### 64-01 PLAN (2026-08-13)
+Web-only. 3 auto tasks + 1 `checkpoint:human-verify`, 8 ACs, `autonomous:false`, `depends_on []`.
+Two new components (`TraceOverlay.js`, `FullscreenControls.js`), two edited
+(`VideoPane.js`, the video route's `page.js`). Zero Python, zero schema, zero new deps —
+the 274-test suite is a guard, not a target.
+⭐ The design pivot: the fullscreen target is a **stage container** that already holds the
+`<video>`, because the native button promotes the `<video>` element alone into the top layer and
+strands the chart. The overlay is hand-rolled SVG panned by `viewBox` under one
+`requestAnimationFrame` loop — recharts would re-render ~2000 points per frame and `timeupdate`
+fires at ~4 Hz, which is the exact stutter being designed out.
+⚠ `VideoPane`'s `nudge`/`saveSync`/auto-post stay the single writer of `video_origin_s`
+(58-04's invariant); the fullscreen bar calls them and never talks to the API itself.
+
+### 64-01 REVISION (2026-08-14) — three checkpoint changes + component naming
+User asked, before verifying: (1) the trace should be **permanent**, not auto-hide; (2) the 2 s
+window should be **adjustable** (was my wrong call to hardcode); (3) surface the **video panel
+inline on the report card, right above the velocity chart**, not behind a redirect link. Plus:
+name every component.
+
+Gates after revision: **lint 17 = baseline, 0 warnings · build exit 0 (18 pages) · pytest 274 ·
+diff = 3 modified + 3 new, `FullscreenControls` deleted.**
+
+Component family (named): **`VideoTracePanel`** (new — the embeddable inline+fullscreen container;
+owns fullscreen state, window-span, control auto-hide; composes the rest) · **`VideoPane`** (kept —
+video + sync-origin engine; now has a `panel` mode alongside the unchanged windowed card the
+annotate page uses) · **`TraceOverlay`** (kept — permanent rolling strip) · **`PlaybackControls`**
+(renamed from `FullscreenControls`, because it now renders inline too) · **`VelocityChart`** (kept).
+
+⭐ **Item 3 became a refactor, not an add.** The `/video` route's bespoke 64-01 stage logic was
+EXTRACTED into `VideoTracePanel`, so the route and the report card now share ONE component —
+`web/app/app/sessions/[id]/video/page.js` shrank to panel + static chart. The report card select
+gained `video_path, video_origin_s`; the redirect `<Link>` at `page.js:386` is replaced by
+`<VideoTracePanel>`. No-video sessions collapse to VideoPane's slim attach card (no big empty box).
+
+⭐ **Architecture call I made (CONTEXT left it open):** the fullscreen container is the page/panel
+wrapper, but `PlaybackControls` stays INSIDE `VideoPane` and is handed the container-owned bits
+(window-span, fullscreen toggle) as props — lifting the playback handlers out would have meant
+duplicating the origin logic D9 forbids. `VideoTracePanel` passes `<TraceOverlay>` to `VideoPane`
+as an `overlay` prop so VideoPane lays out overlay-above-controls without owning the chart data.
+
+⚠ **`react-hooks/immutability` (again):** a destructured prop WITH a default is treated as a local,
+so ref-typed props still carry no defaults. And `seekRef.current` in a `useCallback` needs the ref
+in the dep array or it warns — fixed in both `VideoTracePanel` and the video route.
+
+Verified in-browser (rAF shimmed for the hidden pane, as before): window **1/2/4/All** all correct —
+2 s/4 s follow and centre, `All` pins the left edge at 0 with the playhead sweeping the whole 20 s;
+click-to-seek exact under every mode (All: click 25% → 5.00 = 0.25×20); full `VideoTracePanel`
+composition lays out with all 15 controls + the window buttons + fullscreen button, video degrading
+to "Loading… / Not signed in" without auth. Still unverifiable headless: real playback smoothness +
+real fullscreen entry (needs the pane displayed + a user gesture + login).
+
+### 64-01 APPLY result (2026-08-13) — checkpoint pending
+Gates: **`npm run build` exit 0 · lint 17 = BASELINE (measured on HEAD by stashing, zero new) ·
+`pytest tests/ -q` 274 · diff scoped to exactly the 4 planned files.**
+
+⭐ **ONE PLAN DEVIATION, forced and load-bearing.** 64-01 said VideoPane's windowed branch would
+"return exactly what it returns today", i.e. a separate `if (fullscreen)` return. **That would
+have remounted the `<video>`** — a different position in the element tree means React unmounts
+and recreates it on every fullscreen toggle, losing playback position and re-fetching the signed
+URL, which is precisely what D1 forbids. Shipped instead as ONE render tree where only
+`className`, `controls` and the trailing block are conditional. Windowed rendering is
+behaviourally identical; the JSX is not textually untouched.
+
+⚠ **Lint's `react-hooks/immutability` rule treats a destructured prop WITH A DEFAULT as a local
+variable**, so `videoElRef = null` was flagged for assigning `.current` while the pre-existing
+`seekRef`/`frameStepRef` (no defaults) were not. The new ref/callback props therefore carry no
+defaults — documented in the file so nobody "helpfully" adds them back.
+
+⭐ **VERIFIED IN A REAL BROWSER, not just built.** The portal is auth-gated so a real session was
+unreachable, and a temporary `web/app/fs-probe` route (since **deleted**) mounted `TraceOverlay`
+against a synthetic 20 s / 89.5 Hz trace with 13 cycles at 1.176 s spacing:
+- 1790-point path, 13 boundary lines + zero line + playhead, 16 `non-scaling-stroke` elements
+- window centres on the playhead (t=1.256 → x0=0.256) and **clamps at BOTH ends** — x0 pinned to
+  0 at the start and to 17.99 (= duration − 2) at the finish while the playhead ran on to 19.99,
+  correctly off-centre
+- readout tracked the data: 0.01 m/s in the pre-swim baseline → 0.96 m/s once stroking
+- click-to-seek exact: predicted 14.739 s, reported 14.74 s
+- boundaries inside a [4.01, 6.01] window landed at 4.75 and 5.93 — 1.18 s apart, matching the
+  synthetic 1.176 s period
+
+⚠ **TWO THINGS THE HEADLESS TAB COULD NOT SHOW, both environment artifacts, both proven so
+against a synthetic control div:** `requestAnimationFrame` fires **0 times per 800 ms** because
+`document.visibilityState === "hidden"` (the loop was exercised through a `setTimeout` shim), and
+CSS transitions never advance — `opacity-0` alone snaps to 0, but `opacity-0 transition-opacity
+duration-300` stays at 1 with the animation stuck at `currentTime: 0`. So **smoothness under real
+playback is the one claim resting on design rather than measurement**, and it is the first thing
+the checkpoint asks about.
+
+### 63-02 APPLY result (2026-08-13)
+`DATA-FLOW.md` now 580 lines, complete. **Suite 274 → 274, zero Python touched.** No
+placeholders remain; findings F-a…F-k present; 4 mermaid diagrams, fences balanced; both audit
+docs GREW by exactly their stamp (373→378, 345→350) — nothing deleted.
+
+**`API-AUDIT.md` un-ignored** (`.gitignore` `!API-AUDIT.md`) so its stamp is version-controlled —
+it had never been in git. ⚠ `GLOSSARY.md` and `STRATEGY.md` still are not (finding F-j).
+
+⚠ **Two findings added beyond the planned nine:** F-j (the gitignored docs above) and **F-k —
+`api.py:180-197` appends the kick warning UNCONDITIONALLY and the segmentation warning on every
+auto session, so `warnings.length > 0` is true for essentially every session and carries no
+signal.** F-k was found while writing §7.1 and was not anticipated by the plan.
+
+⚠ **§8 marks FOUR rationales "inferred — not recorded"** rather than inventing history: why reads
+bypass the API, why `stroke_type` is not patchable, why `upload_status` exists, why the raw CSV
+is retained. These are exactly where the user may know something the repo does not.
+
+⭐ **The single most actionable finding remains F-f** — the newest stored session still carries
+`cycles[].phase`, so **no session has been processed by post-61-01 code.** Either nothing has
+been recorded since 2026-08-11, or Railway never took the deploy. Resolve before trusting any
+new-vintage metric.
+
+### 63-01 APPLY result (2026-08-13)
+3/3 tasks, all verifications passed. **Suite 274 → 274, zero Python product code touched.**
+Route completeness **24/24**; probe grep-clean of every write call; no TODO markers; fences balanced.
+
+⚠ **DEVIATION — `.gitignore` edited, one line, not in `files_modified`.** `DATA-FLOW.md` did not
+appear in `git status`: `.gitignore:16` is a repo-wide `*.md` rule and only `CLAUDE.md` +
+`CODEBASE-AUDIT.md` were re-included. D4 chose repo markdown *so that it is committed*, so an
+untrackable file fails the decision. Added `!DATA-FLOW.md` at line 48. User informed at the
+checkpoint and approved.
+
+⚠⚠ **FOUND WHILE CHECKING THAT, AND IT LANDS ON 63-02: `API-AUDIT.md`, `GLOSSARY.md` and
+`STRATEGY.md` ARE ALL GITIGNORED** — never in version control, single-machine loss risk
+(CODEBASE-AUDIT §5.3 all over again). **63-02's job includes stale-stamping `API-AUDIT.md`, a
+file git has never seen.** Decide there whether to un-ignore it in the same edit. Not touched
+here.
+
+### Findings recorded for 63-02 §9 (documented, not fixed — D8)
+- **F-a** `fetch_sessions.py:30` `FS = 100.0` — false since Phase 52
+- **F-b** 5 of 62 sessions carry `video_path` with NULL `video_origin_s` (58-04 footprint, no backfill)
+- **F-c** `sessions.upload_status` is `'complete'` on 62/62 — never discriminated anything
+- **F-d** `reports` insert/update/delete, `athletes` edits and `teams` update all bypass the API
+- **F-e** `CODEBASE-AUDIT.md` §4 predates Phases 47, 51, 52, 57–61
+- **F-f** ⭐ **The newest stored session still carries `cycles[].phase`, which 61-01 stopped
+  emitting** — so no session has been processed by post-61-01 code. Either nothing recorded
+  since, or **Railway has not taken the 61-01 deploy.** Worth resolving before trusting any
+  new-vintage metric.
+- **F-g** `CLAUDE.md`'s "Session metric keys" names **19**; live rows carry **24**. The five
+  missing (`implausible_cycle_count`, `kick_metrics_reliable`, `outlier_cycle_count`,
+  `segmentation_reliable`, `total_cycles_raw`) all duplicate into `.data_quality`
+- **F-h** **6 of 24 endpoints have no product caller** — `/sessions/{id}/export`,
+  `/annotations/export`, and 4 of 5 billing routes. `fetch_annotations.py` reads Supabase
+  directly rather than calling the endpoint named after it
+- **F-i** `devices` is keyed on `chip_id` with **no `id` column** — the probe 400'd on a
+  hardcoded `select=id` during Task 1 and was fixed to `select=*`
+
+### Corrected during apply
+The two-doors rule stated at discussion time was too generous. Verified version, now in §6:
+**`sessions` writes go through the API; `reports`, `athletes` edits and `teams` do not.**
+Athlete *delete* exists on mobile only and bypasses the API entirely.
+
+**Phase 63 — Data Flow Map.** Discussed 2026-08-13 via `/paul:discuss` (2 rounds, 8 questions);
+CONTEXT.md written, 8 decisions D1–D8, zero open questions. **DOC-ONLY** — no product code, no
+schema, no deploy; findings recorded not fixed (D8). Trigger: the user asked to understand the
+project's data flow, citing `ramp_up` as something shipped without understanding — and Phase
+61-01 had already removed it after measuring it was never ramp-up.
+
+Split on a real seam: **63-01 = the reference half** (stores, field dictionary, 24 endpoints ×
+callers, two-doors, master diagram, dated snapshot) — mechanically verifiable. **63-02 = the
+explanatory half** (lifecycle drill-down diagrams, why-each-thing-exists, findings list) plus
+the stale-stamps in `CODEBASE-AUDIT.md` §4, `API-AUDIT.md`'s inventory, `CLAUDE.md`, and a
+pointer line in `swimnetics-mobile/CLAUDE.md` (D7).
+
+⚠ **PROBE IS READ-ONLY AGAINST PRODUCTION.** `tools/dataflow_probe.py` runs with the
+service-role key, which bypasses RLS. The plan forbids any `.insert/.update/.upsert/.delete`
+and forbids printing PII (athlete names, parent emails, dob, session names/notes).
+
+⚠ **SCOPE ADDITION BEYOND CONTEXT.md, flagged for the user to strike:** the committed probe
+tool was not in CONTEXT — it follows the Phase 61-01 precedent of `tools/rampup_impact.py`, so
+the dated snapshot is reproducible rather than a one-off measurement living in a scratchpad.
+
+### Live probe (read-only, 2026-08-12)
+62 sessions · 24 annotations · 5 reports · 3 athletes · 1 coach · 1 team · 2 devices.
+`raw_csv_path` 62/62 · `sample_rate_hz` **6 NULL** · `video_path` 29 but `video_origin_s` 24 →
+⚠ **5 sessions carry video with no origin — 58-04's data footprint, never backfilled** ·
+`metrics_json_auto` 24/62, exactly matching the annotation count · `name` 10/62 · `notes` 2/62 ·
+`upload_status` `'complete'` **62/62**, a column that has never discriminated anything.
+Strokes: free 31, breast 15, fly 15, **back 1**.
+
+### Carried out of Phase 63 (recorded, not scoped)
+⚠ **"Find the next `ramp_up`" is a separate future phase.** The user chose the descriptive map
+(D1). The investigative version — measurement runs to test whether other load-bearing concepts
+are mislabeled, as Phase 61's grilling took 4 runs to prove `ramp_up` was — needs its own scope.
+Do not fold it into 63.
+
+### Phase 61 (prior) — ✅ COMPLETE (5/5 plans) 2026-08-11 · TRANSITIONED
 
 ⚠ **TODO, NOT PLANNED (user's explicit instruction): PROGRESS REPORT REWORK — ROADMAP row 62.**
 Raised 2026-08-11 from a live parent report. (1) The trend tooltip is indistinguishable on same-day
