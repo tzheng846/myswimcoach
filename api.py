@@ -169,7 +169,7 @@ async def process_session(
         # actual_fs is the TRUE rate of the arrays below — decimation is by an integer
         # factor, so the requested 100.0 is never actually achieved (~89.5 Hz typical).
         # It is stored on the session row; every consumer must read it, not assume 100.
-        t_dec, dist_dec, vel, _accel, actual_fs = vae.run_pipeline(df, 100.0)
+        t_dec, dist_dec, vel, accel, actual_fs = vae.run_pipeline(df, 100.0)
 
         # ── Metrics ──────────────────────────────────────────────────────
         result = m.compute_session_metrics(
@@ -312,9 +312,10 @@ async def process_session(
                         "athlete_id":       athlete_id,
                         "coach_id":         coach_row_id,
                         "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {}), "data_quality": data_quality}),
-                        "velocity_profile": _clean(vel.tolist()),
-                        "distance_profile": _clean(dist_dec.tolist()),
-                        "sample_rate_hz":   float(actual_fs),
+                        "velocity_profile":     _clean(vel.tolist()),
+                        "distance_profile":     _clean(dist_dec.tolist()),
+                        "acceleration_profile": _clean(accel.tolist()),  # Phase 64-02
+                        "sample_rate_hz":       float(actual_fs),
                         "raw_csv_path":     storage_path,
                         "upload_status":    "complete",
                         "name":             name,

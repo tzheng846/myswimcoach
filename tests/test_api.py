@@ -1138,6 +1138,17 @@ class TestSampleRatePersisted:
         n = len(row["velocity_profile"])
         assert n / row["sample_rate_hz"] == pytest.approx(SYNTHETIC_DURATION_S, abs=0.5)
 
+    def test_insert_carries_acceleration_profile(self, api_client, monkeypatch,
+                                                 synthetic_csv_bytes):
+        """Phase 64-02: /process persists acceleration_profile, same length as velocity,
+        a plain list (numpy would break JSON serialization), NaNs cleaned to None."""
+        row = self._admin_and_post(api_client, monkeypatch, synthetic_csv_bytes)
+        assert "acceleration_profile" in row
+        accel = row["acceleration_profile"]
+        assert isinstance(accel, list)
+        assert len(accel) == len(row["velocity_profile"])
+        assert all(x is None or isinstance(x, float) for x in accel)
+
 
 # ── Schema contract ───────────────────────────────────────────────────────────
 # Promoted from tools/schema_contract.py (Phase 51-01) into the suite so the phantom-column

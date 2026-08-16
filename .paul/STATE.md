@@ -3,11 +3,47 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **64 (Fullscreen Video + Velocity Overlay) — Planning** · ⚠ **63 still open**
-Plan: **64-01 APPROVED + iteratively refined + COMMITTED/PUSHED to deploy**
-Status: 64-01 checkpoint approved via live iteration (user verified in browser, said "push to
-  deploy"); pushed to `main` → Vercel auto-deploys. UNIFY still owed.
-Last activity: 2026-08-14 — committed Phase 64 web feature, pushed to origin/main
+Phase: **65 (Underwater Phase Detection) — Planning** · ⚠ **63 + 64 both open (owe UNIFY)**
+Plan: **65-01 created (research/measurement), awaiting approval**
+Status: 65-01 PLAN ready for APPLY. 64-01 committed + pushed to `main` (Vercel auto-deploys), owes
+  UNIFY; 63-02 owes its checkpoint + UNIFY.
+Last activity: 2026-08-15 — 65-01 planned: measure underwater breakout misdetection (free/back/fly)
+
+### 64-02 + 64-03 PLANNED (2026-08-14) — Acceleration trace, awaiting approval
+Also uncommitted since the 0f63a15 push: **drag-to-scrub** on the overlay
+(`web/components/portal/TraceOverlay.js` + `VideoTracePanel.js`) — window-follow + edge-scroll
+(≤2s), pause-on-grab, default window = All. First cut was "very buggy" (drag got STUCK ACTIVE via
+svg-local pointerup + setPointerCapture missing off-strip/interrupted releases → rAF re-seeked
+forever, froze playback / killed Play); FIXED with window-level pointer listeners, no
+setPointerCapture, pointercancel teardown (mouse + iPad). Verified idle-seeks 0 after an off-strip
+release. **Awaiting the user's live feel-test before push.** Production still has click-to-seek only.
+
+**64-02** (backend) — ✅ **3 auto tasks APPLIED, human-action checkpoint PENDING** (2026-08-14).
+Store `sessions.acceleration_profile`. ⭐ Accel is a pure derivative of the already-stored velocity;
+`api.py:172` already computed it but dropped it as `_accel`.
+  - T1: `acceleration_from_velocity(vel,fs)` extracted; `run_pipeline` routes through it. **Bit-
+    identical** verified — production `time_s` starts at 0 (`load_data`:62), so the old `+t[0]` was
+    `+0` and the 0-based function equals the inline form exactly (array_equal test).
+  - T2: `patch_10_acceleration_profile.sql` (jsonb, nullable, no default) · `api.py` `_accel`→`accel`
+    + insert writes `acceleration_profile` · `live_schema.json` gains the column so
+    `TestSchemaContract` stays green · new `test_insert_carries_acceleration_profile`.
+  - T3: `tools/backfill_acceleration.py` — dry-run default, `--apply` writes, idempotent
+    (`accel NULL AND velocity NOT NULL`), derives via the shared function, refuses length
+    mismatches, prints no PII. Connects to prod; dry-run 400s only because the column isn't there
+    yet (patch_10 pending) — expected.
+  - **Suite 274→276 green. Files NOT committed yet:** vel_acc_extraction.py, api.py, patch_10,
+    live_schema.json, backfill_acceleration.py, test_metrics.py, test_api.py.
+  - ⚠ **CHECKPOINT ORDER:** apply patch_10 FIRST (column must exist) → push api.py (Railway
+    auto-deploys; an insert with an unknown column would 500 otherwise) → run backfill.
+
+**64-03** (web, `depends_on 64-02`) — acceleration on BOTH the overlay (stacked strip: own signed
+scale + zero line + own colour + own readout, sharing one window/scrub/playhead) AND the static
+chart (new `AccelerationChart` stacked under `VelocityChart`). Independent velocity/accel toggles
+(default velocity-only, persisted) + accel colour picker (cyan `#22d3ee`). Visibility/colour state
+lifts to the PAGE so both surfaces stay in sync. `VelocityChart.js` untouched.
+
+Decisions (7, AskUserQuestion ×2 rounds): backend+DB not in-browser derive; both surfaces; stacked
+not overlaid; independent toggles; backfill all existing; default velocity-only; accel own picker.
 
 ### 64-01 post-checkpoint refinements (2026-08-14, all user-driven, all verified in-browser)
 The plan shipped, then the user iterated on it live against real footage. Net changes beyond the
@@ -37,21 +73,26 @@ plan:
 - Gates: `npm run build` exit 0 each round; lint 17→18 (one `set-state-in-effect`, the persisted-
   colour read — same accepted idiom as the report card's view/unit prefs); Python suite untouched.
 
-⚠ **TWO LOOPS ARE OPEN AT ONCE.** Phase 63's 63-02 has its auto tasks applied but its
-checkpoint is unrun and the phase is not unified. Planning 64 on top of that is deliberate and
-low-risk — **63 is doc-only (`DATA-FLOW.md`, `CODEBASE-AUDIT.md`, `API-AUDIT.md`, `CLAUDE.md`)
-and 64 is `web/`-only, so `files_modified` cannot collide** — but 63 still owes its checkpoint
-and a `/paul:unify`. Do not let it fall off.
+⚠ **THREE LOOPS ARE OPEN AT ONCE (deliberate, non-colliding).** 63 (doc-only:
+`DATA-FLOW.md`/`CODEBASE-AUDIT.md`/`API-AUDIT.md`/`CLAUDE.md`) owes its checkpoint + `/paul:unify`;
+64 (`web/`-only) is committed + pushed but owes `/paul:unify`; 65-01 is measurement-only
+(`tools/underwater_probe.py` + a findings doc), so it collides with NOTHING. ⚠ 65's later web tail
+(65-03) touches `web/app/app/sessions/[id]/page.js`, which 64-01 already edited and pushed — so
+**65-03 must sequence AFTER 64 unifies.** Do not let 63 or 64 fall off.
 
 Progress:
 - Milestone v0.5: [█████████░] in progress
 - Phase 63: [█████████░] 2 of 2 plans applied, checkpoint + unify outstanding
-- Phase 64: [████████░░] 64-01 auto tasks done, checkpoint pending
+- Phase 64: [█████████░] 64-01 committed + pushed, unify outstanding
+- Phase 65: [█░░░░░░░░░] 65-01 created (3-plan phase: measure → fix → web), awaiting approval
 
 ## Loop Position
 
 Current loop state:
 ```
+Phase 65:  PLAN ──▶ APPLY ──▶ UNIFY
+             ✓        ○        ○     [65-01 created (research), awaiting approval]
+
 Phase 64:  PLAN ──▶ APPLY ──▶ UNIFY
              ✓        ✓        ○     [64-01 auto tasks done, checkpoint pending]
 

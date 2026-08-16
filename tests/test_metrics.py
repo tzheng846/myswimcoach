@@ -369,3 +369,32 @@ class TestCycleRegularityGate:
         assert got[1] <= inc[1] + 0.15, (
             f"{stroke}: alternation {got[1]:.3f} vs incumbent {inc[1]:.3f} — "
             "cycles are drifting through phases, which is the peakpick failure mode")
+
+
+# ── Acceleration extraction (Phase 64-02) ──────────────────────────────────────
+
+def test_acceleration_from_velocity_matches_inline():
+    """The extracted acceleration_from_velocity() reproduces run_pipeline's prior INLINE accel
+    exactly. Production always has t[0] == 0 (load_data zeroes time_s at vel_acc_extraction.py:62),
+    so the `+ t[0]` the old code applied to both grids was `+ 0` and the 0-based function is
+    bit-identical — not merely numerically close."""
+    import numpy as np
+    import vel_acc_extraction as vae
+
+    rng = np.random.default_rng(0)
+    fs = 89.5
+    n = int(fs * 20)
+    vel = np.maximum(
+        0.0, 1.2 + 0.5 * np.sin(np.arange(n) / 20.0) + 0.02 * rng.standard_normal(n)
+    )
+
+    # Inline form, exactly as run_pipeline computed it (with t[0] == 0):
+    vel_for_accel, t_for_accel, fs_for_accel = vae.decimate_signal(vel, fs, 5.0)
+    accel_coarse = np.gradient(vel_for_accel, 1.0 / fs_for_accel)
+    t_dec = np.arange(n) / fs
+    accel_inline = np.interp(t_dec, t_for_accel, accel_coarse)
+
+    accel_fn = vae.acceleration_from_velocity(vel, fs)
+
+    assert accel_fn.shape == (n,)
+    np.testing.assert_array_equal(accel_fn, accel_inline)

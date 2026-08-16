@@ -99,6 +99,23 @@ def decimate_signal(dist_native, native_fs, target_fs):
     return dist_dec, t_dec, actual_fs
 
 
+def acceleration_from_velocity(vel, fs):
+    """Acceleration (m/s^2) exactly as the pipeline derives it: decimate velocity to 5 Hz, take
+    np.gradient, interpolate back to velocity's own rate. A PURE function of (vel, fs) — the single
+    source of truth shared by run_pipeline (the /process write) and tools/backfill_acceleration.py
+    (the exact backfill of existing rows).
+
+    The `+ t[0]` time offset run_pipeline applies to both grids cancels inside np.interp (a common
+    shift of x and xp leaves the result unchanged), so this 0-based form is element-wise identical
+    to the previous inline computation.
+    """
+    vel = np.asarray(vel, dtype=float)
+    vel_for_accel, t_for_accel, fs_for_accel = decimate_signal(vel, fs, 5.0)
+    accel_coarse = np.gradient(vel_for_accel, 1.0 / fs_for_accel)
+    t_dec = np.arange(len(vel)) / fs
+    return np.interp(t_dec, t_for_accel, accel_coarse)
+
+
 def run_pipeline(df, target_fs_hz=100.0):
     """
     Core signal processing: loaded DataFrame → arrays at ~target_fs_hz.
@@ -132,10 +149,8 @@ def run_pipeline(df, target_fs_hz=100.0):
     vel = np.gradient(dist_dec, 1.0 / actual_fs)
     vel = np.maximum(vel, 0.0)   # swimmer always moves forward; negatives are filter/encoder artefacts
 
-    vel_for_accel, t_for_accel, fs_for_accel = decimate_signal(vel, actual_fs, 5.0)
-    t_for_accel = t_for_accel + t[0]
-    accel_coarse = np.gradient(vel_for_accel, 1.0 / fs_for_accel)
-    accel = np.interp(t_dec, t_for_accel, accel_coarse)
+    # Extracted so the backfill can reproduce it exactly from a stored velocity_profile.
+    accel = acceleration_from_velocity(vel, actual_fs)
 
     return t_dec, dist_dec, vel, accel, actual_fs
 
