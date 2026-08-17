@@ -169,7 +169,7 @@ async def process_session(
         # actual_fs is the TRUE rate of the arrays below — decimation is by an integer
         # factor, so the requested 100.0 is never actually achieved (~89.5 Hz typical).
         # It is stored on the session row; every consumer must read it, not assume 100.
-        t_dec, dist_dec, vel, accel, actual_fs = vae.run_pipeline(df, 100.0)
+        t_dec, dist_dec, vel, accel, actual_fs = vae.run_pipeline(df, 100.0, stroke_type)
 
         # ── Metrics ──────────────────────────────────────────────────────
         result = m.compute_session_metrics(

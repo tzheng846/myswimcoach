@@ -92,7 +92,7 @@ def main():
     filters = {"velocity_profile": "not.is.null", "order": "created_at.asc"}
     if not args.recompute:
         filters["acceleration_profile"] = "is.null"
-    rows = db.select("sessions", "id,sample_rate_hz", **filters)
+    rows = db.select("sessions", "id,sample_rate_hz,stroke_type", **filters)
     scope = "velocity present — RECOMPUTE (overwrite)" if args.recompute else "acceleration NULL, velocity present"
     print(f"{len(rows)} session(s) to backfill ({scope}).")
     if not rows:
@@ -111,7 +111,8 @@ def main():
                 skipped += 1
                 print(f"  {tag} — empty velocity, skipped")
                 continue
-            accel = vae.acceleration_from_velocity(vel, fs)
+            stroke = r.get("stroke_type")
+            accel = vae.acceleration_from_velocity(vel, fs, stroke)  # stroke picks the SG window
             if len(accel) != len(vel):
                 failed += 1
                 print(f"  {tag} — LENGTH MISMATCH {len(accel)} != {len(vel)}, refused")
@@ -125,7 +126,7 @@ def main():
                 verb = "written"
             else:
                 verb = "would write"
-            print(f"  {tag} — {verb}: n={len(cleaned)} fs={fs:.1f} accel[{lo:.2f}, {hi:.2f}]")
+            print(f"  {tag} — {verb}: n={len(cleaned)} fs={fs:.1f} {stroke or '?'} accel[{lo:.2f}, {hi:.2f}]")
         except Exception as e:  # noqa: BLE001 — one bad row must not abort the batch
             failed += 1
             print(f"  {tag} — ERROR {type(e).__name__}: {e}")

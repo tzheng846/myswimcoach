@@ -99,10 +99,24 @@ def decimate_signal(dist_native, native_fs, target_fs):
     return dist_dec, t_dec, actual_fs
 
 
-def acceleration_from_velocity(vel, fs):
+# Per-stroke Savitzky-Golay window (seconds), Phase 66. Free/back carry ~2x the arm frequency of
+# fly/breast (alternating vs simultaneous arms) plus a ~6 Hz flutter/dolphin kick, so their velocity
+# holds far more high-frequency energy that differentiation amplifies — they need a WIDER, smoother
+# window. Fly/breast are one clean low-frequency pulse per cycle and keep the sharp default; an
+# unknown/NULL stroke also gets the default. Values are visual-tuning knobs, not physics constants.
+_ACCEL_WINDOW_S = {
+    "freestyle": 0.50,
+    "backstroke": 0.50,
+    "butterfly": 0.25,
+    "breaststroke": 0.25,
+}
+_ACCEL_WINDOW_DEFAULT_S = 0.25
+
+
+def acceleration_from_velocity(vel, fs, stroke_type=None):
     """Acceleration (m/s^2): a Savitzky-Golay first derivative of velocity at the FULL sample rate.
-    A PURE function of (vel, fs) — the single source of truth shared by run_pipeline (the /process
-    write) and tools/backfill_acceleration.py (the exact re-backfill of existing rows).
+    A PURE function of (vel, fs, stroke_type) — the single source of truth shared by run_pipeline
+    (the /process write) and tools/backfill_acceleration.py (the exact re-backfill of existing rows).
 
     SG fits a local cubic over a short sliding window and returns its analytic derivative at every
     sample, so it smooths and differentiates in one pass without the noise blow-up of a plain finite
@@ -110,28 +124,33 @@ def acceleration_from_velocity(vel, fs):
     reconstruction, which carried only ~2.5 Hz of bandwidth drawn as straight segments ~0.2 s apart
     and read as choppy. Display-only: no metric consumes acceleration, and velocity is untouched.
 
-    Window ~0.25 s (odd, > polyorder). A clip too short for a valid window falls back to a plain
-    gradient so a 2 s recording — or any edge case — never raises.
+    The window is STROKE-DEPENDENT (_ACCEL_WINDOW_S): free/back get a wider, smoother window than
+    fly/breast because their velocity holds more high-frequency energy. A clip too short for a valid
+    window falls back to a plain gradient so a 2 s recording — or any edge case — never raises.
     """
     vel = np.asarray(vel, dtype=float)
     n = vel.size
     polyorder = 3
     if n <= polyorder + 1:  # < 5 samples: too short for any valid SG window
         return np.gradient(vel, 1.0 / fs) if n > 1 else np.zeros(n)
-    win = int(round(0.25 * fs)) | 1        # ~0.25 s, forced odd
+    window_s = _ACCEL_WINDOW_S.get(stroke_type, _ACCEL_WINDOW_DEFAULT_S)
+    win = int(round(window_s * fs)) | 1    # forced odd
     win = max(win, polyorder + 2)          # keep window_length > polyorder
     if win > n:
         win = n if n % 2 else n - 1        # largest odd window that fits
     return savgol_filter(vel, win, polyorder, deriv=1, delta=1.0 / fs, mode="interp")
 
 
-def run_pipeline(df, target_fs_hz=100.0):
+def run_pipeline(df, target_fs_hz=100.0, stroke_type=None):
     """
     Core signal processing: loaded DataFrame → arrays at ~target_fs_hz.
 
     No I/O, no plots, no excluded-segment masking (caller's responsibility).
     Any change to the signal processing pipeline belongs here so that both
     the CLI (process_file) and the API (api.py) stay in sync automatically.
+
+    `stroke_type` selects the acceleration smoothing window only (Phase 66); it does not affect
+    velocity or any metric. None → the default (sharp) window.
 
     Returns (t_dec, dist_dec, vel, accel, actual_fs).
     """
@@ -159,7 +178,7 @@ def run_pipeline(df, target_fs_hz=100.0):
     vel = np.maximum(vel, 0.0)   # swimmer always moves forward; negatives are filter/encoder artefacts
 
     # Extracted so the backfill can reproduce it exactly from a stored velocity_profile.
-    accel = acceleration_from_velocity(vel, actual_fs)
+    accel = acceleration_from_velocity(vel, actual_fs, stroke_type)
 
     return t_dec, dist_dec, vel, accel, actual_fs
 

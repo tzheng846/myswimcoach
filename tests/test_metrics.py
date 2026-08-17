@@ -410,3 +410,29 @@ def test_acceleration_from_velocity_savgol():
 
     # Peak amplitude — the "definition too low" the old 5 Hz path caused by crushing peaks ~30%.
     assert np.max(sg[core]) > 0.95 * float(np.max(true[core]))
+
+
+def test_acceleration_window_is_stroke_dependent():
+    """Phase 66: free/back use a WIDER Savitzky-Golay window than fly/breast (their alternating arms
+    + flutter kick put more high-frequency energy in velocity), so on the SAME noisy velocity the
+    freestyle acceleration is smoother — lower total variation — than the butterfly one. An unknown
+    stroke falls back to the sharp default (identical to butterfly here)."""
+    import numpy as np
+    import vel_acc_extraction as vae
+
+    rng = np.random.default_rng(1)
+    fs = 89.5
+    n = int(fs * 20)
+    t = np.arange(n) / fs
+    # stroke oscillation + a faster kick ripple + a little noise — the free-vs-fly contrast in miniature
+    vel = (1.2 + 0.5 * np.sin(2 * np.pi * 1.0 * t)
+           + 0.1 * np.sin(2 * np.pi * 6.0 * t) + 0.02 * rng.standard_normal(n))
+
+    free = vae.acceleration_from_velocity(vel, fs, "freestyle")
+    fly = vae.acceleration_from_velocity(vel, fs, "butterfly")
+    unknown = vae.acceleration_from_velocity(vel, fs, None)
+
+    tv = lambda x: float(np.abs(np.diff(x)).sum())
+    assert vae._ACCEL_WINDOW_S["freestyle"] > vae._ACCEL_WINDOW_S["butterfly"]
+    assert tv(free) < tv(fly)  # wider window -> smoother on the same signal
+    np.testing.assert_array_equal(unknown, fly)  # unknown == default window == butterfly's here
