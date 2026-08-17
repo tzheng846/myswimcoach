@@ -17,11 +17,12 @@
 const BTN =
   "rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink";
 
-// Rolling-window presets. `null` = show the whole swim (no follow).
+// Rolling-window presets. `null` = show the whole swim (no follow). 1 s was dropped as too narrow
+// to read a stroke (2026-08-16).
 const WINDOWS = [
-  { label: "1s", v: 1 },
   { label: "2s", v: 2 },
   { label: "4s", v: 4 },
+  { label: "8s", v: 8 },
   { label: "All", v: null },
 ];
 
@@ -32,6 +33,15 @@ export const TRACE_COLORS = [
   { label: "Green", v: "#00e676" },
   { label: "Yellow", v: "#ffea00" },
   { label: "Blue", v: "#2979ff" },
+];
+
+// Acceleration palette (Phase 64-03) — a distinct set from the velocity swatches so the two traces
+// never share a colour by accident. Cyan default.
+export const ACCEL_COLORS = [
+  { label: "Cyan", v: "#22d3ee" },
+  { label: "Orange", v: "#ff9f0a" },
+  { label: "Magenta", v: "#ff2d95" },
+  { label: "Lime", v: "#a3e635" },
 ];
 
 export default function PlaybackControls({
@@ -50,13 +60,27 @@ export default function PlaybackControls({
   busy,
   windowSpanS, // number | null (null = All)
   onWindowSpanS,
-  lineColor,
+  lineColor, // velocity trace colour
   onLineColor,
+  // Phase 64-03 — trace visibility + acceleration colour. Page-owned, so a toggle here also
+  // shows/hides the static chart below (AC-4). The accel swatch row only appears when accel is on.
+  showVelocity = true,
+  showAcceleration = false,
+  onToggleVelocity,
+  onToggleAcceleration,
+  accelColor,
+  onAccelColor,
   isFullscreen,
   onToggleFullscreen,
   dimmed = false,
 }) {
   const dirty = originS != null && originS !== savedOrigin;
+  const chip = (active) =>
+    `rounded-md border px-2 py-1 font-semibold ${
+      active
+        ? "border-accent bg-accent text-white"
+        : "border-surface-3 bg-surface-2 text-subtle hover:text-ink"
+    }`;
 
   return (
     <div
@@ -103,6 +127,41 @@ export default function PlaybackControls({
           >
             {isFullscreen ? "Exit fullscreen" : "⛶ Fullscreen"}
           </button>
+        )}
+      </div>
+
+      {/* Phase 64-03 — which traces to show (velocity default on, acceleration off). Toggling
+          here also shows/hides the matching static chart below the panel (page-level state). */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <span className="text-muted">Show</span>
+        <button onClick={() => onToggleVelocity?.(!showVelocity)} className={chip(showVelocity)}>
+          Velocity
+        </button>
+        <button
+          onClick={() => onToggleAcceleration?.(!showAcceleration)}
+          className={chip(showAcceleration)}
+        >
+          Acceleration
+        </button>
+
+        {showAcceleration && (
+          <>
+            <span className="ml-2 text-muted">Accel colour</span>
+            {ACCEL_COLORS.map((c) => (
+              <button
+                key={c.v}
+                onClick={() => onAccelColor?.(c.v)}
+                title={c.label}
+                aria-label={`Acceleration colour ${c.label}`}
+                style={{ backgroundColor: c.v }}
+                className={`h-5 w-5 rounded-full transition ${
+                  accelColor === c.v
+                    ? "ring-2 ring-white ring-offset-1 ring-offset-black"
+                    : "ring-1 ring-black/40 hover:ring-white/60"
+                }`}
+              />
+            ))}
+          </>
         )}
       </div>
 

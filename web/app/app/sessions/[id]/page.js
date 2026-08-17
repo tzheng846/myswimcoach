@@ -6,7 +6,9 @@ import { supabase } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api";
 import MetricGrid, { SessionSummaryCard } from "@/components/portal/MetricGrid";
 import VelocityChart from "@/components/portal/VelocityChart";
+import AccelerationChart from "@/components/portal/AccelerationChart";
 import VideoTracePanel from "@/components/portal/VideoTracePanel";
+import useTracePrefs from "@/lib/useTracePrefs";
 import TimeToX from "@/components/portal/TimeToX";
 import CycleCharts from "@/components/portal/CycleCharts";
 import CoachChat from "@/components/portal/CoachChat";
@@ -59,6 +61,10 @@ export default function ReportCardPage({ params }) {
   // separate from `data` so an inline attach/replace updates it without a full refetch. origin_s
   // passes through as NULL when unset — the panel must tell "never stored" from "stored 0" (58-04).
   const [video, setVideo] = useState(null);
+
+  // Velocity/acceleration trace display prefs (Phase 64-03), shared with the /video route and
+  // persisted. Owned here so the video overlay's toggles and the static charts below stay in sync.
+  const tracePrefs = useTracePrefs();
 
   // 61-03: these used to reset on every prev/next hop. The route remounts per session id, so
   // component state cannot survive it — the coach had to re-pick Advanced and yards on each
@@ -114,7 +120,7 @@ export default function ReportCardPage({ params }) {
       const { data: row, error: err } = await supabase
         .from("sessions")
         .select(
-          "metrics_json, velocity_profile, distance_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz, video_path, video_origin_s"
+          "metrics_json, velocity_profile, distance_profile, acceleration_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz, video_path, video_origin_s"
         )
         .eq("id", sessionId)
         .single();
@@ -205,6 +211,8 @@ export default function ReportCardPage({ params }) {
 
   const vel = data?.velocity_profile ?? [];
   const dist = data?.distance_profile ?? [];
+  // Phase 64-03: NULL for sessions predating the 64-02 backfill — the chart/overlay just don't draw.
+  const accel = data?.acceleration_profile ?? [];
   // Sessions store their true decimated rate (~89.5 Hz, not 100) since Phase 52;
   // older rows have none, and 100 is what they were always displayed at.
   const fsHz = data?.sample_rate_hz > 0 ? data.sample_rate_hz : 100;
@@ -247,6 +255,7 @@ export default function ReportCardPage({ params }) {
   const isAnalyticsReady = true;
   const unitFactor = unit === "imperial" ? 1.09361 : 1;
   const velUnit = unit === "imperial" ? "yd/s" : "m/s";
+  const accelUnit = unit === "imperial" ? "yd/s²" : "m/s²";
   const date = new Date(data.created_at).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -396,18 +405,29 @@ export default function ReportCardPage({ params }) {
         <VideoTracePanel
           sessionId={sessionId}
           velocity={vel}
+          acceleration={accel}
           fsHz={fsHz}
           cycles={metrics.cycles ?? []}
           sessionDurationS={time.length ? time[time.length - 1] : null}
           video={video}
           onVideoChange={setVideo}
+          showVelocity={tracePrefs.showVelocity}
+          showAcceleration={tracePrefs.showAcceleration}
+          velColor={tracePrefs.velColor}
+          accelColor={tracePrefs.accelColor}
+          onToggleVelocity={tracePrefs.setShowVelocity}
+          onToggleAcceleration={tracePrefs.setShowAcceleration}
+          onVelColor={tracePrefs.setVelColor}
+          onAccelColor={tracePrefs.setAccelColor}
         />
 
-        {/* Velocity chart + unit toggle */}
+        {/* Velocity + acceleration charts (Phase 64-03) + unit toggle. Which traces show is
+            controlled from the video panel's toggles above (page-level, so the two surfaces stay
+            in sync). Acceleration stacks directly beneath velocity on the same time basis. */}
         <div>
           <div className="mb-2 flex items-center justify-between">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-muted">
-              Velocity
+              {tracePrefs.showVelocity ? "Velocity" : "Acceleration"}
             </p>
             <div className="flex gap-1.5">
               {["metric", "imperial"].map((u) => (
@@ -425,16 +445,33 @@ export default function ReportCardPage({ params }) {
               ))}
             </div>
           </div>
-          <VelocityChart
-            time={time}
-            velocity={vel}
-            unitFactor={unitFactor}
-            unitLabel={velUnit}
-            markerTimeS={markerTimeS}
-            markerLabel={markerLabel}
-            cycles={metrics.cycles}
-            fsHz={fsHz}
-          />
+          {tracePrefs.showVelocity && (
+            <VelocityChart
+              time={time}
+              velocity={vel}
+              unitFactor={unitFactor}
+              unitLabel={velUnit}
+              markerTimeS={markerTimeS}
+              markerLabel={markerLabel}
+              cycles={metrics.cycles}
+              fsHz={fsHz}
+            />
+          )}
+          {tracePrefs.showAcceleration && (
+            <div className={tracePrefs.showVelocity ? "mt-3" : ""}>
+              <AccelerationChart
+                time={time}
+                acceleration={accel}
+                unitFactor={unitFactor}
+                unitLabel={accelUnit}
+                markerTimeS={markerTimeS}
+                markerLabel={markerLabel}
+                cycles={metrics.cycles}
+                fsHz={fsHz}
+                color={tracePrefs.accelColor}
+              />
+            </div>
+          )}
         </div>
 
         {isAnalyticsReady && (

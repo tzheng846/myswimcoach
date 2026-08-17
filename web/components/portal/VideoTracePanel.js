@@ -21,6 +21,7 @@ const IDLE_MS = 2000;
 export default function VideoTracePanel({
   sessionId,
   velocity = [],
+  acceleration = [], // Phase 64-03 — signed acceleration series (sessions.acceleration_profile)
   fsHz = 100,
   cycles = [],
   sessionDurationS = null,
@@ -28,6 +29,16 @@ export default function VideoTracePanel({
   onVideoChange, // ({path, origin_s}) => void
   onPlayhead, // optional (sessionTimeS | null) => void — moves the page's VelocityChart marker
   seekRef: externalSeekRef, // optional ref; if given, the page can also seek (e.g. a static chart)
+  // Phase 64-03 — trace visibility + colours are OWNED BY THE PAGE (so the overlay and the static
+  // charts stay in sync) and passed down; only the rolling-window span stays local to the panel.
+  showVelocity = true,
+  showAcceleration = false,
+  velColor = "#ff453a",
+  accelColor = "#22d3ee",
+  onToggleVelocity, // (bool) => void
+  onToggleAcceleration, // (bool) => void
+  onVelColor, // (hex) => void
+  onAccelColor, // (hex) => void
 }) {
   const stageRef = useRef(null);
   const videoElRef = useRef(null);
@@ -39,31 +50,13 @@ export default function VideoTracePanel({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [canFullscreen, setCanFullscreen] = useState(false);
   const [idle, setIdle] = useState(false);
-  const [windowSpanS, setWindowSpanS] = useState(2); // null = whole swim
-  const [lineColor, setLineColor] = useState("#ff453a"); // trace colour, persisted below
+  const [windowSpanS, setWindowSpanS] = useState(null); // null = whole swim (All), the default
   const [overlayOriginS, setOverlayOriginS] = useState(null);
 
   const hasVideo = !!video?.path;
 
-  // Trace colour is a standing preference, not a property of the session — persist it like the
-  // report card's view/unit. Read in an effect (not a lazy initializer) so SSR hydration matches.
-  useEffect(() => {
-    try {
-      const c = window.localStorage.getItem("swimnetics.traceColor");
-      if (c) setLineColor(c);
-    } catch {
-      // storage disabled — the default is fine
-    }
-  }, []);
-
-  const chooseLineColor = useCallback((c) => {
-    setLineColor(c);
-    try {
-      window.localStorage.setItem("swimnetics.traceColor", c);
-    } catch {
-      // non-fatal
-    }
-  }, []);
+  // Trace colour + visibility are now page-owned (persisted via useTracePrefs) so both the overlay
+  // and the static charts move together — this panel no longer holds that state.
 
   // Track fullscreen from the EVENT, not the click handler — Esc and browser chrome change it too.
   useEffect(() => {
@@ -169,19 +162,29 @@ export default function VideoTracePanel({
         onToggleFullscreen={canFullscreen ? toggleFullscreen : undefined}
         windowSpanS={windowSpanS}
         onWindowSpanS={setWindowSpanS}
-        lineColor={lineColor}
-        onLineColor={chooseLineColor}
+        lineColor={velColor}
+        onLineColor={onVelColor}
+        showVelocity={showVelocity}
+        showAcceleration={showAcceleration}
+        onToggleVelocity={onToggleVelocity}
+        onToggleAcceleration={onToggleAcceleration}
+        accelColor={accelColor}
+        onAccelColor={onAccelColor}
         dimmed={isFullscreen && idle}
         overlay={
           <TraceOverlay
             velocity={velocity}
+            acceleration={acceleration}
             fsHz={fsHz}
             cycles={cycles}
             videoElRef={videoElRef}
             originS={overlayOriginS}
             onSeek={onOverlaySeek}
             windowS={windowSpanS}
-            lineColor={lineColor}
+            lineColor={velColor}
+            accelColor={accelColor}
+            showVelocity={showVelocity}
+            showAcceleration={showAcceleration}
           />
         }
       />

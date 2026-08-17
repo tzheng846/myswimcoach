@@ -31,8 +31,17 @@ export default function VideoPane({
   onToggleFullscreen, // () => void — enter/exit, owned by VideoTracePanel
   windowSpanS = 2, // rolling-window preset, threaded through to PlaybackControls
   onWindowSpanS, // (number|null) => void
-  lineColor, // trace colour, threaded through to PlaybackControls' swatches
+  lineColor, // velocity trace colour, threaded through to PlaybackControls' swatches
   onLineColor, // (hex) => void
+  // Phase 64-03 — trace visibility + acceleration colour, page-owned. VideoPane only forwards
+  // them to PlaybackControls (the overlay itself is passed in as `overlay`), so this is a pure
+  // pass-through; the annotate page passes none of them and hits the unchanged windowed card.
+  showVelocity = true,
+  showAcceleration = false,
+  onToggleVelocity, // (bool) => void
+  onToggleAcceleration, // (bool) => void
+  accelColor, // acceleration trace colour
+  onAccelColor, // (hex) => void
   // ⚠ NO `= null` defaults on the ref props below. `react-hooks/immutability` treats a
   // destructured prop that has a default as a LOCAL VARIABLE, and then flags assigning to its
   // `.current` as mutating a local after render — which is why seekRef/frameStepRef have no
@@ -358,6 +367,12 @@ export default function VideoPane({
             onWindowSpanS={onWindowSpanS}
             lineColor={lineColor}
             onLineColor={onLineColor}
+            showVelocity={showVelocity}
+            showAcceleration={showAcceleration}
+            onToggleVelocity={onToggleVelocity}
+            onToggleAcceleration={onToggleAcceleration}
+            accelColor={accelColor}
+            onAccelColor={onAccelColor}
             isFullscreen={isFullscreen}
             onToggleFullscreen={onToggleFullscreen}
             dimmed={dimmed}

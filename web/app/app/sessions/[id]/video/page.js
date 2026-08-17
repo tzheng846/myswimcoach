@@ -5,6 +5,8 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import VelocityChart from "@/components/portal/VelocityChart";
+import AccelerationChart from "@/components/portal/AccelerationChart";
+import useTracePrefs from "@/lib/useTracePrefs";
 
 // Read-only video + velocity view (61-03 D1). Deliberately NOT the annotate page: no marks, no
 // phase boundaries, no Save. As of Phase 64 this route and the report card share the SAME
@@ -19,6 +21,8 @@ export default function SessionVideoPage({ params }) {
   const [error, setError] = useState(null);
   const [video, setVideo] = useState(null); // {path, origin_s} | null
   const seekRef = useRef(null);
+  // Trace display prefs (Phase 64-03), shared/persisted with the report card.
+  const tracePrefs = useTracePrefs();
 
   useEffect(() => {
     let alive = true;
@@ -26,7 +30,7 @@ export default function SessionVideoPage({ params }) {
       const { data, error: err } = await supabase
         .from("sessions")
         .select(
-          "velocity_profile, sample_rate_hz, name, created_at, athlete_id, video_path, video_origin_s, metrics_json"
+          "velocity_profile, acceleration_profile, sample_rate_hz, name, created_at, athlete_id, video_path, video_origin_s, metrics_json"
         )
         .eq("id", sessionId)
         .single();
@@ -58,6 +62,8 @@ export default function SessionVideoPage({ params }) {
   }, [sessionId]);
 
   const vel = row?.velocity_profile ?? [];
+  // Phase 64-03: NULL before the 64-02 backfill — the chart/overlay simply don't draw.
+  const accel = row?.acceleration_profile ?? [];
   // Same derivation as sessions/[id]/page.js:200. Never hardcode 100 — that is the defect Phase 52
   // fixed on the web and Phase 60-01 fixed on mobile.
   const fsHz = row?.sample_rate_hz > 0 ? row.sample_rate_hz : 100;
@@ -112,27 +118,50 @@ export default function SessionVideoPage({ params }) {
         <VideoTracePanel
           sessionId={sessionId}
           velocity={vel}
+          acceleration={accel}
           fsHz={fsHz}
           cycles={cycles}
           sessionDurationS={sessionDurationS}
           video={video}
           onVideoChange={setVideo}
           seekRef={seekRef}
+          showVelocity={tracePrefs.showVelocity}
+          showAcceleration={tracePrefs.showAcceleration}
+          velColor={tracePrefs.velColor}
+          accelColor={tracePrefs.accelColor}
+          onToggleVelocity={tracePrefs.setShowVelocity}
+          onToggleAcceleration={tracePrefs.setShowAcceleration}
+          onVelColor={tracePrefs.setVelColor}
+          onAccelColor={tracePrefs.setAccelColor}
         />
 
         <div>
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
-            Velocity
+            {tracePrefs.showVelocity ? "Velocity" : "Acceleration"}
           </p>
-          <VelocityChart
-            time={time}
-            velocity={vel}
-            cycles={cycles}
-            fsHz={fsHz}
-            onClick={onChartClick}
-          />
+          {tracePrefs.showVelocity && (
+            <VelocityChart
+              time={time}
+              velocity={vel}
+              cycles={cycles}
+              fsHz={fsHz}
+              onClick={onChartClick}
+            />
+          )}
+          {tracePrefs.showAcceleration && (
+            <div className={tracePrefs.showVelocity ? "mt-3" : ""}>
+              <AccelerationChart
+                time={time}
+                acceleration={accel}
+                cycles={cycles}
+                fsHz={fsHz}
+                color={tracePrefs.accelColor}
+                onClick={onChartClick}
+              />
+            </div>
+          )}
           <p className="mt-1.5 px-1 text-[11px] text-muted">
-            Click the trace to seek the video. Drag the bar below it to narrow the view.
+            Click a trace to seek the video. Drag the bar below the velocity chart to narrow the view.
           </p>
         </div>
       </div>
