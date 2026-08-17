@@ -3,15 +3,17 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **66 (Acceleration Derivative) — APPLYING** · ⚠ **Phase 64 CLOSED; 63 + 65-01 still open**
-Plan: **66-01 (Savitzky–Golay acceleration) — user approved ("apply 66-01"), applying now.** Phase 64
-  ✅ COMPLETE + UNIFIED 2026-08-16 (3/3 plans; `fe3b53b` pushed → Vercel).
-Status: Phase 64 closed — all 3 plans summarized (64-01/02 retroactive, 64-03 fresh) + transition done
-  (ROADMAP ✅, PROJECT footer, phase commit). Now applying 66-01: swap `acceleration_from_velocity` to
-  a Savitzky–Golay first derivative (display-only — metrics.py consumes velocity, not accel), rewrite
-  the algorithm-pinning test (`test_metrics.py:376`), add `--recompute` to `backfill_acceleration.py`,
-  then deploy + re-backfill 70 rows (checkpoint). 63-02 owes checkpoint+unify; 65-01 paused.
-Last activity: 2026-08-16 — unified Phase 64 (3 summaries + transition); starting 66-01 apply
+Phase: **66 (Acceleration Derivative) ✅ COMPLETE + UNIFIED** · ⚠ **63 + 65 still open (no active plan)**
+Plan: **Phase 66 done (1/1). No active plan.** Next candidates: 63 (doc, owes checkpoint+unify) or 65
+  (underwater segmentation — 65-01 planned, not applied).
+Status: Phase 66 closed — SG acceleration (`120908f`) + stroke-dependent windows (`ee1852c`) shipped →
+  Railway, 70 rows re-backfilled, user approved ("looks amazing"). Suite **277**. Display-only; zero
+  metric moved. ⚠ Plan's "lower total-variation" metric was wrong (old 5 Hz path is over-smoothed →
+  low TV yet faceted); the real win is accuracy (0.3% RMS vs 118%) + peak preservation (old crushed
+  real peaks ~60%). Open loops: **63-02** owes checkpoint+unify (doc-only, non-colliding); **65** is
+  the incomplete SEGMENTATION phase — 65-01 (measurement) created but NOT applied, 65-02 (fix) +
+  65-03 (web) unwritten; its web tail no longer blocked (64 unified).
+Last activity: 2026-08-16 — closed Phase 66 (SG accel + per-stroke windows); discussed accel-in-segmentation + segmentation state
 
 ### 66-01 PLAN (2026-08-16) — Savitzky–Golay acceleration derivative
 Backend, display-only. TRIGGER: the 64-03 accel trace is "extremely choppy" — the DATA is, not the
@@ -134,7 +136,7 @@ Progress:
 Current loop state:
 ```
 Phase 66:  PLAN ──▶ APPLY ──▶ UNIFY
-             ✓        ○        ○     [66-01 created (SG acceleration), awaiting approval]
+             ✓        ✓        ✓     [✅ PHASE COMPLETE 2026-08-16 — SG accel + per-stroke windows; 120908f + ee1852c → Railway]
 
 Phase 65:  PLAN ──▶ APPLY ──▶ UNIFY
              ✓        ○        ○     [65-01 created (research), awaiting approval]

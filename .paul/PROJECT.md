@@ -101,6 +101,13 @@ known drift (Railway pre-Phase-24, committed SQL ≠ live DB, git coverage gaps)
 - First paying customer (swim academy) using the system
 
 ---
+*Updated: 2026-08-16 after Phase 66 — Acceleration Derivative (1/1 plan). Replaced the ~5 Hz
+decimate→gradient→linear-interp acceleration with a full-rate Savitzky–Golay derivative, then made
+its smoothing window stroke-dependent (free/back 0.50 s, fly/breast 0.25 s) after the user observed
+alternating-arm strokes read noisier than fly. Display-only — `metrics.py` never consumes
+acceleration; velocity and every metric are untouched. Deployed to Railway; 70 rows re-backfilled.
+⚠ The windows are hand-tuned on one swimmer's data; the principled version sets each from a measured
+velocity spectrum once a broader corpus exists.*
 *Updated: 2026-08-16 after Phase 64 — Fullscreen Video + Velocity Overlay (3/3 plans, web). A
 fullscreen video stage with a hand-rolled SVG velocity trace (rAF, zero React state) + drag-to-scrub
 (64-01, `0f63a15`+`fe3b53b`); `sessions.acceleration_profile` stored as an EXACT derivative of the
