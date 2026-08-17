@@ -50,6 +50,14 @@
     "updated_at": "timestamp with time zone",
     "updated_by": "uuid"
   },
+  "session_videos": {
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "label": "text",
+    "origin_s": "double precision",
+    "session_id": "uuid",
+    "storage_path": "text"
+  },
   "sessions": {
     "acceleration_profile": "jsonb",
     "athlete_id": "uuid",

@@ -6,6 +6,7 @@ import math
 import os
 import tempfile
 import time
+import uuid
 from typing import Optional
 
 import numpy as np
@@ -1079,6 +1080,222 @@ async def session_video_url(
     if not url:
         raise HTTPException(status_code=500, detail="Could not create signed URL")
     return {"url": url, "origin_s": row.get("video_origin_s")}
+
+
+# ── Multi-camera external videos (Phase 69) ───────────────────────────────────
+# The phone/primary video stays in sessions.video_path/video_origin_s (legacy /video +
+# /video-url above, unchanged). These endpoints manage the <=3 EXTERNAL videos in the
+# session_videos table (patch_12). Access is service-role through the API; RLS denies anon.
+MAX_EXTERNAL_VIDEOS = 3
+
+
+def _signed_video_url(sb_admin, storage_path: str) -> Optional[str]:
+    """3600 s signed URL for an object in the private `videos` bucket, or None on failure."""
+    try:
+        signed = sb_admin.storage.from_("videos").create_signed_url(storage_path, 3600)
+    except Exception:
+        return None
+    return (signed or {}).get("signedURL") or (signed or {}).get("signedUrl")
+
+
+@app.get("/sessions/{session_id}/videos")
+async def list_session_videos(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Unified camera list for the multi-cam player: the phone/primary video (from the legacy
+    sessions columns) plus every external (session_videos), each with a signed URL. Phase 69."""
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    _, row = _owned_session(
+        sb_admin, request.state.user_id, session_id, "video_path, video_origin_s"
+    )
+
+    videos = []
+    primary_path = row.get("video_path")
+    if primary_path:
+        videos.append({
+            "id": "primary",
+            "role": "phone",
+            "label": "Phone",
+            "url": _signed_video_url(sb_admin, primary_path),
+            "origin_s": row.get("video_origin_s"),
+        })
+
+    try:
+        ext = (
+            sb_admin.table("session_videos")
+            .select("id, storage_path, origin_s, label, created_at")
+            .eq("session_id", session_id)
+            .order("created_at")
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    for r in ext.data or []:
+        videos.append({
+            "id": r["id"],
+            "role": "external",
+            "label": r.get("label"),
+            "url": _signed_video_url(sb_admin, r["storage_path"]),
+            "origin_s": r.get("origin_s"),
+        })
+
+    return {"videos": videos}
+
+
+@app.post("/sessions/{session_id}/videos")
+async def add_session_video(
+    session_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    label: Optional[str] = Form(None),
+    _auth=Depends(require_auth),
+):
+    """Attach an EXTERNAL video (multipart) to a session — up to MAX_EXTERNAL_VIDEOS. The
+    phone/primary video uses the legacy POST /video instead. Phase 69."""
+    # Reject oversized BEFORE buffering (same memory-safe guard as /video, Phase 67-02).
+    size = file.size
+    if size is None:
+        cl = request.headers.get("content-length")
+        size = int(cl) if cl and cl.isdigit() else None
+    if size is not None and size > MAX_VIDEO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Video too large; max {MAX_VIDEO_BYTES // (1024 * 1024)} MB.",
+        )
+
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    _owned_session(sb_admin, request.state.user_id, session_id, "id")
+
+    try:
+        existing = (
+            sb_admin.table("session_videos").select("id").eq("session_id", session_id).execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if len(existing.data or []) >= MAX_EXTERNAL_VIDEOS:
+        raise HTTPException(
+            status_code=409, detail=f"Max {MAX_EXTERNAL_VIDEOS} external videos per session"
+        )
+
+    if file.size == 0:
+        raise HTTPException(status_code=422, detail="Empty video file")
+
+    vid = str(uuid.uuid4())
+    storage_path = f"{session_id}/{vid}.mp4"
+    try:
+        file.file.seek(0)
+        sb_admin.storage.from_("videos").upload(
+            path=storage_path,
+            file=file.file,
+            file_options={
+                "content-type": file.content_type or "video/mp4",
+                "x-upsert": "true",
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video upload failed: {e}")
+
+    try:
+        sb_admin.table("session_videos").insert({
+            "id": vid,
+            "session_id": session_id,
+            "storage_path": storage_path,
+            "label": label,
+        }).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "id": vid,
+        "role": "external",
+        "label": label,
+        "url": _signed_video_url(sb_admin, storage_path),
+        "origin_s": None,
+    }
+
+
+@app.patch("/sessions/{session_id}/videos/{video_id}")
+async def update_session_video(
+    session_id: str,
+    video_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Update an external video's label and/or origin_s (per-camera push-off sync). Phase 69."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    allowed = {"label", "origin_s"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    _owned_session(sb_admin, request.state.user_id, session_id, "id")
+
+    try:
+        resp = (
+            sb_admin.table("session_videos")
+            .update(updates)
+            .eq("id", video_id)
+            .eq("session_id", session_id)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not (resp.data or []):
+        raise HTTPException(status_code=404, detail="Video not found on this session")
+    return resp.data[0]
+
+
+@app.delete("/sessions/{session_id}/videos/{video_id}")
+async def delete_session_video(
+    session_id: str,
+    video_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Delete one external video — its storage object (non-fatal) then the row. Phase 69."""
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+    _owned_session(sb_admin, request.state.user_id, session_id, "id")
+
+    try:
+        resp = (
+            sb_admin.table("session_videos")
+            .select("storage_path")
+            .eq("id", video_id)
+            .eq("session_id", session_id)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not (resp.data or []):
+        raise HTTPException(status_code=404, detail="Video not found on this session")
+
+    try:
+        sb_admin.storage.from_("videos").remove([resp.data[0]["storage_path"]])
+    except Exception:
+        pass  # storage removal non-fatal (mirrors DELETE /sessions)
+
+    try:
+        sb_admin.table("session_videos").delete().eq("id", video_id).eq(
+            "session_id", session_id
+        ).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"ok": True}
 
 
 @app.get("/annotations/export")

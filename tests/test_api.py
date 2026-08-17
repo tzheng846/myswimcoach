@@ -1285,3 +1285,53 @@ class TestVideoUploadSizeGuard:
         )
         assert resp.status_code == 413, resp.text
         assert "too large" in resp.text.lower()
+
+
+class TestSessionVideos:
+    """POST/GET/PATCH/DELETE /sessions/{id}/videos — external multi-camera videos (Phase 69)."""
+
+    def test_oversized_external_returns_413(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "MAX_VIDEO_BYTES", 100)  # guard runs before admin/ownership
+        resp = api_client.post(
+            "/sessions/00000000-0000-0000-0000-000000000000/videos",
+            files={"file": ("ext.mp4", io.BytesIO(b"x" * 500), "video/mp4")},
+            headers={"Authorization": "Bearer fake"},
+        )
+        assert resp.status_code == 413, resp.text
+
+    def test_external_cap_returns_409(self, api_client, monkeypatch):
+        import api
+        from unittest.mock import MagicMock
+        mock_admin = MagicMock()
+        mock_admin.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+            {"id": "a"}, {"id": "b"}, {"id": "c"}  # already at the 3-external cap
+        ]
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: mock_admin)
+        monkeypatch.setattr(api, "_owned_session", lambda *a, **k: (None, {}))
+        resp = api_client.post(
+            "/sessions/sess-1/videos",
+            files={"file": ("ext.mp4", io.BytesIO(b"tiny"), "video/mp4")},
+            headers={"Authorization": "Bearer fake"},
+        )
+        assert resp.status_code == 409, resp.text
+        assert "max" in resp.text.lower()
+
+    def test_list_unifies_primary_and_externals(self, api_client, monkeypatch):
+        import api
+        from unittest.mock import MagicMock
+        mock_admin = MagicMock()
+        mock_admin.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value.data = [
+            {"id": "ext-1", "storage_path": "sess-1/ext-1.mp4", "origin_s": 1.5, "label": "Underwater", "created_at": "t"}
+        ]
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: mock_admin)
+        monkeypatch.setattr(
+            api, "_owned_session",
+            lambda *a, **k: (None, {"video_path": "sess-1.mp4", "video_origin_s": 0.2}),
+        )
+        monkeypatch.setattr(api, "_signed_video_url", lambda sb, path: f"signed://{path}")
+        resp = api_client.get("/sessions/sess-1/videos", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200, resp.text
+        vids = resp.json()["videos"]
+        assert vids[0]["role"] == "phone" and vids[0]["label"] == "Phone"
+        assert any(v["role"] == "external" and v["label"] == "Underwater" for v in vids)
