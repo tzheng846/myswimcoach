@@ -3,17 +3,19 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **66 (Acceleration Derivative) ✅ COMPLETE + UNIFIED** · ⚠ **63 + 65 still open (no active plan)**
-Plan: **Phase 66 done (1/1). No active plan.** Next candidates: 63 (doc, owes checkpoint+unify) or 65
-  (underwater segmentation — 65-01 planned, not applied).
-Status: Phase 66 closed — SG acceleration (`120908f`) + stroke-dependent windows (`ee1852c`) shipped →
-  Railway, 70 rows re-backfilled, user approved ("looks amazing"). Suite **277**. Display-only; zero
-  metric moved. ⚠ Plan's "lower total-variation" metric was wrong (old 5 Hz path is over-smoothed →
-  low TV yet faceted); the real win is accuracy (0.3% RMS vs 118%) + peak preservation (old crushed
-  real peaks ~60%). Open loops: **63-02** owes checkpoint+unify (doc-only, non-colliding); **65** is
-  the incomplete SEGMENTATION phase — 65-01 (measurement) created but NOT applied, 65-02 (fix) +
-  65-03 (web) unwritten; its web tail no longer blocked (64 unified).
-Last activity: 2026-08-16 — closed Phase 66 (SG accel + per-stroke windows); discussed accel-in-segmentation + segmentation state
+Phase: **65 (Underwater Phase Detection) — 65-01 DONE (phase 1/3); 65-02 next** · ⚠ **63 also open; 64 + 66 CLOSED**
+Plan: **65-01 (measurement) ✅ COMPLETE — decision recorded: Option A (repair `detect_swim_window`).
+  Next: `/paul:plan 65` → 65-02 (the fix).**
+Status: 65-01 closed — `tools/underwater_probe.py` (`--id` added) + `65-01-FINDINGS.md` + SUMMARY.
+  ⭐ **Reported bug = Mode C:** `detect_swim_window` FIRES but `f_ref` rails LOW (indigo ray `6ececa0f`
+  → 0.33 Hz) → `ip_end` collapses to `b_end` → dive+kicks = **15 cycles**. Fix (Option A, user-selected
+  2026-08-16): make `f_ref`/`_cwt_ridge` robust to the low rail; do NOT reject to the trough fallback
+  (16.6 s on indigo ray, worse). Mode A (11/12) = ip_end ~2 s late; Mode B (1/12) = fallback-early —
+  both milder. D8 2×-harmonic REFUTED; amplitude refuted; accel inconclusive (dive-confounded). ⚠ n
+  tiny (12+1, one swimmer, 0 back) — 65-02 must not regress the 11/12 Mode-A sessions. Also logged
+  **ROADMAP #68** (persist generated session names; #67 is a separately-appearing external-camera-sync
+  phase, untracked, not mine). 63-02 owes checkpoint+unify.
+Last activity: 2026-08-16 — closed 65-01 (underwater diagnosis); decision Option A; next 65-02
 
 ### 66-01 PLAN (2026-08-16) — Savitzky–Golay acceleration derivative
 Backend, display-only. TRIGGER: the 64-03 accel trace is "extremely choppy" — the DATA is, not the
@@ -138,8 +140,8 @@ Current loop state:
 Phase 66:  PLAN ──▶ APPLY ──▶ UNIFY
              ✓        ✓        ✓     [✅ PHASE COMPLETE 2026-08-16 — SG accel + per-stroke windows; 120908f + ee1852c → Railway]
 
-Phase 65:  PLAN ──▶ APPLY ──▶ UNIFY
-             ✓        ○        ○     [65-01 created (research), awaiting approval]
+Phase 65:  PLAN ──▶ APPLY ──▶ UNIFY   [phase 1/3 — 65-01 closed]
+             ✓        ✓        ✓     [65-01 ✅ Option A recorded; 65-02 (fix) + 65-03 (web) to come]
 
 Phase 64:  PLAN ──▶ APPLY ──▶ UNIFY
              ✓        ✓        ✓     [✅ PHASE COMPLETE 2026-08-16 — 3/3 unified, fe3b53b pushed → Vercel]
