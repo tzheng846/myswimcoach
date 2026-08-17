@@ -1265,3 +1265,23 @@ class TestStrokeTypeForwardedToMetrics:
         a crash, because None is what resolves to the default segmenter."""
         captured = self._capture(api_client, monkeypatch, synthetic_csv_bytes, None)
         assert captured.get("stroke_type") is None
+
+
+class TestVideoUploadSizeGuard:
+    """POST /sessions/{id}/video — oversized clips are rejected before buffering (Phase 67-02).
+
+    The guard runs BEFORE _get_supabase_admin(), so an over-cap file 413s even without Storage
+    configured — which is why this test needs no supabase mock. The cap is monkeypatched tiny so
+    the test never allocates a real 500 MB buffer.
+    """
+
+    def test_oversized_video_returns_413(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "MAX_VIDEO_BYTES", 100)  # tiny cap; a 500-byte clip exceeds it
+        resp = api_client.post(
+            "/sessions/00000000-0000-0000-0000-000000000000/video",
+            files={"file": ("clip.mp4", io.BytesIO(b"x" * 500), "video/mp4")},
+            headers={"Authorization": "Bearer fake-token-mocked"},
+        )
+        assert resp.status_code == 413, resp.text
+        assert "too large" in resp.text.lower()

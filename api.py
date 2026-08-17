@@ -968,6 +968,13 @@ async def delete_annotations(
     return {"ok": True, "metrics_restored": restored}
 
 
+# Max accepted video upload size. MUST match supabase/patch_11 videos bucket file_size_limit and the
+# client MAX_VIDEO_BYTES in web/components/portal/VideoPane.js. Enforced below BEFORE the file is
+# buffered, so an oversized external-camera clip 413s instead of OOMing the container. (Phase 67-02;
+# also partially satisfies Phase 49-01's "memory-safe upload size caps".)
+MAX_VIDEO_BYTES = 500 * 1024 * 1024  # 500 MB
+
+
 @app.post("/sessions/{session_id}/video")
 async def upload_session_video(
     session_id: str,
@@ -985,6 +992,20 @@ async def upload_session_video(
             status_code=422, detail="Provide a video file and/or video_origin_s"
         )
 
+    # Phase 67-02: reject an oversized clip BEFORE any Storage work or buffering. Prefer the
+    # multipart part size; fall back to Content-Length. This is the memory-safe guard that keeps a
+    # large external-camera file from being read into RAM (the upload below streams, never reads).
+    if file is not None:
+        size = file.size
+        if size is None:
+            cl = request.headers.get("content-length")
+            size = int(cl) if cl and cl.isdigit() else None
+        if size is not None and size > MAX_VIDEO_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Video too large; max {MAX_VIDEO_BYTES // (1024 * 1024)} MB.",
+            )
+
     sb_admin = _get_supabase_admin()
     if not sb_admin:
         raise HTTPException(status_code=503, detail="Storage not configured")
@@ -995,14 +1016,17 @@ async def upload_session_video(
 
     updates = {}
     if file is not None:
-        video_bytes = await file.read()
-        if not video_bytes:
+        if file.size == 0:
             raise HTTPException(status_code=422, detail="Empty video file")
         storage_path = f"{session_id}.mp4"
         try:
+            # Stream from the spooled temp file (Starlette spools multipart parts >1 MB to disk)
+            # instead of await file.read() — storage3 accepts a file object, so a 500 MB clip is
+            # never held whole in RAM. seek(0) is defensive: guarantee we upload from the start.
+            file.file.seek(0)
             sb_admin.storage.from_("videos").upload(
                 path=storage_path,
-                file=video_bytes,
+                file=file.file,
                 file_options={
                     "content-type": file.content_type or "video/mp4",
                     "x-upsert": "true",  # re-upload replaces the previous attachment
