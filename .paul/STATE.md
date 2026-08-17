@@ -3,11 +3,51 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **65 (Underwater Phase Detection) — Planning** · ⚠ **63 + 64 both open (owe UNIFY)**
-Plan: **65-01 created (research/measurement), awaiting approval**
-Status: 65-01 PLAN ready for APPLY. 64-01 committed + pushed to `main` (Vercel auto-deploys), owes
-  UNIFY; 63-02 owes its checkpoint + UNIFY.
-Last activity: 2026-08-15 — 65-01 planned: measure underwater breakout misdetection (free/back/fly)
+Phase: **66 (Acceleration Derivative) — APPLYING** · ⚠ **Phase 64 CLOSED; 63 + 65-01 still open**
+Plan: **66-01 (Savitzky–Golay acceleration) — user approved ("apply 66-01"), applying now.** Phase 64
+  ✅ COMPLETE + UNIFIED 2026-08-16 (3/3 plans; `fe3b53b` pushed → Vercel).
+Status: Phase 64 closed — all 3 plans summarized (64-01/02 retroactive, 64-03 fresh) + transition done
+  (ROADMAP ✅, PROJECT footer, phase commit). Now applying 66-01: swap `acceleration_from_velocity` to
+  a Savitzky–Golay first derivative (display-only — metrics.py consumes velocity, not accel), rewrite
+  the algorithm-pinning test (`test_metrics.py:376`), add `--recompute` to `backfill_acceleration.py`,
+  then deploy + re-backfill 70 rows (checkpoint). 63-02 owes checkpoint+unify; 65-01 paused.
+Last activity: 2026-08-16 — unified Phase 64 (3 summaries + transition); starting 66-01 apply
+
+### 66-01 PLAN (2026-08-16) — Savitzky–Golay acceleration derivative
+Backend, display-only. TRIGGER: the 64-03 accel trace is "extremely choppy" — the DATA is, not the
+chart. `acceleration_from_velocity` (`vel_acc_extraction.py:102`) decimates velocity to ~5 Hz,
+np.gradients it, LINEARLY interpolates back → ~2.5 Hz bandwidth drawn as straight segments 0.2 s
+apart (+ corners from the `:150` velocity clamp). FIX: `savgol_filter(vel, ~0.25 s odd window,
+polyorder=3, deriv=1, delta=1/fs, mode="interp")` at full rate. ⭐ ONE function is the source of
+truth — `run_pipeline` (`:153`) + `backfill_acceleration.py` (`:106`) both call it. ⚠ DISPLAY-ONLY:
+metrics.py consumes velocity not accel → zero metric changes; velocity untouched. Re-backfill 70 rows
+from stored velocity via a new `--recompute` mode (no raw reprocess) — comparability break on
+`acceleration_profile` alone. ⚠ `test_metrics.py::test_acceleration_from_velocity_matches_inline`
+(`:376`) PINS the old algorithm and must be rewritten; `test_api.py` accel test stays green. 3 auto
+tasks + 1 checkpoint (deploy Railway + re-backfill, like 64-02). `autonomous:false`, `depends_on []`.
+
+### 64-03 APPLY (2026-08-16) — auto tasks done, awaiting checkpoint
+Acceleration trace on BOTH surfaces. Files (8): **new** `web/lib/useTracePrefs.js` (page-level
+show/colour prefs, persisted — velocity ownership lifted off VideoTracePanel; reused the pre-existing
+`swimnetics.traceColor` key) + `web/components/portal/AccelerationChart.js` (recharts sibling of
+VelocityChart, symmetric signed y-domain + zero ReferenceLine, no Brush by choice, self-handles empty
+= AC-5). **Edited** TraceOverlay (single→two stacked bands via a per-band DOM-ref map + one shared
+rAF/window/scrub — 64-01 scrub/teardown preserved VERBATIM), PlaybackControls (Show toggles +
+ACCEL_COLORS swatch row), VideoTracePanel (props lifted to page), both session pages (select
+`acceleration_profile`, call `useTracePrefs`, gate/stack charts).
+- ⚠ **2 deviations from the plan's file list** (both justified, for UNIFY): (1) `VideoPane.js` edited
+  — a REQUIRED pass-through (it renders PlaybackControls; the plan omitted it) — pure prop forwarding,
+  not in DO-NOT-CHANGE. (2) added `web/lib/useTracePrefs.js` — the prefs are needed identically on
+  both pages; a shared hook beats duplicating 4 state vars + persistence twice and keeps lint flat.
+- Kept `lineColor` as the velocity-colour prop name in VideoPane/PlaybackControls/TraceOverlay
+  (surgical); added `accelColor` alongside. `VelocityChart.js` untouched (boundary held).
+- ⚠ **Known limitation to raise at checkpoint:** the Show toggles live only in the overlay's
+  PlaybackControls, which renders only when a video is attached. A NO-VIDEO report card can't turn
+  acceleration on (it follows the persisted pref). Default is velocity-only, so no-video cards look
+  exactly as before — nothing regresses, but accel isn't reachable there. Not in plan scope; flag.
+- Refinement vs plan wording: static AccelerationChart gated on `showAcceleration` alone (not
+  `&& accel.length`) so a NULL-accel session shows the explicit "No acceleration data" card (AC-5),
+  mirroring VelocityChart's empty-state idiom.
 
 ### 64-02 + 64-03 PLANNED (2026-08-14) — Acceleration trace, awaiting approval
 Also uncommitted since the 0f63a15 push: **drag-to-scrub** on the overlay
@@ -18,7 +58,10 @@ forever, froze playback / killed Play); FIXED with window-level pointer listener
 setPointerCapture, pointercancel teardown (mouse + iPad). Verified idle-seeks 0 after an off-strip
 release. **Awaiting the user's live feel-test before push.** Production still has click-to-seek only.
 
-**64-02** (backend) — ✅ **3 auto tasks APPLIED, human-action checkpoint PENDING** (2026-08-14).
+**64-02** (backend) — ✅ **COMPLETE + SHIPPED 2026-08-14 (commit `f133c56` → Railway).** patch_10
+applied live by the user; api.py deployed (health 200); backfill **APPLIED: 70/70 sessions written,
+0 failed**, idempotent re-run finds 0, spot-check confirmed stored accel == the shared function
+exactly (len matches velocity). Owes UNIFY. Prior status: 3 auto tasks applied, checkpoint pending.
 Store `sessions.acceleration_profile`. ⭐ Accel is a pure derivative of the already-stored velocity;
 `api.py:172` already computed it but dropped it as `_accel`.
   - T1: `acceleration_from_velocity(vel,fs)` extracted; `run_pipeline` routes through it. **Bit-
@@ -90,11 +133,14 @@ Progress:
 
 Current loop state:
 ```
+Phase 66:  PLAN ──▶ APPLY ──▶ UNIFY
+             ✓        ○        ○     [66-01 created (SG acceleration), awaiting approval]
+
 Phase 65:  PLAN ──▶ APPLY ──▶ UNIFY
              ✓        ○        ○     [65-01 created (research), awaiting approval]
 
 Phase 64:  PLAN ──▶ APPLY ──▶ UNIFY
-             ✓        ✓        ○     [64-01 auto tasks done, checkpoint pending]
+             ✓        ✓        ✓     [✅ PHASE COMPLETE 2026-08-16 — 3/3 unified, fe3b53b pushed → Vercel]
 
 Phase 63:  PLAN ──▶ APPLY ──▶ UNIFY
              ✓        ✓        ○     [63-02 auto tasks done, checkpoint pending]

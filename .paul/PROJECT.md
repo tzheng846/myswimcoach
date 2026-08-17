@@ -101,6 +101,17 @@ known drift (Railway pre-Phase-24, committed SQL ≠ live DB, git coverage gaps)
 - First paying customer (swim academy) using the system
 
 ---
+*Updated: 2026-08-16 after Phase 64 — Fullscreen Video + Velocity Overlay (3/3 plans, web). A
+fullscreen video stage with a hand-rolled SVG velocity trace (rAF, zero React state) + drag-to-scrub
+(64-01, `0f63a15`+`fe3b53b`); `sessions.acceleration_profile` stored as an EXACT derivative of the
+already-stored velocity with a 70/70 backfill, no raw-CSV reprocessing (64-02, `f133c56` → Railway);
+and acceleration on BOTH the overlay (a stacked signed band sharing one window/scrub/playhead) and a
+new static `AccelerationChart`, with page-owned, persisted, cross-surface-synced toggles + colour via
+`useTracePrefs` (64-03, `fe3b53b` → Vercel). ⚠ The stored acceleration is a ~5 Hz decimate→gradient→
+linear-interp reconstruction that reads **choppy** on screen — **Phase 66 replaces the derivation with
+a Savitzky–Golay first derivative + re-backfill**, which is **display-only** (`metrics.py` consumes
+velocity, never acceleration, so no metric moves). ⚠ Known limitation: the accel toggle lives in the
+video control bar, so a no-video session can't turn acceleration on (it follows the persisted pref).*
 *Updated: 2026-08-11 after Phase 61 — Web Portal Rework (5/5 plans). Delivered all five things the
 user asked for, and one they did not. **⭐ The one they did not: `ramp_up` was never ramp-up.** The
 steady/ramp_up cycle split — which every `mean_*`, `cv_*` and `stroke_count` was computed over —
