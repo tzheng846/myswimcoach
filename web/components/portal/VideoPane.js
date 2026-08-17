@@ -12,8 +12,9 @@ const FRAME_S = 1 / 30;
 
 const RATES = [0.25, 0.5, 1];
 
-// Max accepted upload size — MUST match api.py MAX_VIDEO_BYTES and supabase/patch_11.
-const MAX_VIDEO_BYTES = 500 * 1024 * 1024; // 500 MB
+// Max accepted upload size — tracks the active Supabase global limit (50 MB free tier) and matches
+// api.py MAX_VIDEO_BYTES. ⚠ On Pro: raise to 500, raise the Supabase global limit, apply patch_11.
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 50 MB (free-tier ceiling)
 
 // Session video: signed-URL playback synced to the velocity trace.
 // sessionTime = originS + videoTime (44-03 end-anchor convention).
@@ -278,12 +279,12 @@ export default function VideoPane({
   const attach = async (file) => {
     if (!file) return;
     // Phase 67-02: reject an over-cap clip client-side so the coach gets an instant, clear reason
-    // rather than a 413 after a long upload. Matches the server + bucket limit.
+    // rather than a Storage rejection after a long upload. Matches the server + Supabase global limit.
     if (file.size > MAX_VIDEO_BYTES) {
+      const capMB = MAX_VIDEO_BYTES / (1024 * 1024);
       setMsg(
-        `This clip is ${Math.round(file.size / (1024 * 1024))} MB — the limit is ${
-          MAX_VIDEO_BYTES / (1024 * 1024)
-        } MB. Trim it, or record at 1080p.`
+        `This clip is ${Math.round(file.size / (1024 * 1024))} MB — over the ${capMB} MB limit. ` +
+          `Compress it (HandBrake / GoPro Quik) to under ${capMB} MB, or upgrade to Pro storage.`
       );
       return;
     }
@@ -318,7 +319,7 @@ export default function VideoPane({
         </p>
         <p className="mb-3 text-xs leading-relaxed text-muted">
           No video attached — annotation works on the velocity trace alone.
-          Attach one to review side-by-side. Best results: H.264 .mp4, ≤500 MB.
+          Attach one to review side-by-side. Best results: H.264 .mp4, ≤50 MB (compress GoPro clips first).
         </p>
         <label className="inline-block cursor-pointer rounded-lg border border-surface-3 bg-surface-2 px-3 py-2 text-sm font-semibold text-subtle hover:text-ink">
           {busy ? "Uploading…" : "Attach video"}

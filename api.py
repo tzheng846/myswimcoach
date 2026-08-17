@@ -968,11 +968,13 @@ async def delete_annotations(
     return {"ok": True, "metrics_restored": restored}
 
 
-# Max accepted video upload size. MUST match supabase/patch_11 videos bucket file_size_limit and the
-# client MAX_VIDEO_BYTES in web/components/portal/VideoPane.js. Enforced below BEFORE the file is
-# buffered, so an oversized external-camera clip 413s instead of OOMing the container. (Phase 67-02;
-# also partially satisfies Phase 49-01's "memory-safe upload size caps".)
-MAX_VIDEO_BYTES = 500 * 1024 * 1024  # 500 MB
+# Max accepted video upload size. Tracks the ACTIVE Supabase global upload limit — 50 MB on the free
+# tier, a hard ceiling that per-bucket limits cannot exceed. Enforced below BEFORE the file is
+# buffered, so an oversized external-camera clip 413s instead of OOMing the container, and matches the
+# client MAX_VIDEO_BYTES in web/components/portal/VideoPane.js. (Phase 67-02; also partially satisfies
+# Phase 49-01's "memory-safe upload size caps".)
+# ⚠ ON PRO: raise this to 500, raise the Supabase global limit, and apply supabase/patch_11.
+MAX_VIDEO_BYTES = 50 * 1024 * 1024  # 50 MB (free-tier ceiling)
 
 
 @app.post("/sessions/{session_id}/video")
