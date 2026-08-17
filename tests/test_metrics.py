@@ -436,3 +436,73 @@ def test_acceleration_window_is_stroke_dependent():
     assert vae._ACCEL_WINDOW_S["freestyle"] > vae._ACCEL_WINDOW_S["butterfly"]
     assert tv(free) < tv(fly)  # wider window -> smoother on the same signal
     np.testing.assert_array_equal(unknown, fly)  # unknown == default window == butterfly's here
+
+
+# ── Swim-window low-rail guard (Phase 65-02) ────────────────────────────────────
+
+class TestSwimWindowLowRail:
+    """detect_swim_window's de-bias guard for the "indigo ray" bug.
+
+    On some free/back/fly sessions the production CWT ridge rails to the low-frequency floor
+    (_track_ridge's low-band bias tips a weak stroke fundamental down), so f_ref reads ~0.33 Hz,
+    the settle test trivially passes at the start, and ip_end collapses onto b_end — the dive +
+    underwater kicks then segment as cycles. The guard recomputes the ridge with the bias removed
+    when f_ref rails below _WINDOW_FMIN_HZ. End-to-end correction on the real railed session is a
+    human-verify via tools/underwater_probe.py; these tests pin the mechanism and the invariants.
+    """
+
+    def test_default_bias_ridge_is_byte_identical(self, real_session):
+        """AC-3: the low_band_bias parameter defaults to production, so segment_cycles_wavelet's
+        bare _cwt_ridge call — and every fixture score computed from it — is unchanged."""
+        t, vel, _ = real_session
+        fs = m._compute_fs(t)
+        f_default, p_default = m._cwt_ridge(vel, fs)
+        f_explicit, p_explicit = m._cwt_ridge(vel, fs, low_band_bias=m._RIDGE_LOW_BAND_BIAS)
+        np.testing.assert_array_equal(f_default, f_explicit)
+        np.testing.assert_array_equal(p_default, p_explicit)
+
+    def test_removing_low_band_bias_raises_the_ridge(self, real_session):
+        """The lever: MORE low-band bias cannot RAISE the ridge, so removing it (bias=0) lifts the
+        ridge off the low floor. This is why the guard recomputes de-biased instead of guessing."""
+        t, vel, _ = real_session
+        fs = m._compute_fs(t)
+        med = lambda b: float(np.median(m._cwt_ridge(vel, fs, low_band_bias=b)[0]))
+        m0, m_prod, m_hi = med(0.0), med(m._RIDGE_LOW_BAND_BIAS), med(2.0)
+        assert m0 >= m_prod >= m_hi          # monotonic: bias pulls the ridge down
+        assert m0 > m_hi                     # strictly, across the range
+
+    def test_guard_is_noop_on_a_plausible_session(self, real_session):
+        """AC-2 + D2: when f_ref is already a plausible stroke rate the guard never fires, so the
+        window is identical regardless of stroke_type — including breaststroke (exempt) and the
+        two-argument call that predates the parameter."""
+        t, vel, _ = real_session
+        base = m.detect_swim_window(t, vel)                 # 2-arg call still works
+        assert base is not None
+        assert m.detect_swim_window(t, vel, "breaststroke") == base
+        assert m.detect_swim_window(t, vel, "butterfly") == base
+        assert m.detect_swim_window(t, vel, "freestyle") == base
+
+    def test_low_rail_guard_recomputes_debiased_and_exempts_breaststroke(self, monkeypatch):
+        """AC-1 + D2 control flow, deterministic. Stub _cwt_ridge so the production (biased) ridge
+        rails to 0.30 Hz across the whole trace — collapsing ip_end to the window start — while the
+        de-biased ridge settles at 1.0 Hz a third of the way in. A dolphin-kick stroke must take the
+        de-biased window (ip_end moves off the collapse); breaststroke must keep the railed one."""
+        fs = 90.0
+        n = int(20 * fs)
+        t = np.arange(n) / fs
+        vel = np.zeros(n)                                   # content irrelevant; the ridge is stubbed
+        power = np.ones(n)
+        railed = np.full(n, 0.30)                           # f_ref rails to 0.30 Hz (< _WINDOW_FMIN_HZ)
+        good = np.where(np.arange(n) < n // 3, 0.30, 1.0)   # de-biased: settles at 1.0 Hz after n/3
+
+        def fake_cwt(v, f, low_band_bias=m._RIDGE_LOW_BAND_BIAS):
+            return (good, power) if low_band_bias == 0.0 else (railed, power)
+        monkeypatch.setattr(m, "_cwt_ridge", fake_cwt)
+
+        railed_win = m.detect_swim_window(t, vel, "breaststroke")   # exempt -> keeps the railed window
+        fixed_win = m.detect_swim_window(t, vel, "butterfly")       # guard fires -> de-biased window
+
+        assert railed_win == (0, n)                         # collapsed onto the window start
+        assert fixed_win is not None and fixed_win[0] > 0    # ip_end lifted off the collapse
+        assert fixed_win != railed_win
+        assert fixed_win[1] == n                             # swim_end unchanged; only ip_end moved

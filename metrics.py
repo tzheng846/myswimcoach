@@ -165,17 +165,22 @@ def _detrend_for_cwt(vel, fs):
     return vel - rolling_mean
 
 
-def _track_ridge(power, freqs_hz):
+def _track_ridge(power, freqs_hz, low_band_bias=_RIDGE_LOW_BAND_BIAS):
     """
     Continuity- and low-band-biased ridge extraction via dynamic programming —
     replaces a per-instant argmax(power) that can snap onto a harmonic for a few
     frames and has no way to prefer one of two simultaneously-loud bands.
 
-    node_cost[f,t] = -log(col-normalized power) + BIAS*log_freq[f]
+    node_cost[f,t] = -log(col-normalized power) + low_band_bias*log_freq[f]
     cost[f,t]      = min_f'{ cost[f',t-1] + LAMBDA*(logfreq[f]-logfreq[f'])^2 } + node_cost[f,t]
 
     Frequencies compared in log-space (pywt scales are geometric). Returns the
     optimal scale-index path — same shape/role as argmax(power, axis=0).
+
+    low_band_bias defaults to _RIDGE_LOW_BAND_BIAS (0.5) — passing anything else is a
+    Phase 65-02 seam: detect_swim_window recomputes the ridge with bias=0 when the
+    production ridge rails to the low-frequency floor. Every other caller omits it, so
+    their ridge is byte-identical to before the seam existed.
     """
     n_scales, n_times = power.shape
     log_freqs = np.log(freqs_hz)
@@ -183,7 +188,7 @@ def _track_ridge(power, freqs_hz):
 
     col_max   = np.maximum(power.max(axis=0, keepdims=True), 1e-12)  # floor guards all-zero columns
     log_pow   = np.log(power / col_max + 1e-12)
-    node_cost = -log_pow + (_RIDGE_LOW_BAND_BIAS * log_freqs)[:, None]
+    node_cost = -log_pow + (low_band_bias * log_freqs)[:, None]
 
     cost    = np.empty((n_scales, n_times))
     backptr = np.empty((n_scales, n_times), dtype=np.int64)
@@ -201,7 +206,7 @@ def _track_ridge(power, freqs_hz):
     return path
 
 
-def _cwt_ridge(vel, fs):
+def _cwt_ridge(vel, fs, low_band_bias=_RIDGE_LOW_BAND_BIAS):
     """Detrended velocity → (ridge_freq_hz, ridge_power) along the DP-tracked ridge.
 
     Extracted in Phase 59-03 because TWO callers now need the same ridge and must not
@@ -211,6 +216,10 @@ def _cwt_ridge(vel, fs):
       * detect_swim_window asks whether the frequency is STEADY ("is this rhythm
         stroking, kicking, or nothing") — needs only coarse discrimination.
     Same signal, two different questions, very different precision requirements.
+
+    low_band_bias passes straight through to _track_ridge; it defaults to the production
+    value so segment_cycles_wavelet's bare call is byte-identical. detect_swim_window
+    passes 0.0 only when its production ridge rails low (Phase 65-02).
 
     Returns (None, None) on short or flat input — the caller decides what that means.
     """
@@ -227,7 +236,7 @@ def _cwt_ridge(vel, fs):
     coeffs, freqs_hz = pywt.cwt(active, scales, _WAVELET, sampling_period=dt)
     power = np.abs(coeffs) ** 2
 
-    ridge_idx = _track_ridge(power, freqs_hz)
+    ridge_idx = _track_ridge(power, freqs_hz, low_band_bias)
     return freqs_hz[ridge_idx], power[ridge_idx, np.arange(power.shape[1])]
 
 
@@ -482,6 +491,13 @@ _WINDOW_GAP_S        = 1.0    # bridge rhythm dropouts shorter than this
 # behavior), while a false negative ships an implausibly narrow window and a
 # wrong-in-a-new-way stroke rate.
 _WINDOW_MIN_CYCLES   = 4.0
+# Plausible-stroke frequency floor (Phase 65-02). A steady f_ref BELOW this is not a stroke rate —
+# it is the CWT ridge railed to its low-frequency floor (grid low end 1/_PERIOD_MAX_S = 0.25 Hz)
+# because _track_ridge's low-band bias tipped a weak stroke fundamental down. Measured 2026-08-17
+# on 12 sessions + "indigo ray": the rail sits ~0.33 Hz; the lowest LEGITIMATE fired f_ref is
+# 0.72 Hz, so 0.45 separates them with wide margin. Only free/back/fly rail this way; breaststroke's
+# slow legitimate rhythm can sit near the floor, so it is exempt from the guard (see detect_swim_window).
+_WINDOW_FMIN_HZ      = 0.45
 
 
 def _longest_active_run(mask, fs, min_gap_s=_WINDOW_GAP_S):
@@ -506,7 +522,58 @@ def _longest_active_run(mask, fs, min_gap_s=_WINDOW_GAP_S):
     return int(starts[best]), int(ends[best]) + 1
 
 
-def detect_swim_window(t, vel):
+def _window_from_ridge(fs, ridge_freq, ridge_power):
+    """The amplitude-run → steady f_ref → plausibility-gate → frequency-settle body of
+    detect_swim_window, factored out (Phase 65-02) so it can run on either the production
+    (biased) ridge or a de-biased one.
+
+    Returns (window, f_ref):
+      * window = (ip_end, swim_end) or None — exactly what detect_swim_window used to
+        return inline, in the same branch order;
+      * f_ref  = the steady stroke frequency it measured, or np.nan when it could not.
+        The caller reads f_ref to tell a low-RAILED ridge (a small positive f_ref, even
+        when the plausibility gate then returns window=None) from a genuine no-window.
+
+    ⚠ BYTE-IDENTICAL to the old inline body on the production ridge. Do not "improve"
+    it here — TestCycleRegularityGate and the segmenter fixture do not exercise it, but
+    the whole point of the 65-02 seam is that the biased path is unchanged.
+    """
+    amp = np.sqrt(np.maximum(ridge_power, 0.0))
+    ref = float(np.percentile(amp, 95))
+    if ref < 1e-9:
+        return None, float("nan")
+    run = _longest_active_run(amp > _WINDOW_POWER_FRAC * ref, fs)
+    if run is None:
+        return None, float("nan")
+    i0, i1 = run
+
+    back = ridge_freq[i0 + int(0.4 * (i1 - i0)):i1]
+    if back.size < 3:
+        return (i0, i1), float("nan")
+    f_ref = float(np.median(back))
+    if not np.isfinite(f_ref) or f_ref <= 0:
+        return (i0, i1), float("nan")
+
+    # Plausibility: does this window even span a swim's worth of cycles at its own
+    # detected frequency? On roughly a third of real sessions the amplitude run latches
+    # onto the DIVE transient instead of the swim — it starts at t=0 and ends early —
+    # and the result is an implausibly narrow window. Disbelieve those outright rather
+    # than emit a confident wrong answer. (f_ref is still returned so the caller can see
+    # a low RAIL even here.)
+    if ((i1 - i0) / fs) * f_ref < _WINDOW_MIN_CYCLES:
+        return None, f_ref
+
+    near = np.abs(ridge_freq - f_ref) <= _WINDOW_FREQ_TOL * f_ref
+    hold = max(1, int(_WINDOW_HOLD_CYCLES / f_ref * fs))
+    held = 0
+    for i in range(i0, i1):
+        held = held + 1 if near[i] else 0
+        if held >= hold:
+            return (int(i - hold + 1), i1), f_ref
+    return (i0, i1), f_ref
+
+
+def detect_swim_window(t, vel, stroke_type=None):
     """Start and end of CYCLIC STROKING → (ip_end, swim_end), or None.
 
     Phase 59-03. Replaces two detectors that were asking the wrong question:
@@ -529,6 +596,18 @@ def detect_swim_window(t, vel):
     finds where stroking actually begins. Steady-state stroke frequency is taken from
     the back 60% of the active region, which is past any breakout by construction.
 
+    Phase 65-02 — the low-rail guard. On some free/back/fly sessions ("indigo ray") the
+    production ridge rails to the CWT low-frequency floor: _track_ridge's low-band bias
+    tips a weak stroke fundamental down, so f_ref reads ~0.33 Hz (a real fly rate is
+    ~0.8–1.2 Hz), the settle test finds "settled" from the very first sample, and ip_end
+    collapses onto b_end — the dive + underwater kicks then segment as cycles. When f_ref
+    rails below _WINDOW_FMIN_HZ we recompute the ridge with the low-band bias REMOVED and
+    take the window from that instead. Breaststroke is exempt: its slow legitimate rhythm
+    can sit near the floor, and its segmentation is validated and must stay byte-identical
+    (phase D2). If the de-biased ridge does not recover a plausible f_ref, the biased
+    result stands — never worse than before, and never the trough fallback (which was
+    16.6 s on indigo ray).
+
     Returns full-trace indices, swim_end exclusive. None when the trace is too short
     or flat to carry a ridge — the caller keeps its existing fallbacks.
     """
@@ -537,38 +616,20 @@ def detect_swim_window(t, vel):
     if ridge_freq is None:
         return None
 
-    amp = np.sqrt(np.maximum(ridge_power, 0.0))
-    ref = float(np.percentile(amp, 95))
-    if ref < 1e-9:
-        return None
-    run = _longest_active_run(amp > _WINDOW_POWER_FRAC * ref, fs)
-    if run is None:
-        return None
-    i0, i1 = run
+    window, f_ref = _window_from_ridge(fs, ridge_freq, ridge_power)
 
-    back = ridge_freq[i0 + int(0.4 * (i1 - i0)):i1]
-    if back.size < 3:
-        return i0, i1
-    f_ref = float(np.median(back))
-    if not np.isfinite(f_ref) or f_ref <= 0:
-        return i0, i1
+    # De-bias guard: ONLY a low RAILED f_ref triggers the recompute, so any session whose
+    # ridge already tracks a plausible stroke rate returns `window` unchanged — byte-identical
+    # to pre-65-02. Breaststroke never enters the branch.
+    if (stroke_type != "breaststroke"
+            and np.isfinite(f_ref) and 0.0 < f_ref < _WINDOW_FMIN_HZ):
+        rf0, rp0 = _cwt_ridge(vel, fs, low_band_bias=0.0)
+        if rf0 is not None:
+            window0, f_ref0 = _window_from_ridge(fs, rf0, rp0)
+            if np.isfinite(f_ref0) and f_ref0 >= _WINDOW_FMIN_HZ:
+                return window0
 
-    # Plausibility: does this window even span a swim's worth of cycles at its own
-    # detected frequency? On roughly a third of real sessions the amplitude run latches
-    # onto the DIVE transient instead of the swim — it starts at t=0 and ends early —
-    # and the result is an implausibly narrow window. Disbelieve those outright rather
-    # than emit a confident wrong answer.
-    if ((i1 - i0) / fs) * f_ref < _WINDOW_MIN_CYCLES:
-        return None
-
-    near = np.abs(ridge_freq - f_ref) <= _WINDOW_FREQ_TOL * f_ref
-    hold = max(1, int(_WINDOW_HOLD_CYCLES / f_ref * fs))
-    held = 0
-    for i in range(i0, i1):
-        held = held + 1 if near[i] else 0
-        if held >= hold:
-            return int(i - hold + 1), i1
-    return i0, i1
+    return window
 
 
 def detect_initial_phase(t, vel, baseline_end_idx):
@@ -771,7 +832,7 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
     # median |error| 3.93 s → 2.16 s, finish 3.82 s → 1.20 s. Returns None when the
     # trace is too short or flat to carry a ridge, in which case the old values stand.
     # ⚠ A manual value always wins over this — applied below, exactly as before.
-    win = detect_swim_window(t, vel)
+    win = detect_swim_window(t, vel, stroke_type)
     if win is not None:
         swim_end = min(max(int(win[1]), b_end + 1), len(t))
     if manual.get("swim_end_idx") is not None:

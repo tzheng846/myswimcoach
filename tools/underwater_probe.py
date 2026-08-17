@@ -94,6 +94,23 @@ def _median(a):
     return float(np.median(a)) if a.size else float("nan")
 
 
+def _fref_ip(vel, fs, bias):
+    """detect_swim_window's INTERNAL f_ref + window under a given low-band bias — the 65-02 lever.
+
+    Faithful by construction: computes the ridge at the requested bias via the REAL
+    metrics._cwt_ridge, then runs the REAL metrics._window_from_ridge (the amplitude-run -> f_ref ->
+    settle body detect_swim_window uses). bias = metrics._RIDGE_LOW_BAND_BIAS reproduces production;
+    bias = 0.0 is the de-biased ridge the fix falls back to when f_ref rails below _WINDOW_FMIN_HZ.
+    Returns (f_ref_hz, win) where win is (ip_end, swim_end) or None. (Both are metrics-module private
+    helpers, imported exactly as _cwt_ridge already is here.)
+    """
+    rf, rp = metrics._cwt_ridge(vel, fs, low_band_bias=bias)
+    if rf is None:
+        return float("nan"), None
+    window, f_ref = metrics._window_from_ridge(fs, rf, rp)
+    return f_ref, window
+
+
 def analyze(row, breakout_s):
     stroke = row.get("stroke_type")
     vel = _arr(row.get("velocity_profile"))
@@ -143,6 +160,17 @@ def analyze(row, breakout_s):
         r["uw_over_ref"] = (r["uw_freq_hz"] / r["f_ref_hz"]) if r["f_ref_hz"] else float("nan")
     else:
         r["f_ref_hz"] = r["uw_freq_hz"] = r["uw_over_ref"] = float("nan")
+
+    # ── 65-02 LEVER: biased vs de-biased f_ref + ip_end (detect_swim_window internals) ──
+    # The reported Mode-C bug is a ridge that rails to the low-frequency floor because of
+    # _track_ridge's _RIDGE_LOW_BAND_BIAS. If removing the bias lifts f_ref back into the
+    # stroke-plausible band AND moves ip_end off b_end, Task 2's de-bias-on-low-rail guard is
+    # the right lever; the corpus min BIASED f_ref sets where the plausibility floor goes.
+    bf, bw = _fref_ip(vel, fs, metrics._RIDGE_LOW_BAND_BIAS)      # production (biased)
+    df, dw = _fref_ip(vel, fs, 0.0)                               # de-biased
+    r["bias_fref"], r["debias_fref"] = bf, df
+    r["bias_ip_s"] = bw[0] / fs if bw else float("nan")
+    r["debias_ip_s"] = dw[0] / fs if dw else float("nan")
 
     # ── ground-truth-anchored measurements (annotated sessions only) ──
     if breakout_s is not None:
@@ -213,6 +241,16 @@ def main():
     print(f"{'name':<16}{'f_ref':>7}{'uw_freq':>9}{'uw/ref':>8}")
     for r in results:
         print(f"{r['name'][:15]:<16}{r['f_ref_hz']:>7.2f}{r['uw_freq_hz']:>9.2f}{r['uw_over_ref']:>8.2f}")
+
+    print("\n65-02 lever — biased vs de-biased f_ref + ip_end (does removing _RIDGE_LOW_BAND_BIAS lift the rail?)")
+    print(f"{'name':<16}{'b_end':>6}{'bias_fref':>10}{'deb_fref':>9}{'bias_ip':>8}{'deb_ip':>8}")
+    for r in results:
+        print(f"{r['name'][:15]:<16}{r['b_end_s']:>6.1f}{r['bias_fref']:>10.2f}{r['debias_fref']:>9.2f}"
+              f"{r['bias_ip_s']:>8.2f}{r['debias_ip_s']:>8.2f}")
+    frefs = sorted(r["bias_fref"] for r in results if np.isfinite(r["bias_fref"]))
+    if frefs:
+        print(f"biased f_ref low tail (sorted): {[round(f, 2) for f in frefs[:6]]}")
+        print("-> _WINDOW_FMIN_HZ must sit ABOVE the rail (indigo ray ~0.33) and BELOW the lowest legit surface f_ref (~0.5).")
 
     print("\nGround-truth (annotated only): ip_end error + discriminating signals at the breakout")
     print(f"{'name':<16}{'true_bk':>8}{'ip_err':>7}{'cyc<bk':>7}{'mv_uw':>7}{'mv_sf':>7}{'a_uw':>7}{'a_sf':>7}{'a_sf/uw':>8}")

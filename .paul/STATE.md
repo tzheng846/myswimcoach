@@ -3,9 +3,20 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **65 (Underwater Phase Detection) — 65-01 DONE (phase 1/3); 65-02 next** · ⚠ **63 also open; 64 + 66 CLOSED**
-Plan: **65-01 (measurement) ✅ COMPLETE — decision recorded: Option A (repair `detect_swim_window`).
-  Next: `/paul:plan 65` → 65-02 (the fix).**
+Phase: **65 (Underwater Phase Detection) — 65-02 ✅ CLOSED (loop unified); 65-03 next (2/3 plans done)** · ⚠ **63 also open; 64 + 66 CLOSED**
+Plan: **65-02 (the fix) ✅ CLOSED — SUMMARY written, loop unified 2026-08-17. Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`. Next: `/paul:plan 65` → 65-03 (underwater metrics + web reporting), or pause.**
+  Shipped: local de-bias guard in `detect_swim_window`. `_cwt_ridge`/`_track_ridge` gained a
+  `low_band_bias` param (default 0.5 → `segment_cycles_wavelet` elementwise-identical); when
+  `f_ref < _WINDOW_FMIN_HZ` (**0.45**, set from data: rail 0.33 < 0.45 < min-legit 0.72) the ridge is
+  recomputed de-biased via the extracted `_window_from_ridge` helper. **Breaststroke EXEMPT (D2)** via
+  a threaded `stroke_type` — one-line change at `compute_session_metrics:774` (a justified boundary
+  nudge; record at UNIFY). RESULTS: indigo ray `ip_end` **2.7→7.1 s, 15→10 cycles** (source stays
+  swim_window, NOT the 16.6 s fallback); 12-session corpus **BYTE-IDENTICAL**; a **2nd butterfly rail
+  found + fixed** in the cross-stroke sweep; free/breast/back unchanged. Suite **282 passed**; fixture
+  regression **GREEN, ZERO re-baseline** (all 4 fixtures plausible, as T1 predicted → `test_segmenter_eval.py`
+  untouched). ⚠ NO DB writes/backfill — stored sessions show pre-fix numbers until 65-03. New TODO **#69**:
+  free/back breakout ~1–2 s EARLY (Mode-A residual, NOT this fix); acceleration evaluated + **REJECTED**
+  as a lever (it is `dv/dt` — no independent info; high-pass amplifies kicks); gate any fix on ground truth.
 Status: 65-01 closed — `tools/underwater_probe.py` (`--id` added) + `65-01-FINDINGS.md` + SUMMARY.
   ⭐ **Reported bug = Mode C:** `detect_swim_window` FIRES but `f_ref` rails LOW (indigo ray `6ececa0f`
   → 0.33 Hz) → `ip_end` collapses to `b_end` → dive+kicks = **15 cycles**. Fix (Option A, user-selected
@@ -14,8 +25,65 @@ Status: 65-01 closed — `tools/underwater_probe.py` (`--id` added) + `65-01-FIN
   both milder. D8 2×-harmonic REFUTED; amplitude refuted; accel inconclusive (dive-confounded). ⚠ n
   tiny (12+1, one swimmer, 0 back) — 65-02 must not regress the 11/12 Mode-A sessions. Also logged
   **ROADMAP #68** (persist generated session names; #67 is a separately-appearing external-camera-sync
-  phase, untracked, not mine). 63-02 owes checkpoint+unify.
-Last activity: 2026-08-16 — closed 65-01 (underwater diagnosis); decision Option A; next 65-02
+  phase — now TRACKED: discussed + 67-01 planned 2026-08-16). 63-02 owes checkpoint+unify.
+Last activity: 2026-08-16 — Phase 67 (External Camera Sync) discussed + 67-01 (push-off visual sync) PLAN created, awaiting approval; prior: closed 65-01, next 65-02
+
+### 67-02 CLOSED — ✅ PHASE 67 COMPLETE (2/2 plans), `030f6f9`+`e3ce464` (2026-08-17)
+✅ **UNIFIED + phase transition done:** 67-02-SUMMARY written, PROJECT.md evolved (external-camera
+sync shipped), ROADMAP Phase 67 → ✅ Complete. ⭐ **FREE-TIER PIVOT (user, via AskUserQuestion):** the
+user is on the Supabase FREE tier (hard 50 MB, unraiseable) — the plan's "raise cap to 500 MB" premise
+was invalidated mid-flight. Pivoted to **cap at 50 MB + guide manual compression (HandBrake/Quik) +
+defer real >50 MB to a Pro upgrade** (`e3ce464`), NOT throwaway in-browser transcoding. The blocking
+Supabase human-action checkpoint **DISSOLVED** (free tier: nothing to apply; `patch_11` reframed as
+the Pro-only flip). Suite 58/58, build exit 0, Railway health 200. ⚠ Real-clip UAT (align feel +
+<50 MB upload+play) OWED — needs a compressed clip. Pro upgrade = documented one-flip (raise global
+limit + bump two `MAX_VIDEO_BYTES` + apply `patch_11`). NOTE: `.paul` docs kept local (project
+habit); the concurrent Phase-65 session owns Current Position above — left untouched. Below = history.
+
+### 67-02 (superseded status) APPLIED — code shipped `030f6f9`, was BLOCKED at human-action checkpoint (2026-08-17)
+Production-size robustness. **3 auto tasks done + committed/pushed `030f6f9` (api.py→Railway,
+VideoPane→Vercel, patch_11 tracked); pytest 58/58, `npm run build` exit 0, `import api` clean.**
+(T1) `supabase/patch_11_video_size.sql` — `UPDATE storage.buckets SET file_size_limit = 524288000`
+(500 MB) on `videos`. (T2) api.py `MAX_VIDEO_BYTES = 500 MB` + a 413 size guard placed BEFORE
+`_get_supabase_admin()` (memory-safe: rejects pre-buffer) + upload now **streams** `file.file`
+(storage3 accepts a file object) instead of `await file.read()` — no full-file RAM copy; new
+`TestVideoUploadSizeGuard` monkeypatches the cap tiny → 413. (T3) VideoPane: client `MAX_VIDEO_BYTES`
+pre-upload reject-with-message, `onError` format hint on both `<video>`s, "H.264 .mp4 ≤500 MB" nudge.
+⛔ **STOP = checkpoint:human-action (the gate flagged at loop start):** user must (a) raise the
+Supabase PROJECT GLOBAL upload limit to ≥500 MB (Dashboard → Project Settings → Storage) — ⚠ if the
+plan tier caps below 500 MB, replan to client compression / resumable upload; (b) run patch_11 in the
+SQL editor. Then real-clip UAT (>50 MB upload+play+align) closes AC-3 + the 67-01 UAT together. After
+that: `/paul:unify` runs the **phase transition** (last plan of Phase 67 → evolve PROJECT.md + ROADMAP complete).
+
+### 67-01 CLOSED (loop UNIFIED 2026-08-17, `2aa58ca` → Vercel) — External camera push-off visual sync (web)
+✅ **APPLY DONE:** both auto tasks executed; `npm run build` green (exit 0), `/app/annotate/[id]`
+compiles; **+52 lines across the 2 web files, 0 deletions, panel-mode branch byte-identical (AC-4)**.
+No NEW lint errors — the annotate page is clean; VideoPane's single `set-state-in-effect` is
+PRE-EXISTING at `:105` (`setUrl(null)` in the signed-URL effect), one of the repo's 18. Committed
+`2aa58ca`, pushed → Vercel. ✅ UNIFIED 2026-08-17 — `67-01-SUMMARY.md` written; loop PLAN✓ APPLY✓
+UNIFY✓; **Phase 67 = 1/2 plans** (67-02 prod-size robustness next). ⚠ Real-GoPro upload/playback +
+"does it feel aligned" UAT is the USER's (can't be done without a clip).
+Phase 67 (External Camera Sync) discussed via `/paul:discuss`; CONTEXT.md + this plan written.
+`type:execute`, `autonomous:true`, `depends_on []`, wave 1. **2 files, both web:**
+`web/components/portal/VideoPane.js` + `web/app/app/annotate/[id]/page.js`. 2 auto tasks, 4 ACs.
+GOAL: one-tap **"Sync to push-off"** on the annotate video card — scrub the external clip to the
+push-off frame, click once → `origin = diveSessionTime − videoTime`; the existing "Save sync"
+persists. ⭐ **REPO-VERIFIED the phase is SMALLER than CONTEXT assumed:** `VideoPane` ALREADY does
+web upload (`attach()` `:260`), ±0.1 s nudge (`:225`), Save-sync (`:242`), and the 58-04 end-anchor
+auto-origin (`:86`,`:204`). The ONLY missing piece is the one-tap align; the end-anchor
+(`sessionDuration − videoDuration`) is WRONG for an external clip (video + session don't
+co-terminate) → dozens of nudges without it. **NO CV** (D2) — the dive session-time is the
+encoder's velocity spike, auto-computed by `build_seed` (`dive_start_s = baseline_end_s`,
+`annotations.py:114`), returned as `ann.seed.phases.*`; the coach only marks the video frame. Task 1
+adds a `pushoffSessionS` prop + `alignToPushoff()` (modelled on `nudge()`) + a "Sync to push-off"
+button in the WINDOWED sync row (`:443-472`), disabled+hinted when null; panel mode + end-anchor +
+attach/save/nudge untouched. Task 2 memoizes `pushoffSessionS = phases.dive_start_s ??
+phases.underwater_start_s ?? ann.seed.phases.dive_start_s ?? … ?? null` and passes it in (updates
+live when the coach moves the Dive marker; non-null with ZERO marks on auto-dive sessions). ⚠ Phase
+57 D6 blank-start preserved — the seed is read-only here. VERIFY with a <50 MB clip. ⚠ **NOT in
+this plan (→ 67-02):** the real robustness gates — `POST /video` `await file.read()` OOM + the
+`videos` bucket's missing `file_size_limit` (Supabase's ~50 MB default rejects real GoPro footage).
+uc1 (one long take → many sessions), CV, and clock-match all deferred.
 
 ### 66-01 PLAN (2026-08-16) — Savitzky–Golay acceleration derivative
 Backend, display-only. TRIGGER: the 64-03 accel trace is "extremely choppy" — the DATA is, not the
