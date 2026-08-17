@@ -7,7 +7,6 @@ import { apiFetch } from "@/lib/api";
 import MetricGrid, { SessionSummaryCard } from "@/components/portal/MetricGrid";
 import VelocityChart from "@/components/portal/VelocityChart";
 import AccelerationChart from "@/components/portal/AccelerationChart";
-import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import useTracePrefs from "@/lib/useTracePrefs";
 import TimeToX from "@/components/portal/TimeToX";
 import CycleCharts from "@/components/portal/CycleCharts";
@@ -57,10 +56,6 @@ export default function ReportCardPage({ params }) {
   const [view, setView] = useState("simple");
   const [markerTimeS, setMarkerTimeS] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
-  // Video, for the inline VideoTracePanel above the velocity chart (Phase 64 item 3). Kept
-  // separate from `data` so an inline attach/replace updates it without a full refetch. origin_s
-  // passes through as NULL when unset — the panel must tell "never stored" from "stored 0" (58-04).
-  const [video, setVideo] = useState(null);
 
   // Velocity/acceleration trace display prefs (Phase 64-03), shared with the /video route and
   // persisted. Owned here so the video overlay's toggles and the static charts below stay in sync.
@@ -120,7 +115,7 @@ export default function ReportCardPage({ params }) {
       const { data: row, error: err } = await supabase
         .from("sessions")
         .select(
-          "metrics_json, velocity_profile, distance_profile, acceleration_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz, video_path, video_origin_s"
+          "metrics_json, velocity_profile, distance_profile, acceleration_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz"
         )
         .eq("id", sessionId)
         .single();
@@ -130,11 +125,6 @@ export default function ReportCardPage({ params }) {
         return;
       }
       setData(row);
-      setVideo(
-        row.video_path
-          ? { path: row.video_path, origin_s: row.video_origin_s ?? null }
-          : null
-      );
       if (resetEditable) {
         setSessionName(row.name ?? "");
         setIsStarred(row.is_starred ?? false);
@@ -397,29 +387,15 @@ export default function ReportCardPage({ params }) {
           </div>
         )}
 
-        {/* Phase 64 item 3 — the video panel ITSELF, right above the velocity chart, replacing the
-            link that redirected to /app/sessions/[id]/video. The trace is laid over the video
-            (permanent), the window is adjustable, and a button on the panel goes fullscreen. When
-            no video is attached the panel collapses to a slim "Attach video" card. The standalone
-            /video route still exists as a deep-link; it just isn't the only way in anymore. */}
-        <VideoTracePanel
-          sessionId={sessionId}
-          velocity={vel}
-          acceleration={accel}
-          fsHz={fsHz}
-          cycles={metrics.cycles ?? []}
-          sessionDurationS={time.length ? time[time.length - 1] : null}
-          video={video}
-          onVideoChange={setVideo}
-          showVelocity={tracePrefs.showVelocity}
-          showAcceleration={tracePrefs.showAcceleration}
-          velColor={tracePrefs.velColor}
-          accelColor={tracePrefs.accelColor}
-          onToggleVelocity={tracePrefs.setShowVelocity}
-          onToggleAcceleration={tracePrefs.setShowAcceleration}
-          onVelColor={tracePrefs.setVelColor}
-          onAccelColor={tracePrefs.setAccelColor}
-        />
+        {/* Phase 69: video moved to the dedicated Videos page (report-card declutter). A compact
+            link replaces the inline VideoTracePanel; attach/sync/watch all live on /videos now. */}
+        <Link
+          href={`/app/sessions/${sessionId}/videos`}
+          className="flex items-center justify-between rounded-xl border border-navy/50 bg-surface px-4 py-3 hover:border-accent"
+        >
+          <span className="text-sm font-semibold text-ink">Videos</span>
+          <span className="text-xs text-muted">Attach and sync up to 4 camera angles ›</span>
+        </Link>
 
         {/* Velocity + acceleration charts (Phase 64-03) + unit toggle. Which traces show is
             controlled from the video panel's toggles above (page-level, so the two surfaces stay

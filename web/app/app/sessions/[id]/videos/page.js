@@ -5,6 +5,7 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { apiFetch, apiUpload } from "@/lib/api";
 import CameraTile from "@/components/portal/CameraTile";
+import MultiCamPlayer from "@/components/portal/MultiCamPlayer";
 
 // Dedicated Videos page (Phase 69). One place to attach up to 4 camera angles (phone + 3 external),
 // label + sync each to its push-off, and (69-03) watch them on one shared timeline. Pulls video
@@ -64,6 +65,9 @@ export default function SessionVideosPage({ params }) {
   // Push-off (dive) session time = when swim motion begins (baseline_end_s) — the Phase 67-01 align
   // target. Each camera scrubs to its own push-off frame and snaps to this one session-clock instant.
   const pushoffSessionS = row?.metrics_json?.session?.baseline_end_s ?? null;
+  const vel = row?.velocity_profile ?? [];
+  const fsHz = row?.sample_rate_hz > 0 ? row.sample_rate_hz : 100;
+  const sessionDurationS = vel.length ? (vel.length - 1) / fsHz : null;
 
   const externalCount = useMemo(
     () => videos.filter((v) => v.role === "external").length,
@@ -125,7 +129,21 @@ export default function SessionVideosPage({ params }) {
         so every camera lines up with the swim. External clips: H.264 .mp4, ≤50 MB.
       </p>
 
-      <div className={`mt-4 grid gap-3 ${gridCols}`}>
+      {videos.some((v) => v.url) && (
+        <div className="mt-4">
+          <MultiCamPlayer
+            videos={videos}
+            velocity={vel}
+            fsHz={fsHz}
+            sessionDurationS={sessionDurationS}
+          />
+        </div>
+      )}
+
+      <p className="mt-6 mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
+        Manage cameras
+      </p>
+      <div className={`grid gap-3 ${gridCols}`}>
         {videos.map((v) => (
           <CameraTile
             key={v.id}

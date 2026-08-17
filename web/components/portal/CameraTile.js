@@ -106,6 +106,7 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
           src={video.url}
           controls
           playsInline
+          preload="metadata"
           className="w-full max-h-[clamp(140px,26vh,360px)] rounded-lg bg-black object-contain"
         />
       ) : (
