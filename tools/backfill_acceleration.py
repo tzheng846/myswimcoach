@@ -5,12 +5,14 @@ Acceleration is a pure, deterministic function of velocity + sample rate
 interpolate back), so every existing row can be filled EXACTLY from data already in the database.
 No raw-CSV reprocessing, and the velocity_profile itself is never touched.
 
-    python tools/backfill_acceleration.py            # dry run: process every candidate, no writes
-    python tools/backfill_acceleration.py --apply     # perform the updates
+    python tools/backfill_acceleration.py                     # dry run: candidates, no writes
+    python tools/backfill_acceleration.py --apply              # fill NULL-acceleration rows
+    python tools/backfill_acceleration.py --recompute --apply  # OVERWRITE every row from velocity
 
-Idempotent and narrow: only rows where acceleration_profile IS NULL and velocity_profile IS NOT
-NULL are considered, so a re-run after a successful pass is a no-op and a row that already has an
-acceleration_profile is never overwritten.
+By default idempotent and narrow: only rows where acceleration_profile IS NULL and velocity_profile
+IS NOT NULL are considered, so a re-run after a successful pass is a no-op and a row that already has
+an acceleration_profile is never overwritten. --recompute drops the NULL filter and re-derives every
+velocity-bearing row — use it after the derivation itself changes (Phase 66: Savitzky-Golay).
 
 Requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env. The service-role key BYPASSES RLS and
 is used only as a request header, never printed. Acceleration values are derived signal (not
@@ -70,6 +72,9 @@ def main():
                     help="perform the updates (default is a dry run, no writes)")
     ap.add_argument("--dry-run", action="store_true",
                     help="explicit no-write mode (the default); overrides --apply if both are given")
+    ap.add_argument("--recompute", action="store_true",
+                    help="OVERWRITE existing acceleration too — re-derive every velocity-bearing row "
+                         "(use after the derivation changes, e.g. Phase 66). Default only fills NULLs.")
     args = ap.parse_args()
     write = args.apply and not args.dry_run
 
@@ -81,12 +86,15 @@ def main():
 
     db = Rest(url, key)
 
-    # Candidates: velocity present, acceleration absent. Light columns only for the sweep.
-    rows = db.select("sessions", "id,sample_rate_hz",
-                     acceleration_profile="is.null",
-                     velocity_profile="not.is.null",
-                     order="created_at.asc")
-    print(f"{len(rows)} session(s) need backfill (acceleration NULL, velocity present).")
+    # Candidates. Default: velocity present, acceleration absent (idempotent fill). --recompute:
+    # every row with a velocity_profile, overwriting whatever acceleration it already has (Phase 66
+    # re-backfill after the Savitzky-Golay derivation change). Light columns only for the sweep.
+    filters = {"velocity_profile": "not.is.null", "order": "created_at.asc"}
+    if not args.recompute:
+        filters["acceleration_profile"] = "is.null"
+    rows = db.select("sessions", "id,sample_rate_hz", **filters)
+    scope = "velocity present — RECOMPUTE (overwrite)" if args.recompute else "acceleration NULL, velocity present"
+    print(f"{len(rows)} session(s) to backfill ({scope}).")
     if not rows:
         print("Nothing to do.")
         return

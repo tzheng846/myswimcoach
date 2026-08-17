@@ -371,30 +371,42 @@ class TestCycleRegularityGate:
             "cycles are drifting through phases, which is the peakpick failure mode")
 
 
-# ── Acceleration extraction (Phase 64-02) ──────────────────────────────────────
+# ── Acceleration extraction (Phase 64-02 → Savitzky-Golay, Phase 66) ────────────
 
-def test_acceleration_from_velocity_matches_inline():
-    """The extracted acceleration_from_velocity() reproduces run_pipeline's prior INLINE accel
-    exactly. Production always has t[0] == 0 (load_data zeroes time_s at vel_acc_extraction.py:62),
-    so the `+ t[0]` the old code applied to both grids was `+ 0` and the 0-based function is
-    bit-identical — not merely numerically close."""
+def test_acceleration_from_velocity_savgol():
+    """Phase 66: acceleration is a Savitzky-Golay first derivative at the full sample rate. It
+    differentiates a line EXACTLY (constant acceleration) and tracks a known sinusoid's analytic
+    acceleration far more accurately than the old decimate->gradient->linear-interp reconstruction —
+    whose ~5 Hz bandwidth blunted peaks (~30%) and whose linear interp left visible facets. This
+    guards the DISPLAY signal only; no metric consumes acceleration."""
     import numpy as np
     import vel_acc_extraction as vae
 
-    rng = np.random.default_rng(0)
     fs = 89.5
     n = int(fs * 20)
-    vel = np.maximum(
-        0.0, 1.2 + 0.5 * np.sin(np.arange(n) / 20.0) + 0.02 * rng.standard_normal(n)
-    )
+    t = np.arange(n) / fs
 
-    # Inline form, exactly as run_pipeline computed it (with t[0] == 0):
-    vel_for_accel, t_for_accel, fs_for_accel = vae.decimate_signal(vel, fs, 5.0)
-    accel_coarse = np.gradient(vel_for_accel, 1.0 / fs_for_accel)
-    t_dec = np.arange(n) / fs
-    accel_inline = np.interp(t_dec, t_for_accel, accel_coarse)
+    # AC-2 — SG (polyorder >= 1) differentiates a linear velocity EXACTLY: constant acceleration.
+    ramp = 0.75 * t  # dv/dt == 0.75 everywhere
+    accel_ramp = vae.acceleration_from_velocity(ramp, fs)
+    assert accel_ramp.shape == (n,)
+    assert np.all(np.isfinite(accel_ramp))
+    assert np.allclose(accel_ramp, 0.75, atol=1e-6)
 
-    accel_fn = vae.acceleration_from_velocity(vel, fs)
+    # AC-1 — accuracy: a clean stroke-like sinusoid has a known analytic acceleration. SG tracks it;
+    # the old reconstruction does not (over-smoothed + faceted). Compare interior RMS error.
+    A, f = 0.6, 1.1
+    vel = 1.0 + A * np.sin(2 * np.pi * f * t)
+    true = A * 2 * np.pi * f * np.cos(2 * np.pi * f * t)
 
-    assert accel_fn.shape == (n,)
-    np.testing.assert_array_equal(accel_fn, accel_inline)
+    sg = vae.acceleration_from_velocity(vel, fs)
+    vd, td, fsd = vae.decimate_signal(vel, fs, 5.0)  # the old 5 Hz reconstruction, for contrast
+    old = np.interp(t, td, np.gradient(vd, 1.0 / fsd))
+
+    core = slice(100, -100)  # ignore edge transients
+    rms = lambda x: float(np.sqrt(np.mean((x[core] - true[core]) ** 2)))
+    assert rms(sg) < rms(old)  # SG is markedly closer to the analytic truth
+    assert rms(sg) < 0.05 * rms(old)  # ...by well over an order of magnitude
+
+    # Peak amplitude — the "definition too low" the old 5 Hz path caused by crushing peaks ~30%.
+    assert np.max(sg[core]) > 0.95 * float(np.max(true[core]))

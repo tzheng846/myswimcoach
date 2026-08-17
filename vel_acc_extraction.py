@@ -2,7 +2,7 @@ import argparse
 import webbrowser
 import numpy as np
 import pandas as pd
-from scipy.signal import decimate
+from scipy.signal import decimate, savgol_filter
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
@@ -100,20 +100,29 @@ def decimate_signal(dist_native, native_fs, target_fs):
 
 
 def acceleration_from_velocity(vel, fs):
-    """Acceleration (m/s^2) exactly as the pipeline derives it: decimate velocity to 5 Hz, take
-    np.gradient, interpolate back to velocity's own rate. A PURE function of (vel, fs) — the single
-    source of truth shared by run_pipeline (the /process write) and tools/backfill_acceleration.py
-    (the exact backfill of existing rows).
+    """Acceleration (m/s^2): a Savitzky-Golay first derivative of velocity at the FULL sample rate.
+    A PURE function of (vel, fs) — the single source of truth shared by run_pipeline (the /process
+    write) and tools/backfill_acceleration.py (the exact re-backfill of existing rows).
 
-    The `+ t[0]` time offset run_pipeline applies to both grids cancels inside np.interp (a common
-    shift of x and xp leaves the result unchanged), so this 0-based form is element-wise identical
-    to the previous inline computation.
+    SG fits a local cubic over a short sliding window and returns its analytic derivative at every
+    sample, so it smooths and differentiates in one pass without the noise blow-up of a plain finite
+    difference. This REPLACED (Phase 66) a decimate-to-5-Hz -> np.gradient -> linear-interpolate-back
+    reconstruction, which carried only ~2.5 Hz of bandwidth drawn as straight segments ~0.2 s apart
+    and read as choppy. Display-only: no metric consumes acceleration, and velocity is untouched.
+
+    Window ~0.25 s (odd, > polyorder). A clip too short for a valid window falls back to a plain
+    gradient so a 2 s recording — or any edge case — never raises.
     """
     vel = np.asarray(vel, dtype=float)
-    vel_for_accel, t_for_accel, fs_for_accel = decimate_signal(vel, fs, 5.0)
-    accel_coarse = np.gradient(vel_for_accel, 1.0 / fs_for_accel)
-    t_dec = np.arange(len(vel)) / fs
-    return np.interp(t_dec, t_for_accel, accel_coarse)
+    n = vel.size
+    polyorder = 3
+    if n <= polyorder + 1:  # < 5 samples: too short for any valid SG window
+        return np.gradient(vel, 1.0 / fs) if n > 1 else np.zeros(n)
+    win = int(round(0.25 * fs)) | 1        # ~0.25 s, forced odd
+    win = max(win, polyorder + 2)          # keep window_length > polyorder
+    if win > n:
+        win = n if n % 2 else n - 1        # largest odd window that fits
+    return savgol_filter(vel, win, polyorder, deriv=1, delta=1.0 / fs, mode="interp")
 
 
 def run_pipeline(df, target_fs_hz=100.0):
