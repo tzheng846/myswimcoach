@@ -104,6 +104,20 @@ export default function AnnotatePage({ params }) {
     [vel.length, fsHz]
   );
 
+  // Phase 67 — the align target for VideoPane's "Sync to push-off". Prefer a coach-placed Dive /
+  // Underwater marker; fall back to the auto seed's dive (build_seed sets dive_start_s =
+  // baseline_end_s). Read-only use of the seed — Phase 57 D6's blank editor start is untouched, so
+  // this enables one-tap sync with ZERO marks placed yet follows a placed Dive mark when there is one.
+  const pushoffSessionS = useMemo(
+    () =>
+      phases.dive_start_s ??
+      phases.underwater_start_s ??
+      ann?.seed?.phases?.dive_start_s ??
+      ann?.seed?.phases?.underwater_start_s ??
+      null,
+    [phases.dive_start_s, phases.underwater_start_s, ann]
+  );
+
   // Snapshot before every mutation so undo can restore it.
   const pushUndo = useCallback(() => {
     undoRef.current.push({ phases, strokeMarks });
@@ -434,6 +448,7 @@ export default function AnnotatePage({ params }) {
             // phone-uploaded video (no stored origin) opens here silently unsynced — which is
             // exactly the case this page exists to serve.
             sessionDurationS={time.length ? time[time.length - 1] : null}
+            pushoffSessionS={pushoffSessionS}
           />
           <AnnotationChart
             time={time}

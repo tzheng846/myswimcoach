@@ -23,6 +23,7 @@ export default function VideoPane({
   frameStepRef, // ref; pane assigns frameStepRef.current = (frames) => void
   onVideoChange, // ({path, origin_s}) => void
   sessionDurationS = null, // encoder-trace duration; drives the end-anchored origin (58-04)
+  pushoffSessionS = null, // Phase 67 — external-camera push-off align target (dive/push-off session-time); null disables the align button
   // Phase 64 — panel mode, used ONLY by VideoTracePanel. ALL of these default to the pre-64
   // behaviour, so the annotate page (which passes none of them) hits the unchanged windowed card.
   panel = false, // render a fill-video + PlaybackControls instead of the card + native controls
@@ -228,6 +229,20 @@ export default function VideoPane({
     setOriginS(next);
     const v = videoRef.current;
     if (v) onPlayhead?.(next + v.currentTime);
+  };
+
+  // Phase 67 — external-camera one-tap sync. The coach scrubs the clip to the push-off frame; this
+  // maps that frame to the dive/push-off time on the SESSION clock, so origin = pushoffSessionS −
+  // videoTime. Sets originS as a live preview (exactly like nudge); the existing "Save sync"
+  // persists it — align stays a preview so this never becomes a second writer of video_origin_s.
+  // This is the coarse anchor that replaces dozens of ±0.1 s nudges for a clip that shares no clock
+  // with the encoder (the 44-03 end-anchor assumes they stop together, which an external cam never does).
+  const alignToPushoff = () => {
+    const v = videoRef.current;
+    if (!v || pushoffSessionS == null) return;
+    const next = Math.round((pushoffSessionS - v.currentTime) * 100) / 100;
+    setOriginS(next);
+    onPlayhead?.(next + v.currentTime);
   };
 
   // Mute is driven imperatively, not bound as a React prop — binding it would let React fight
@@ -439,6 +454,28 @@ export default function VideoPane({
             {r}×
           </button>
         ))}
+      </div>
+      {/* Phase 67 — one-tap external-camera sync: scrub to the push-off frame, then snap it to the
+          dive on the trace (coarse anchor). The ±0.1 s row below fine-tunes. Disabled + hinted when
+          no dive/push-off time is available (no seed and no placed Dive mark). */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        <button
+          onClick={alignToPushoff}
+          disabled={pushoffSessionS == null || !url}
+          className={`rounded-md px-2.5 py-1 font-semibold ${
+            pushoffSessionS != null && url
+              ? "border border-accent bg-accent text-white"
+              : "border border-surface-3 bg-surface-2 text-muted"
+          }`}
+          title="Set the sync so the current video frame is the dive/push-off"
+        >
+          Sync to push-off
+        </button>
+        <span className="text-muted">
+          {pushoffSessionS != null
+            ? "Scrub to the push-off frame, then click."
+            : "Place the Dive mark (or scrub + nudge) to enable one-tap sync."}
+        </span>
       </div>
       {/* Sync: sessionTime = origin + videoTime */}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
