@@ -1335,3 +1335,26 @@ class TestSessionVideos:
         vids = resp.json()["videos"]
         assert vids[0]["role"] == "phone" and vids[0]["label"] == "Phone"
         assert any(v["role"] == "external" and v["label"] == "Underwater" for v in vids)
+
+    def test_external_upload_passes_bytes_to_storage(self, api_client, monkeypatch):
+        # Regression guard: storage3 rejects a SpooledTemporaryFile, so the handler MUST pass bytes.
+        # (The 67-02 "streaming" bug passed file.file and 500'd every real upload; mocks hid it.)
+        import api
+        from unittest.mock import MagicMock
+        mock_admin = MagicMock()
+        mock_admin.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: mock_admin)
+        monkeypatch.setattr(api, "_owned_session", lambda *a, **k: (None, {}))
+        monkeypatch.setattr(api, "_signed_video_url", lambda sb, path: "signed://x")
+        resp = api_client.post(
+            "/sessions/sess-1/videos",
+            files={"file": ("ext.mp4", io.BytesIO(b"realbytes"), "video/mp4")},
+            headers={"Authorization": "Bearer fake"},
+        )
+        assert resp.status_code == 200, resp.text
+        up = mock_admin.storage.from_.return_value.upload
+        assert up.called
+        sent = up.call_args.kwargs.get("file")
+        assert isinstance(sent, (bytes, bytearray)), (
+            f"upload got {type(sent).__name__}; must be bytes (storage3 rejects SpooledTemporaryFile)"
+        )

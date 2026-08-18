@@ -1019,17 +1019,20 @@ async def upload_session_video(
 
     updates = {}
     if file is not None:
-        if file.size == 0:
+        # Read into memory and upload BYTES. ⚠ storage3 only accepts bytes / BufferedReader / FileIO;
+        # a Starlette SpooledTemporaryFile (`file.file`) is NONE of those, so passing it made storage3
+        # fall through to `open(file, "rb")` and raise TypeError — every upload 500'd (the 67-02
+        # "streaming" regression that broke phone Record-with-Video). The 413 size guard ABOVE runs
+        # before this read, so an oversized file is rejected pre-buffer — reading bytes here is
+        # memory-safe for anything within MAX_VIDEO_BYTES (50 MB fits in RAM fine).
+        video_bytes = await file.read()
+        if not video_bytes:
             raise HTTPException(status_code=422, detail="Empty video file")
         storage_path = f"{session_id}.mp4"
         try:
-            # Stream from the spooled temp file (Starlette spools multipart parts >1 MB to disk)
-            # instead of await file.read() — storage3 accepts a file object, so a 500 MB clip is
-            # never held whole in RAM. seek(0) is defensive: guarantee we upload from the start.
-            file.file.seek(0)
             sb_admin.storage.from_("videos").upload(
                 path=storage_path,
-                file=file.file,
+                file=video_bytes,
                 file_options={
                     "content-type": file.content_type or "video/mp4",
                     "x-upsert": "true",  # re-upload replaces the previous attachment
@@ -1184,16 +1187,18 @@ async def add_session_video(
             status_code=409, detail=f"Max {MAX_EXTERNAL_VIDEOS} external videos per session"
         )
 
-    if file.size == 0:
+    # Upload BYTES — storage3 rejects a SpooledTemporaryFile (`file.file`); the size guard above
+    # already rejected anything over MAX_VIDEO_BYTES pre-buffer, so this read is memory-safe.
+    video_bytes = await file.read()
+    if not video_bytes:
         raise HTTPException(status_code=422, detail="Empty video file")
 
     vid = str(uuid.uuid4())
     storage_path = f"{session_id}/{vid}.mp4"
     try:
-        file.file.seek(0)
         sb_admin.storage.from_("videos").upload(
             path=storage_path,
-            file=file.file,
+            file=video_bytes,
             file_options={
                 "content-type": file.content_type or "video/mp4",
                 "x-upsert": "true",
