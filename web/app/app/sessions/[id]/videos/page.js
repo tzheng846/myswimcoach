@@ -5,12 +5,11 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { apiFetch, apiUpload } from "@/lib/api";
 import CameraTile from "@/components/portal/CameraTile";
-import MultiCamPlayer from "@/components/portal/MultiCamPlayer";
 
-// Dedicated Videos page (Phase 69). One place to attach up to 4 camera angles (phone + 3 external),
-// label + sync each to its push-off, and (69-03) watch them on one shared timeline. Pulls video
-// management OFF the report card. The phone/primary comes from the legacy sessions columns; externals
-// live in session_videos — the GET /videos endpoint unifies them.
+// Dedicated Videos page (Phase 69, reworked per UAT). One place to attach up to 4 camera angles
+// (phone + 3 external) and sync each to its push-off, annotate-page style — ONE video per camera, no
+// separate synced player. Pulls video management OFF the report card. The phone/primary comes from the
+// legacy sessions columns; externals live in session_videos — the GET /videos endpoint unifies them.
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // matches api.py + patch_11 (free-tier ceiling)
 const MAX_EXTERNAL = 3;
 
@@ -38,7 +37,7 @@ export default function SessionVideosPage({ params }) {
     (async () => {
       const { data, error: err } = await supabase
         .from("sessions")
-        .select("velocity_profile, sample_rate_hz, name, created_at, athlete_id, metrics_json")
+        .select("name, created_at, athlete_id, metrics_json")
         .eq("id", sessionId)
         .single();
       if (!alive) return;
@@ -65,9 +64,6 @@ export default function SessionVideosPage({ params }) {
   // Push-off (dive) session time = when swim motion begins (baseline_end_s) — the Phase 67-01 align
   // target. Each camera scrubs to its own push-off frame and snaps to this one session-clock instant.
   const pushoffSessionS = row?.metrics_json?.session?.baseline_end_s ?? null;
-  const vel = row?.velocity_profile ?? [];
-  const fsHz = row?.sample_rate_hz > 0 ? row.sample_rate_hz : 100;
-  const sessionDurationS = vel.length ? (vel.length - 1) / fsHz : null;
 
   const externalCount = useMemo(
     () => videos.filter((v) => v.role === "external").length,
@@ -129,21 +125,7 @@ export default function SessionVideosPage({ params }) {
         so every camera lines up with the swim. External clips: H.264 .mp4, ≤50 MB.
       </p>
 
-      {videos.some((v) => v.url) && (
-        <div className="mt-4">
-          <MultiCamPlayer
-            videos={videos}
-            velocity={vel}
-            fsHz={fsHz}
-            sessionDurationS={sessionDurationS}
-          />
-        </div>
-      )}
-
-      <p className="mt-6 mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
-        Manage cameras
-      </p>
-      <div className={`grid gap-3 ${gridCols}`}>
+      <div className={`mt-4 grid gap-3 ${gridCols}`}>
         {videos.map((v) => (
           <CameraTile
             key={v.id}

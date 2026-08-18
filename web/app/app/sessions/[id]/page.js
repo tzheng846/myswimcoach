@@ -56,6 +56,7 @@ export default function ReportCardPage({ params }) {
   const [view, setView] = useState("simple");
   const [markerTimeS, setMarkerTimeS] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
+  const [videoCount, setVideoCount] = useState(null); // Phase 69 rework: report-card "Videos (N)" cue
 
   // Velocity/acceleration trace display prefs (Phase 64-03), shared with the /video route and
   // persisted. Owned here so the video overlay's toggles and the static charts below stay in sync.
@@ -160,6 +161,19 @@ export default function ReportCardPage({ params }) {
   useEffect(() => {
     load({ resetEditable: true });
   }, [load]);
+
+  // Phase 69 rework: a "Videos (N)" cue on the report card so an attached video is visible.
+  useEffect(() => {
+    let alive = true;
+    apiFetch(`/sessions/${sessionId}/videos`)
+      .then((r) => {
+        if (alive) setVideoCount((r.videos ?? []).length);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [sessionId]);
 
   // Revalidate on return, because mounting is the one moment a bfcache restore skips:
   // the browser brings the whole JS heap back, so React never re-runs and `data` keeps
@@ -393,8 +407,14 @@ export default function ReportCardPage({ params }) {
           href={`/app/sessions/${sessionId}/videos`}
           className="flex items-center justify-between rounded-xl border border-navy/50 bg-surface px-4 py-3 hover:border-accent"
         >
-          <span className="text-sm font-semibold text-ink">Videos</span>
-          <span className="text-xs text-muted">Attach and sync up to 4 camera angles ›</span>
+          <span className="text-sm font-semibold text-ink">
+            Videos{videoCount ? ` (${videoCount})` : ""}
+          </span>
+          <span className="text-xs text-muted">
+            {videoCount
+              ? "View and sync camera angles ›"
+              : "Attach and sync up to 4 camera angles ›"}
+          </span>
         </Link>
 
         {/* Velocity + acceleration charts (Phase 64-03) + unit toggle. Which traces show is
