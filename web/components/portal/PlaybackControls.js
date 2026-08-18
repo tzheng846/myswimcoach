@@ -73,6 +73,7 @@ export default function PlaybackControls({
   isFullscreen,
   onToggleFullscreen,
   dimmed = false,
+  readOnly = false, // watch-only (report card): hide the manual sync controls; syncing lives on /videos
 }) {
   const dirty = originS != null && originS !== savedOrigin;
   const chip = (active) =>
@@ -197,29 +198,34 @@ export default function PlaybackControls({
           />
         ))}
 
-        <span className="ml-2 text-muted">Sync</span>
-        <button onClick={() => onNudge(-0.1)} className={BTN}>
-          −0.1s
-        </button>
-        <span className="w-16 text-center font-mono text-ink">
-          {originS != null ? `${originS.toFixed(2)} s` : "—"}
-        </span>
-        <button onClick={() => onNudge(0.1)} className={BTN}>
-          +0.1s
-        </button>
-        <button
-          onClick={onSave}
-          disabled={busy || !dirty}
-          className={`rounded-md px-2.5 py-1 font-semibold ${
-            dirty ? "bg-accent text-white" : "bg-surface-2 text-muted"
-          }`}
-        >
-          {busy ? "…" : "Save sync"}
-        </button>
-        {/* stored vs computed — the only cue that a synced origin is real vs end-anchored. */}
-        <span className="font-mono text-[10px] text-muted">
-          {savedOrigin != null ? "stored" : "computed"}
-        </span>
+        {/* Manual sync — hidden in watch-only (report card); syncing lives on the Videos page. */}
+        {!readOnly && (
+          <>
+            <span className="ml-2 text-muted">Sync</span>
+            <button onClick={() => onNudge(-0.1)} className={BTN}>
+              −0.1s
+            </button>
+            <span className="w-16 text-center font-mono text-ink">
+              {originS != null ? `${originS.toFixed(2)} s` : "—"}
+            </span>
+            <button onClick={() => onNudge(0.1)} className={BTN}>
+              +0.1s
+            </button>
+            <button
+              onClick={onSave}
+              disabled={busy || !dirty}
+              className={`rounded-md px-2.5 py-1 font-semibold ${
+                dirty ? "bg-accent text-white" : "bg-surface-2 text-muted"
+              }`}
+            >
+              {busy ? "…" : "Save sync"}
+            </button>
+            {/* stored vs computed — the only cue that a synced origin is real vs end-anchored. */}
+            <span className="font-mono text-[10px] text-muted">
+              {savedOrigin != null ? "stored" : "computed"}
+            </span>
+          </>
+        )}
       </div>
     </div>
   );

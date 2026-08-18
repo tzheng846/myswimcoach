@@ -39,6 +39,7 @@ export default function VideoTracePanel({
   onToggleAcceleration, // (bool) => void
   onVelColor, // (hex) => void
   onAccelColor, // (hex) => void
+  readOnly = false, // watch-only (report card): video + trace + playback, but no manual sync controls
 }) {
   const stageRef = useRef(null);
   const videoElRef = useRef(null);
@@ -158,6 +159,7 @@ export default function VideoTracePanel({
         videoElRef={videoElRef}
         onOriginChange={setOverlayOriginS}
         panel
+        readOnly={readOnly}
         isFullscreen={isFullscreen}
         onToggleFullscreen={canFullscreen ? toggleFullscreen : undefined}
         windowSpanS={windowSpanS}

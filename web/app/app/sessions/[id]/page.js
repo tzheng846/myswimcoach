@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api";
 import MetricGrid, { SessionSummaryCard } from "@/components/portal/MetricGrid";
 import VelocityChart from "@/components/portal/VelocityChart";
 import AccelerationChart from "@/components/portal/AccelerationChart";
+import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import useTracePrefs from "@/lib/useTracePrefs";
 import TimeToX from "@/components/portal/TimeToX";
 import CycleCharts from "@/components/portal/CycleCharts";
@@ -57,6 +58,7 @@ export default function ReportCardPage({ params }) {
   const [markerTimeS, setMarkerTimeS] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
   const [videoCount, setVideoCount] = useState(null); // Phase 69 rework: report-card "Videos (N)" cue
+  const [video, setVideo] = useState(null); // primary video {path, origin_s} for the inline watch-only player
 
   // Velocity/acceleration trace display prefs (Phase 64-03), shared with the /video route and
   // persisted. Owned here so the video overlay's toggles and the static charts below stay in sync.
@@ -116,7 +118,7 @@ export default function ReportCardPage({ params }) {
       const { data: row, error: err } = await supabase
         .from("sessions")
         .select(
-          "metrics_json, velocity_profile, distance_profile, acceleration_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz"
+          "metrics_json, velocity_profile, distance_profile, acceleration_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz, video_path, video_origin_s"
         )
         .eq("id", sessionId)
         .single();
@@ -126,6 +128,11 @@ export default function ReportCardPage({ params }) {
         return;
       }
       setData(row);
+      setVideo(
+        row.video_path
+          ? { path: row.video_path, origin_s: row.video_origin_s ?? null }
+          : null
+      );
       if (resetEditable) {
         setSessionName(row.name ?? "");
         setIsStarred(row.is_starred ?? false);
@@ -401,21 +408,50 @@ export default function ReportCardPage({ params }) {
           </div>
         )}
 
-        {/* Phase 69: video moved to the dedicated Videos page (report-card declutter). A compact
-            link replaces the inline VideoTracePanel; attach/sync/watch all live on /videos now. */}
-        <Link
-          href={`/app/sessions/${sessionId}/videos`}
-          className="flex items-center justify-between rounded-xl border border-navy/50 bg-surface px-4 py-3 hover:border-accent"
-        >
-          <span className="text-sm font-semibold text-ink">
-            Videos{videoCount ? ` (${videoCount})` : ""}
-          </span>
-          <span className="text-xs text-muted">
-            {videoCount
-              ? "View and sync camera angles ›"
-              : "Attach and sync up to 4 camera angles ›"}
-          </span>
-        </Link>
+        {/* Phase 69 rework: the video is BACK on the report card, WATCH-ONLY (video + trace,
+            no attach card, no manual sync controls). Attaching + syncing live on the dedicated
+            Videos page — the "add video" action is deliberately separate from this feed. */}
+        {video ? (
+          <div>
+            <VideoTracePanel
+              readOnly
+              sessionId={sessionId}
+              velocity={vel}
+              acceleration={accel}
+              fsHz={fsHz}
+              cycles={metrics.cycles ?? []}
+              sessionDurationS={time.length ? time[time.length - 1] : null}
+              video={video}
+              onVideoChange={setVideo}
+              showVelocity={tracePrefs.showVelocity}
+              showAcceleration={tracePrefs.showAcceleration}
+              velColor={tracePrefs.velColor}
+              accelColor={tracePrefs.accelColor}
+              onToggleVelocity={tracePrefs.setShowVelocity}
+              onToggleAcceleration={tracePrefs.setShowAcceleration}
+              onVelColor={tracePrefs.setVelColor}
+              onAccelColor={tracePrefs.setAccelColor}
+            />
+            <div className="mt-1 text-right">
+              <Link
+                href={`/app/sessions/${sessionId}/videos`}
+                className="text-xs font-semibold text-primary"
+              >
+                Manage videos{videoCount ? ` (${videoCount})` : ""} ›
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <Link
+            href={`/app/sessions/${sessionId}/videos`}
+            className="flex items-center justify-between rounded-xl border border-navy/50 bg-surface px-4 py-3 hover:border-accent"
+          >
+            <span className="text-sm font-semibold text-ink">
+              Videos{videoCount ? ` (${videoCount})` : ""}
+            </span>
+            <span className="text-xs text-muted">Add and sync camera angles ›</span>
+          </Link>
+        )}
 
         {/* Velocity + acceleration charts (Phase 64-03) + unit toggle. Which traces show is
             controlled from the video panel's toggles above (page-level, so the two surfaces stay

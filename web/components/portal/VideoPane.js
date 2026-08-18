@@ -55,6 +55,7 @@ export default function VideoPane({
   playToggleRef, // ref; pane assigns playToggleRef.current = () => void (Space key)
   onOriginChange, // (effectiveOriginS | null) => void — the overlay needs the live origin
   dimmed = false, // auto-hide: fade the CONTROL BAR only (the trace above it never dims, item 1)
+  readOnly = false, // watch-only (report card): hide the manual sync controls in PlaybackControls
 }) {
   const videoRef = useRef(null);
   const [url, setUrl] = useState(null);
@@ -412,6 +413,7 @@ export default function VideoPane({
             isFullscreen={isFullscreen}
             onToggleFullscreen={onToggleFullscreen}
             dimmed={dimmed}
+            readOnly={readOnly}
           />
         </div>
         {msg && (
