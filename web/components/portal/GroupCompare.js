@@ -1,10 +1,10 @@
 "use client";
 
 // Phase 73 — Group Comparison (A/B experiments). Two labeled groups of ONE athlete's SAME-stroke
-// swims, compared across metrics. Headline = a mean-profile chart with ±1 SD ribbons (Option C):
-// where the two ribbons clear each other, the difference is real; where they overlap, it's noise.
-// Per-metric line charts (Option A) are a drill-down. Metrics only (no traces), no p-values (n is
-// tiny — CONTEXT D4). Web-only; reuses the Compare supabase-read + client-stats pattern.
+// swims, compared across metrics. Headline = DIFFERENCE BARS (one bar per metric = Group B vs A:
+// length = size of change, direction = which way B moved, colour = better/worse, faded = the groups
+// overlap so it's likely noise). Per-metric line charts are the drill-down. Metrics only (no traces),
+// no p-values (n is tiny — CONTEXT D4). Web-only; reuses the Compare supabase-read + client-stats path.
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
@@ -22,23 +22,8 @@ const STROKE_LABELS = {
   udk: "Underwater Dolphin Kick",
 };
 
-// Short axis labels so six sit on one chart without colliding.
-const SHORT_LABEL = {
-  mean_vel_ms: "Avg Speed",
-  max_vel_ms: "Top Speed",
-  stroke_rate_spm: "Stroke Rate",
-  mean_dps_m: "Dist/Stroke",
-  lap_time_s: "Lap Time",
-  cv_arm_peak_vel: "Consistency",
-};
-
-// Normalized axis position in [0,1], oriented so "up = better" for directional metrics.
-function normPos(v, lo, hi, dir) {
-  if (v == null || !Number.isFinite(v)) return null;
-  if (hi === lo) return 0.5;
-  const t = (v - lo) / (hi - lo);
-  return dir === "lower" ? 1 - t : t;
-}
+// Valence colours (match the per-metric delta text below): better / worse / no-better-side.
+const GOOD = "#3ecf8e", BAD = "#ff5252";
 
 const SEP = {
   clear: { text: "Clear difference", cls: "border-accent text-accent" },
@@ -51,68 +36,48 @@ function CueBadge({ separation }) {
   return <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>{text}</span>;
 }
 
-// ── HEADLINE: mean profile with ±SD ribbons across every metric ────────────────
-function MeanProfile({ rows, labelA, labelB }) {
-  const usable = rows.filter((r) => r.cmp.a.mean != null && r.cmp.b.mean != null);
-  if (usable.length < 2) return null;
+// ── HEADLINE: difference bars — Group B vs Group A, one bar per metric ──────────
+function DiffBars({ rows, labelA, labelB }) {
+  const data = rows
+    .filter((r) => r.cmp.a.mean != null && r.cmp.b.mean != null && r.cmp.a.mean !== 0)
+    .map((r) => {
+      const { cmp, metric } = r;
+      const pct = ((cmp.b.mean - cmp.a.mean) / Math.abs(cmp.a.mean)) * 100;
+      const valence = cmp.betterSide === "B" ? "good" : cmp.betterSide === "A" ? "bad" : "neutral";
+      return { metric, pct, valence, faded: cmp.separation !== "clear" };
+    });
+  if (data.length === 0) return null;
 
-  const N = usable.length;
-  const W = 920, H = 300, L = 44, R = 44, T = 34, B = 30;
-  const axisX = (j) => L + (N === 1 ? 0.5 : j / (N - 1)) * (W - L - R);
-  const y = (t) => T + (1 - t) * (H - T - B);
-
-  // Per-axis domain over both groups; precompute normalized mean + ±SD band edges.
-  const A = usable.map((r, j) => {
-    const { metric, cmp } = r;
-    const dir = metric.direction;
-    const lo = Math.min(cmp.a.min, cmp.b.min);
-    const hi = Math.max(cmp.a.max, cmp.b.max);
-    const edges = (g) => {
-      const sd = g.sd ?? 0;
-      const p1 = normPos(g.mean - sd, lo, hi, dir);
-      const p2 = normPos(g.mean + sd, lo, hi, dir);
-      return { mean: normPos(g.mean, lo, hi, dir), hi: Math.max(p1, p2), lo: Math.min(p1, p2) };
-    };
-    return { x: axisX(j), metric, cmp, a: edges(cmp.a), b: edges(cmp.b) };
-  });
-
-  const ribbon = (sel, fill) => {
-    let up = "", dn = "";
-    A.forEach((p, j) => { up += (j ? "L" : "M") + p.x + " " + y(sel(p).hi); });
-    for (let j = A.length - 1; j >= 0; j--) dn += "L" + A[j].x + " " + y(sel(A[j]).lo);
-    return up + dn + "Z";
-  };
-  const meanLine = (sel) => A.map((p, j) => (j ? "L" : "M") + p.x + " " + y(sel(p).mean)).join(" ");
+  const W = 720, rowH = 40, padT = 10, padB = 8, L = 152, R = 66;
+  const H = padT + padB + data.length * rowH;
+  const axis = L + (W - R - L) / 2;
+  const half = (W - R - L) / 2;
+  const maxAbs = Math.max(...data.map((d) => Math.abs(d.pct)), 1) * 1.12;
+  const x = (pct) => axis + (pct / maxAbs) * half;
+  const color = (v) => (v === "good" ? GOOD : v === "bad" ? BAD : "var(--muted, #93a3b8)");
 
   return (
     <div className="overflow-x-auto rounded-xl border border-surface-3 bg-surface p-3">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 520 }} role="img"
-        aria-label={`Mean profile of ${labelA} versus ${labelB} across metrics`}>
-        {/* axes + labels */}
-        {A.map((p) => {
-          const clear = p.cmp.separation === "clear";
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 460 }} role="img"
+        aria-label={`Difference in each metric, ${labelB} versus ${labelA}`}>
+        <line x1={axis} y1={padT} x2={axis} y2={H - padB} stroke="var(--line, #223044)" strokeWidth="1.5" />
+        {data.map((d, i) => {
+          const cy = padT + i * rowH + rowH / 2;
+          const c = color(d.valence);
+          const xe = x(d.pct);
+          const bx = Math.min(axis, xe), bw = Math.max(Math.abs(xe - axis), 1.5);
           return (
-            <g key={p.metric.key}>
-              <line x1={p.x} y1={T} x2={p.x} y2={H - B} stroke="var(--line, #223044)" strokeWidth="1" />
-              <text x={p.x} y={16} textAnchor="middle" fontSize="11.5" fontWeight="600"
-                fill={clear ? "var(--accent, #38d6a6)" : "var(--ink, #e9f0f8)"}
-                fontFamily="inherit">{SHORT_LABEL[p.metric.key] ?? p.metric.label}</text>
-              <text x={p.x} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--muted, #93a3b8)"
-                fontFamily="inherit">{p.metric.direction === "neutral" ? "neutral" : "↑ better"}</text>
+            <g key={d.metric.key} opacity={d.faded ? 0.4 : 1}>
+              <rect x={bx} y={cy - 10} width={bw} height={20} rx="4" fill={c} />
+              <text x={L - 12} y={cy + 4} textAnchor="end" fontSize="12" fontWeight="600"
+                fill="var(--ink, #e9f0f8)" fontFamily="inherit">{d.metric.label}</text>
+              <text x={xe + (d.pct >= 0 ? 8 : -8)} y={cy + 4} textAnchor={d.pct >= 0 ? "start" : "end"}
+                fontSize="11.5" fontWeight="600" fill={c} fontFamily="inherit">
+                {(d.pct >= 0 ? "+" : "") + d.pct.toFixed(1) + "%" + (d.faded ? " ~" : "")}
+              </text>
             </g>
           );
         })}
-        {/* ribbons (back) then mean lines (front) */}
-        <path d={ribbon((p) => p.a)} fill={COLOR_A} fillOpacity="0.14" />
-        <path d={ribbon((p) => p.b)} fill={COLOR_B} fillOpacity="0.14" />
-        <path d={meanLine((p) => p.a)} fill="none" stroke={COLOR_A} strokeWidth="3" strokeLinejoin="round" />
-        <path d={meanLine((p) => p.b)} fill="none" stroke={COLOR_B} strokeWidth="3" strokeLinejoin="round" />
-        {A.map((p) => (
-          <g key={`d${p.metric.key}`}>
-            <circle cx={p.x} cy={y(p.a.mean)} r="3.6" fill={COLOR_A} />
-            <circle cx={p.x} cy={y(p.b.mean)} r="3.6" fill={COLOR_B} />
-          </g>
-        ))}
       </svg>
     </div>
   );
@@ -128,15 +93,15 @@ function SmallMultiple({ metric, valuesA, valuesB, meanA, meanB }) {
   const maxN = Math.max(valuesA.length, valuesB.length);
   const x = (i) => L + (maxN <= 1 ? 0.5 : i / (maxN - 1)) * (W - L - R);
   const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-  const line = (vals, color, mean) => (
+  const line = (vals, colr, mean) => (
     <g>
       {mean != null && (
-        <line x1={L} y1={y(mean)} x2={W - R} y2={y(mean)} stroke={color} strokeWidth="1"
+        <line x1={L} y1={y(mean)} x2={W - R} y2={y(mean)} stroke={colr} strokeWidth="1"
           strokeDasharray="3 4" strokeOpacity="0.6" />
       )}
       <path d={vals.map((v, i) => (i ? "L" : "M") + x(i) + " " + y(v)).join(" ")} fill="none"
-        stroke={color} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
-      {vals.map((v, i) => <circle key={i} cx={x(i)} cy={y(v)} r="3.2" fill={color} />)}
+        stroke={colr} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
+      {vals.map((v, i) => <circle key={i} cx={x(i)} cy={y(v)} r="3.2" fill={colr} />)}
     </g>
   );
   return (
@@ -239,7 +204,7 @@ export default function GroupCompare({ athletes }) {
   const groupB = sessions.filter((s) => assignment[s.id] === "B");
   const ready = groupA.length >= 1 && groupB.length >= 1;
 
-  // Per-metric computed comparison (shared by the headline profile and the drill-down).
+  // Per-metric computed comparison (shared by the headline bars and the drill-down).
   const rows = useMemo(() => {
     if (!ready) return [];
     const valuesFor = (grp, key) => grp.map((s) => s.session?.[key]);
@@ -315,7 +280,7 @@ export default function GroupCompare({ athletes }) {
                     <div className="flex shrink-0 gap-1">
                       {["A", "B"].map((grp) => {
                         const active = g === grp;
-                        const color = grp === "A" ? COLOR_A : COLOR_B;
+                        const colr = grp === "A" ? COLOR_A : COLOR_B;
                         return (
                           <button
                             key={grp}
@@ -323,8 +288,8 @@ export default function GroupCompare({ athletes }) {
                             className="rounded-md border px-2.5 py-1 text-xs font-semibold"
                             style={
                               active
-                                ? { backgroundColor: color, borderColor: color, color: "#fff" }
-                                : { borderColor: "var(--surface-3, #333)", color }
+                                ? { backgroundColor: colr, borderColor: colr, color: "#fff" }
+                                : { borderColor: "var(--surface-3, #333)", color: colr }
                             }
                           >
                             {grp === "A" ? labelA || "A" : labelB || "B"}
@@ -342,15 +307,17 @@ export default function GroupCompare({ athletes }) {
 
       {ready ? (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
             <span style={{ color: COLOR_A }} className="font-semibold">{labelA} (n={groupA.length})</span>
             <span style={{ color: COLOR_B }} className="font-semibold">{labelB} (n={groupB.length})</span>
             <span className="text-muted">
-              each axis is its own scale · ↑ = better · where the ribbons clear each other, the difference is real
+              each bar = {labelB || "B"} vs {labelA || "A"} · length = size of change ·
+              <span style={{ color: GOOD }} className="font-medium"> green better</span> /
+              <span style={{ color: BAD }} className="font-medium"> red worse</span> · faded = overlapping
             </span>
           </div>
 
-          <MeanProfile rows={rows} labelA={labelA || "Group A"} labelB={labelB || "Group B"} />
+          <DiffBars rows={rows} labelA={labelA || "Group A"} labelB={labelB || "Group B"} />
 
           <button
             onClick={() => setShowDetail((v) => !v)}
