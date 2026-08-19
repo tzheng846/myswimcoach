@@ -9,6 +9,7 @@ const navLinks = [
   { href: "/app", label: "Dashboard" },
   { href: "/app/athletes", label: "Athletes" },
   { href: "/app/sessions", label: "Sessions" },
+  { href: "/app/match", label: "Match videos" },
   { href: "/app/compare", label: "Compare" },
   { href: "/app/reports", label: "Reports" },
 ];
