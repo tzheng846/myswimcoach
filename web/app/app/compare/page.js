@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import CompareChart, { COLOR_A, COLOR_B } from "@/components/portal/CompareChart";
 import VideoPane from "@/components/portal/VideoPane";
 import CompareCycleCharts from "@/components/portal/CompareCycleCharts";
+import GroupCompare from "@/components/portal/GroupCompare";
 import { sessionLabel, sessionDate } from "@/lib/sessionName";
 
 function SessionPicker({ side, athletes, value, onChange }) {
@@ -63,6 +64,7 @@ function SessionPicker({ side, athletes, value, onChange }) {
 
 export default function ComparePage() {
   const [athletes, setAthletes] = useState([]);
+  const [mode, setMode] = useState("swims"); // "swims" (two-swim) | "groups" (A/B experiment)
   const [idA, setIdA] = useState(null);
   const [idB, setIdB] = useState(null);
   const [rowA, setRowA] = useState(null);
@@ -182,10 +184,32 @@ export default function ComparePage() {
     <div>
       <h1 className="text-2xl font-bold">Compare</h1>
       <p className="mt-1 text-sm text-muted">
-        Pick two sessions — each trace is drawn on its own recorded sample rate, and deltas are
-        % change from the older (baseline) session.
+        {mode === "groups"
+          ? "Compare two groups of one athlete's same-stroke swims — the metrics tell you if a change made a difference."
+          : "Pick two sessions — each trace is drawn on its own recorded sample rate, and deltas are % change from the older (baseline) session."}
       </p>
 
+      <div className="mt-4 inline-flex rounded-lg border border-surface-3 bg-surface p-0.5 text-sm">
+        {[
+          { key: "swims", label: "Two swims" },
+          { key: "groups", label: "Groups" },
+        ].map((m) => (
+          <button
+            key={m.key}
+            onClick={() => setMode(m.key)}
+            className={`rounded-md px-3 py-1.5 font-semibold transition-colors ${
+              mode === m.key ? "bg-primary text-white" : "text-subtle hover:text-ink"
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "groups" && <GroupCompare athletes={athletes} />}
+
+      {mode === "swims" && (
+        <>
       <div className="mt-5 flex flex-col gap-4 sm:flex-row">
         <SessionPicker side="A" athletes={athletes} value={idA} onChange={setIdA} />
         <SessionPicker side="B" athletes={athletes} value={idB} onChange={setIdB} />
@@ -313,6 +337,8 @@ export default function ComparePage() {
         <p className="mt-10 text-center text-sm text-muted">
           Select two sessions to compare.
         </p>
+      )}
+        </>
       )}
     </div>
   );
