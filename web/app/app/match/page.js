@@ -8,6 +8,7 @@
 // follow-on (CONTEXT D4–D9).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import jsQR from "jsqr";
 import { supabase } from "@/lib/supabase";
 import { apiUpload } from "@/lib/api";
 import { sessionLabel } from "@/lib/sessionName";
@@ -90,6 +91,96 @@ function grabThumb(url) {
   });
 }
 
+// Seek a video element to time t; resolve true on `seeked`, false on timeout/failure.
+function seekTo(video, t) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      video.removeEventListener("seeked", onSeek);
+      resolve(v);
+    };
+    const onSeek = () => done(true);
+    const to = setTimeout(() => done(false), 3000);
+    video.addEventListener("seeked", onSeek, { once: true });
+    try {
+      video.currentTime = t;
+    } catch {
+      done(false);
+    }
+  });
+}
+
+// QR slate (Phase 70): scan a clip's early frames for a QR token (the coach films the phone's slate
+// at the start of the swim). Client-side jsQR (D5) — never throws; resolves the token string or null.
+function decodeQrToken(url) {
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    video.preload = "auto";
+    video.muted = true;
+    video.playsInline = true;
+    video.src = url;
+
+    let done = false;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      video.src = "";
+      resolve(val);
+    };
+    const timer = setTimeout(() => finish(null), 12000);
+    video.addEventListener("error", () => finish(null), { once: true });
+    video.addEventListener(
+      "loadedmetadata",
+      async () => {
+        try {
+          const dur = video.duration || 0;
+          const stamps = [0.3, 0.8, 1.3, 2, 3, 4.5].filter((t) => t <= Math.max(0.3, dur));
+          const w = Math.min(640, video.videoWidth || 640);
+          const scale = video.videoWidth ? w / video.videoWidth : 1;
+          const h = Math.max(1, Math.round((video.videoHeight || 360) * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          for (const t of stamps) {
+            // eslint-disable-next-line no-await-in-loop
+            const ok = await seekTo(video, t);
+            if (!ok) continue;
+            ctx.drawImage(video, 0, 0, w, h);
+            const img = ctx.getImageData(0, 0, w, h);
+            const res = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+            if (res && res.data) return finish(res.data.trim());
+          }
+        } catch {
+          /* fall through to null */
+        }
+        finish(null);
+      },
+      { once: true }
+    );
+  });
+}
+
+// Find the session carrying this recording_token (coach-scoped by RLS). Returns null on any error —
+// notably a DB where patch_13 has not been applied yet (unknown column) — so QR degrades to manual.
+async function lookupSessionByToken(token) {
+  try {
+    const { data, error } = await supabase
+      .from("sessions")
+      .select("id, created_at, name, stroke_type, athlete_id, video_path")
+      .eq("recording_token", token)
+      .limit(1);
+    if (error) return null;
+    return data?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default function MatchPage() {
   const [clips, setClips] = useState([]);
   const [athletes, setAthletes] = useState([]);
@@ -139,6 +230,9 @@ export default function MatchPage() {
           status: "staged", // staged | uploading | done | error
           error: null,
           sessionId: "",
+          qrStatus: "scanning", // scanning | matched | none
+          qrToken: null,
+          qrSession: null,
         };
       });
       setClips((prev) => [...prev, ...staged]);
@@ -147,6 +241,25 @@ export default function MatchPage() {
         grabThumb(clip.url)
           .then(({ dataUrl, durationS }) => patchClip(clip.id, { thumb: dataUrl, durationS }))
           .catch(() => patchClip(clip.id, { thumbFailed: true }));
+        // QR pre-fill (Phase 70 slate): scan for a token, then look up its session. Fully optional —
+        // any failure just leaves the clip on the manual path.
+        decodeQrToken(clip.url)
+          .then(async (token) => {
+            if (!token) return patchClip(clip.id, { qrStatus: "none" });
+            const s = await lookupSessionByToken(token);
+            if (s) {
+              // Only auto-fill when the coach hasn't already chosen a session (QR is an accelerator).
+              patchClip(clip.id, (c) => ({
+                qrToken: token,
+                qrSession: s,
+                qrStatus: "matched",
+                sessionId: c.sessionId || s.id,
+              }));
+            } else {
+              patchClip(clip.id, { qrToken: token, qrStatus: "none" });
+            }
+          })
+          .catch(() => patchClip(clip.id, { qrStatus: "none" }));
       });
       // Allow re-picking the same file(s) later.
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -283,6 +396,11 @@ export default function MatchPage() {
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {clips.map((clip) => {
             const chosen = clip.sessionId ? sessionById.get(clip.sessionId) : null;
+            // A QR-matched session must be selectable even if the athlete filter would hide it.
+            const options =
+              clip.qrSession && !pickerSessions.some((s) => s.id === clip.qrSession.id)
+                ? [clip.qrSession, ...pickerSessions]
+                : pickerSessions;
             return (
               <div
                 key={clip.id}
@@ -324,14 +442,23 @@ export default function MatchPage() {
                     </p>
                   )}
 
+                  {clip.qrStatus === "matched" ? (
+                    <p className="mt-3 text-xs font-medium text-primary">✓ Matched by QR — confirm or change</p>
+                  ) : clip.qrStatus === "scanning" ? (
+                    <p className="mt-3 text-xs text-muted">Scanning for QR…</p>
+                  ) : (
+                    <div className="mt-3" />
+                  )}
                   <select
                     value={clip.sessionId}
                     onChange={(e) => patchClip(clip.id, { sessionId: e.target.value, error: null })}
                     disabled={clip.status === "done" || clip.status === "uploading"}
-                    className="mt-3 w-full rounded-lg border border-surface-3 bg-surface-2 px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60"
+                    className={`mt-1 w-full rounded-lg border bg-surface-2 px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60 ${
+                      clip.qrStatus === "matched" ? "border-primary" : "border-surface-3"
+                    }`}
                   >
                     <option value="">Choose session…</option>
-                    {pickerSessions.map((s) => (
+                    {options.map((s) => (
                       <option key={s.id} value={s.id}>
                         {sessionLabel(s, { withStroke: true })}
                         {s.video_path ? " · 📹" : ""}
