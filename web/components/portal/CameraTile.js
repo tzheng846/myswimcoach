@@ -1,16 +1,32 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiUpload } from "@/lib/api";
 
 const FRAME_S = 1 / 30;
 const RATES = [0.25, 0.5, 1];
 
-// One camera, annotate-page style (Phase 69, reworked per UAT): a SINGLE video with frame-step,
-// speed, one-tap push-off sync, ±0.1 s nudge, and an explicit Save — the same workflow as
-// /app/annotate/[id], so there is one video per camera (no separate synced player). Externals
-// persist via PATCH /videos/{id}; the phone/primary via the legacy POST /video.
-export default function CameraTile({ sessionId, video, pushoffSessionS, onChanged }) {
+// One camera on the annotate multi-cam hub (Phase 71). A single <video> with frame-step, speed,
+// MANUAL two-point align ("Set sync" → click the trace at the same moment), ±0.1 s nudge, and an
+// explicit Save. When `active`, it drives the trace playhead / seek / frame-step for mark placing.
+// Externals persist via PATCH /videos/{id}; the phone/primary via the legacy POST /video.
+// ⚠ No push-off / dive detection anywhere (removed 71-02, D10) — alignment is coach-controlled.
+export default function CameraTile({
+  sessionId,
+  video,
+  active = false,
+  aligning = false,
+  alignClick, // { time, seq } — bumped by the parent when the coach clicks the trace in align mode
+  onArmAlign, // () => void — "Set sync": arm this camera for the next trace click
+  onAlignConsumed, // () => void — this camera used the trace click; parent clears align mode
+  onMakeActive, // () => void
+  onPlayhead, // (sessionTimeS) => void — called only while active
+  // ⚠ NO `= null` defaults on the ref props (react-hooks/immutability treats a defaulted prop as a
+  // local and flags assigning to `.current`). `undefined` guards identically (`if (!ref) return`).
+  seekRef, // ref; assigned only while active
+  frameStepRef, // ref; assigned only while active
+  onChanged, // () => void — refetch the list after delete (NOT after save/label — avoids url churn)
+}) {
   const videoRef = useRef(null);
   const [label, setLabel] = useState(video.label ?? "");
   const [origin, setOrigin] = useState(video.origin_s ?? null); // pending origin
@@ -21,29 +37,67 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
 
   const isPrimary = video.role === "phone";
   const dirty = origin != null && origin !== savedOrigin;
+  const effectiveOrigin = origin ?? savedOrigin;
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.playbackRate = rate;
   }, [rate, video.url]);
 
-  const step = (frames) => {
+  // sessionTime = origin + videoTime — reported to the parent only while this is the active camera.
+  const reportPlayhead = useCallback(() => {
+    const v = videoRef.current;
+    if (active && v && effectiveOrigin != null) onPlayhead?.(effectiveOrigin + v.currentTime);
+  }, [active, effectiveOrigin, onPlayhead]);
+
+  const step = useCallback(
+    (frames) => {
+      const v = videoRef.current;
+      if (!v) return;
+      v.pause();
+      const d = Number.isFinite(v.duration) ? v.duration : 0;
+      const next = v.currentTime + frames * FRAME_S;
+      v.currentTime = Math.min(Math.max(next, 0), d || Math.max(next, 0));
+      reportPlayhead();
+    },
+    [reportPlayhead]
+  );
+
+  // Marking wiring: while active, this camera answers the chart's Seek tool and keyboard frame-step.
+  // No cleanup-null: only the active tile assigns, so the shared ref holds the newest active fn —
+  // nulling in cleanup would race across tiles when the active camera switches.
+  useEffect(() => {
+    if (!active || !seekRef) return;
+    seekRef.current = (sessionT) => {
+      const v = videoRef.current;
+      if (!v || effectiveOrigin == null) return;
+      const d = Number.isFinite(v.duration) ? v.duration : 0;
+      v.currentTime = Math.min(Math.max(sessionT - effectiveOrigin, 0), d);
+      reportPlayhead();
+    };
+  }, [active, seekRef, effectiveOrigin, reportPlayhead]);
+
+  useEffect(() => {
+    if (!active || !frameStepRef) return;
+    frameStepRef.current = step;
+  }, [active, frameStepRef, step]);
+
+  // Two-point align: when armed (aligning) and the coach clicks the trace, the parent bumps
+  // alignClick.seq; map the CURRENT video frame to that trace time → origin = traceTime − videoTime.
+  const lastAlignSeq = useRef(0);
+  useEffect(() => {
+    if (!aligning || !alignClick || alignClick.time == null) return;
+    if (alignClick.seq === lastAlignSeq.current) return;
+    lastAlignSeq.current = alignClick.seq;
     const v = videoRef.current;
     if (!v) return;
-    v.pause();
-    const d = Number.isFinite(v.duration) ? v.duration : 0;
-    const next = v.currentTime + frames * FRAME_S;
-    v.currentTime = Math.min(Math.max(next, 0), d || Math.max(next, 0));
-  };
-
-  const syncToPushoff = () => {
-    const v = videoRef.current;
-    if (!v || pushoffSessionS == null) return;
-    setOrigin(Math.round((pushoffSessionS - v.currentTime) * 100) / 100);
-  };
+    setOrigin(Math.round((alignClick.time - v.currentTime) * 100) / 100);
+    onAlignConsumed?.();
+  }, [aligning, alignClick, onAlignConsumed]);
 
   const nudge = (d) => {
-    if (origin == null) return;
-    setOrigin(Math.round((origin + d) * 100) / 100);
+    const base = origin ?? savedOrigin;
+    if (base == null) return;
+    setOrigin(Math.round((base + d) * 100) / 100);
   };
 
   const saveSync = async () => {
@@ -63,7 +117,6 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
       }
       setSavedOrigin(origin);
       setMsg("Saved ✓");
-      onChanged?.();
     } catch (e) {
       setMsg(`Save failed: ${e.message}`);
     } finally {
@@ -79,7 +132,6 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
         method: "PATCH",
         body: JSON.stringify({ label }),
       });
-      onChanged?.();
     } catch (e) {
       setMsg(`Rename failed: ${e.message}`);
     } finally {
@@ -101,7 +153,7 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
   };
 
   return (
-    <div className="rounded-xl border border-navy/50 bg-surface p-3">
+    <div className={`rounded-xl border ${active ? "border-accent" : "border-navy/50"} bg-surface p-3`}>
       <div className="mb-2 flex items-center justify-between gap-2">
         {isPrimary ? (
           <span className="text-sm font-semibold text-ink">Phone</span>
@@ -114,9 +166,18 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
             className="min-w-0 flex-1 rounded-md border border-surface-3 bg-surface-2 px-2 py-1 text-sm text-ink placeholder:text-muted"
           />
         )}
-        <span className={`shrink-0 text-[11px] ${savedOrigin != null ? "text-success" : "text-warning"}`}>
-          {savedOrigin != null ? "synced" : "needs sync"}
-        </span>
+        {active ? (
+          <span className="shrink-0 rounded-md bg-accent px-2 py-0.5 text-[11px] font-semibold text-white">
+            ● Marking
+          </span>
+        ) : (
+          <button
+            onClick={onMakeActive}
+            className="shrink-0 rounded-md border border-surface-3 bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-subtle hover:text-ink"
+          >
+            Mark from this
+          </button>
+        )}
       </div>
 
       {video.url ? (
@@ -126,13 +187,14 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
           controls
           playsInline
           preload="metadata"
+          onTimeUpdate={reportPlayhead}
           className="w-full max-h-[clamp(140px,26vh,360px)] rounded-lg bg-black object-contain"
         />
       ) : (
         <p className="py-6 text-center text-xs text-muted">Video unavailable.</p>
       )}
 
-      {/* Frame step + speed — same as the annotate page */}
+      {/* Frame step + speed + sync status */}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         <button onClick={() => step(-1)} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">−1 frame</button>
         <button onClick={() => step(1)} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">+1 frame</button>
@@ -148,23 +210,25 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
             {r}×
           </button>
         ))}
+        <span className={`ml-auto text-[11px] ${savedOrigin != null ? "text-success" : "text-warning"}`}>
+          {savedOrigin != null ? "synced" : "needs sync"}
+        </span>
       </div>
 
-      {/* Push-off sync + nudge + save — same workflow as the annotate page */}
+      {/* Manual two-point align + nudge + save (no push-off, no dive detection — D10/D11) */}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         <button
-          onClick={syncToPushoff}
-          disabled={pushoffSessionS == null}
+          onClick={onArmAlign}
           className={`rounded-md px-2.5 py-1 font-semibold ${
-            pushoffSessionS != null ? "border border-accent bg-accent text-white" : "border border-surface-3 bg-surface-2 text-muted"
+            aligning ? "border border-accent bg-accent text-white" : "border border-accent text-primary"
           }`}
-          title="Scrub the video to the push-off frame, then sync"
+          title="Scrub to a landmark frame, click this, then click the trace at the same moment"
         >
-          Sync to push-off
+          {aligning ? "Click the trace…" : "Set sync"}
         </button>
-        <button onClick={() => nudge(-0.1)} disabled={origin == null} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">−0.1s</button>
-        <span className="w-14 text-center font-mono text-ink">{origin != null ? `${origin.toFixed(2)} s` : "—"}</span>
-        <button onClick={() => nudge(0.1)} disabled={origin == null} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">+0.1s</button>
+        <button onClick={() => nudge(-0.1)} disabled={effectiveOrigin == null} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">−0.1s</button>
+        <span className="w-14 text-center font-mono text-ink">{effectiveOrigin != null ? `${effectiveOrigin.toFixed(2)} s` : "—"}</span>
+        <button onClick={() => nudge(0.1)} disabled={effectiveOrigin == null} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">+0.1s</button>
         <button
           onClick={saveSync}
           disabled={busy || !dirty}
@@ -176,9 +240,9 @@ export default function CameraTile({ sessionId, video, pushoffSessionS, onChange
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <p className="text-[11px] text-muted">
-          {pushoffSessionS == null
-            ? "Set the dive on the annotate page to enable one-tap sync."
-            : "Scrub to the push-off frame, then Sync → Save."}
+          {aligning
+            ? "Now click the trace at the same moment shown in this video."
+            : "Scrub to a landmark, click Set sync, then click the trace at that instant."}
         </p>
         {!isPrimary && (
           <button onClick={remove} disabled={busy} className="shrink-0 text-[11px] font-semibold text-subtle hover:text-danger">

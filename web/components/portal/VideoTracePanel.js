@@ -54,7 +54,7 @@ export default function VideoTracePanel({
   const [windowSpanS, setWindowSpanS] = useState(null); // null = whole swim (All), the default
   const [overlayOriginS, setOverlayOriginS] = useState(null);
 
-  const hasVideo = !!video?.path;
+  const hasVideo = !!(video?.url || video?.path);
 
   // Trace colour + visibility are now page-owned (persisted via useTracePrefs) so both the overlay
   // and the static charts move together — this panel no longer holds that state.

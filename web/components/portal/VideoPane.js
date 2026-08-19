@@ -27,7 +27,6 @@ export default function VideoPane({
   frameStepRef, // ref; pane assigns frameStepRef.current = (frames) => void
   onVideoChange, // ({path, origin_s}) => void
   sessionDurationS = null, // encoder-trace duration; drives the end-anchored origin (58-04)
-  pushoffSessionS = null, // Phase 67 — external-camera push-off align target (dive/push-off session-time); null disables the align button
   // Phase 64 — panel mode, used ONLY by VideoTracePanel. ALL of these default to the pre-64
   // behaviour, so the annotate page (which passes none of them) hits the unchanged windowed card.
   panel = false, // render a fill-video + PlaybackControls instead of the card + native controls
@@ -97,7 +96,10 @@ export default function VideoPane({
   // The origin actually in effect. Stored ALWAYS wins (Phase 60-03 D11 as amended: never
   // overwrite an existing origin); otherwise fall back to the computed one. Stays null until
   // video metadata arrives — deliberately NOT 0, or the trace would jump when it loads.
-  const effectiveOriginS = originS ?? endAnchoredOriginS;
+  // Phase 71: the end-anchor (sessionDuration − videoDuration) is a PHONE-only convention
+  // (recording and filming stop together). An external shares no clock with the encoder, so it
+  // must NOT inherit the end-anchor — an unsynced external stays null (unaligned) until synced.
+  const effectiveOriginS = originS ?? (video?.path ? endAnchoredOriginS : null);
 
   // Separate refs on purpose. Phase 60-03 hit a real bug by sharing one: the manual-nudge save
   // was gated on the ref the auto-post set, so skipping the auto-post silently swallowed the
@@ -105,7 +107,17 @@ export default function VideoPane({
   const autoSavedRef = useRef(false);
 
   // Signed URL expires (3600 s) — always refetched on mount, never persisted.
+  // Phase 71: a unified-list camera (GET /videos) arrives with the signed URL already in hand
+  // (video.url); use it directly and skip the legacy path→/video-url fetch. Origin rides along too.
   useEffect(() => {
+    if (video?.url) {
+      setUrl(video.url);
+      if (video.origin_s != null) {
+        setOriginS(video.origin_s);
+        setSavedOrigin(video.origin_s);
+      }
+      return;
+    }
     if (!video?.path) {
       setUrl(null);
       return;
@@ -127,7 +139,7 @@ export default function VideoPane({
     return () => {
       alive = false;
     };
-  }, [sessionId, video?.path]);
+  }, [sessionId, video?.path, video?.url]);
 
   // Expose seek to the page (Seek tool routes chart clicks here).
   useEffect(() => {
@@ -236,20 +248,6 @@ export default function VideoPane({
     if (v) onPlayhead?.(next + v.currentTime);
   };
 
-  // Phase 67 — external-camera one-tap sync. The coach scrubs the clip to the push-off frame; this
-  // maps that frame to the dive/push-off time on the SESSION clock, so origin = pushoffSessionS −
-  // videoTime. Sets originS as a live preview (exactly like nudge); the existing "Save sync"
-  // persists it — align stays a preview so this never becomes a second writer of video_origin_s.
-  // This is the coarse anchor that replaces dozens of ±0.1 s nudges for a clip that shares no clock
-  // with the encoder (the 44-03 end-anchor assumes they stop together, which an external cam never does).
-  const alignToPushoff = () => {
-    const v = videoRef.current;
-    if (!v || pushoffSessionS == null) return;
-    const next = Math.round((pushoffSessionS - v.currentTime) * 100) / 100;
-    setOriginS(next);
-    onPlayhead?.(next + v.currentTime);
-  };
-
   // Mute is driven imperatively, not bound as a React prop — binding it would let React fight
   // the native control bar in windowed mode. `onVolumeChange` on the element keeps state honest.
   const toggleMute = () => {
@@ -312,7 +310,7 @@ export default function VideoPane({
     }
   };
 
-  if (!video?.path) {
+  if (!(video?.url || video?.path)) {
     return (
       <div className="rounded-xl border border-navy/50 bg-surface p-4">
         <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
@@ -478,28 +476,6 @@ export default function VideoPane({
             {r}×
           </button>
         ))}
-      </div>
-      {/* Phase 67 — one-tap external-camera sync: scrub to the push-off frame, then snap it to the
-          dive on the trace (coarse anchor). The ±0.1 s row below fine-tunes. Disabled + hinted when
-          no dive/push-off time is available (no seed and no placed Dive mark). */}
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-        <button
-          onClick={alignToPushoff}
-          disabled={pushoffSessionS == null || !url}
-          className={`rounded-md px-2.5 py-1 font-semibold ${
-            pushoffSessionS != null && url
-              ? "border border-accent bg-accent text-white"
-              : "border border-surface-3 bg-surface-2 text-muted"
-          }`}
-          title="Set the sync so the current video frame is the dive/push-off"
-        >
-          Sync to push-off
-        </button>
-        <span className="text-muted">
-          {pushoffSessionS != null
-            ? "Scrub to the push-off frame, then click."
-            : "Place the Dive mark (or scrub + nudge) to enable one-tap sync."}
-        </span>
       </div>
       {/* Sync: sessionTime = origin + videoTime */}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">

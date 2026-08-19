@@ -3,10 +3,10 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, apiUpload } from "@/lib/api";
 import AnnotationChart, { PHASE_META } from "@/components/portal/AnnotationChart";
 import AnnotationEditor from "@/components/portal/AnnotationEditor";
-import VideoPane from "@/components/portal/VideoPane";
+import CameraTile from "@/components/portal/CameraTile";
 
 const PHASE_KEYS = PHASE_META.map((m) => m.key);
 const UNDO_DEPTH = 50;
@@ -43,11 +43,55 @@ export default function AnnotatePage({ params }) {
   const undoRef = useRef([]);
   const [undoDepth, setUndoDepth] = useState(0);
 
-  // Video sync
-  const [video, setVideo] = useState(null); // {path, origin_s} | null
+  // Video — the multi-cam hub (Phase 71). Sourced from the unified GET /videos list; one ACTIVE
+  // camera drives the trace playhead / seek / frame-step for mark placing.
+  const [videos, setVideos] = useState([]);
+  const [activeCameraId, setActiveCameraId] = useState(null);
+  const [aligningCameraId, setAligningCameraId] = useState(null); // two-point align target (D11)
+  const [alignClick, setAlignClick] = useState({ time: null, seq: 0 });
+  const [attachBusy, setAttachBusy] = useState(false);
   const [playheadS, setPlayheadS] = useState(null);
   const seekRef = useRef(null);
   const frameStepRef = useRef(null);
+
+  // Unified camera list. Defaults the marking camera to the phone (else first) but preserves a
+  // still-present selection across refetches (after attach / delete).
+  const loadVideos = useCallback(async () => {
+    try {
+      const r = await apiFetch(`/sessions/${sessionId}/videos`);
+      const list = r.videos ?? [];
+      setVideos(list);
+      setActiveCameraId((cur) =>
+        cur && list.some((v) => v.id === cur)
+          ? cur
+          : (list.find((v) => v.role === "phone") ?? list[0])?.id ?? null
+      );
+    } catch {
+      setVideos([]);
+    }
+  }, [sessionId]);
+
+  const attachCamera = useCallback(
+    async (file) => {
+      if (!file) return;
+      if (file.size > 50 * 1024 * 1024) {
+        setHint("That clip is over the 50 MB limit — compress it (HandBrake / GoPro Quik) first.");
+        return;
+      }
+      setAttachBusy(true);
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        await apiUpload(`/sessions/${sessionId}/videos`, fd);
+        await loadVideos();
+      } catch (e) {
+        setHint(`Upload failed: ${e.message}`);
+      } finally {
+        setAttachBusy(false);
+      }
+    },
+    [sessionId, loadVideos]
+  );
 
   useEffect(() => {
     let alive = true;
@@ -75,7 +119,7 @@ export default function AnnotatePage({ params }) {
       }
       setRow(sRow);
       setAnn(annRes);
-      setVideo(annRes.video ?? null);
+      loadVideos();
       // Phase 57 (D6): the editor starts BLANK. `annRes.seed` is still returned by the
       // API and still useful to other callers, but applying it here would seed ground
       // truth from the very segmenter this annotation exists to evaluate — circular,
@@ -92,7 +136,7 @@ export default function AnnotatePage({ params }) {
     return () => {
       alive = false;
     };
-  }, [sessionId]);
+  }, [sessionId, loadVideos]);
 
   const vel = row?.velocity_profile ?? [];
   // Must match the rate the API used to build the seed (GET /annotations returns it as
@@ -102,20 +146,6 @@ export default function AnnotatePage({ params }) {
   const time = useMemo(
     () => Array.from({ length: vel.length }, (_, i) => i / fsHz),
     [vel.length, fsHz]
-  );
-
-  // Phase 67 — the align target for VideoPane's "Sync to push-off". Prefer a coach-placed Dive /
-  // Underwater marker; fall back to the auto seed's dive (build_seed sets dive_start_s =
-  // baseline_end_s). Read-only use of the seed — Phase 57 D6's blank editor start is untouched, so
-  // this enables one-tap sync with ZERO marks placed yet follows a placed Dive mark when there is one.
-  const pushoffSessionS = useMemo(
-    () =>
-      phases.dive_start_s ??
-      phases.underwater_start_s ??
-      ann?.seed?.phases?.dive_start_s ??
-      ann?.seed?.phases?.underwater_start_s ??
-      null,
-    [phases.dive_start_s, phases.underwater_start_s, ann]
   );
 
   // Snapshot before every mutation so undo can restore it.
@@ -165,6 +195,12 @@ export default function AnnotatePage({ params }) {
   const handleChartClick = useCallback(
     (t) => {
       const tt = Math.round(t * 100) / 100;
+      // Two-point align (D11): if a camera is armed, this trace click is the "same moment" — the
+      // armed CameraTile maps its current frame to tt (origin = tt − videoTime). No mark placed.
+      if (aligningCameraId != null) {
+        setAlignClick((c) => ({ time: tt, seq: c.seq + 1 }));
+        return;
+      }
       if (activeTool === "seek") {
         seekRef.current?.(tt);
         return;
@@ -179,7 +215,7 @@ export default function AnnotatePage({ params }) {
       setPhases((prev) => ({ ...prev, [activeTool]: tt }));
       setDirty(true);
     },
-    [activeTool, placeStrokeMark, pushUndo]
+    [activeTool, placeStrokeMark, pushUndo, aligningCameraId]
   );
 
   // Drag from the chart. Snapshot only on the FIRST move of a gesture, otherwise a
@@ -437,19 +473,49 @@ export default function AnnotatePage({ params }) {
           wide screen gives the trace the extra pixels rather than the control panel. */}
       <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_clamp(260px,20vw,360px)]">
         <div className="min-w-0 space-y-3">
-          <VideoPane
-            sessionId={sessionId}
-            video={video}
-            onPlayhead={setPlayheadS}
-            seekRef={seekRef}
-            frameStepRef={frameStepRef}
-            onVideoChange={setVideo}
-            // 58-04: without this the pane cannot compute an end-anchored origin, and a
-            // phone-uploaded video (no stored origin) opens here silently unsynced — which is
-            // exactly the case this page exists to serve.
-            sessionDurationS={time.length ? time[time.length - 1] : null}
-            pushoffSessionS={pushoffSessionS}
-          />
+          {/* Phase 71: every camera on the session (phone + externals) shows at once. One is ACTIVE
+              and drives the trace playhead / seek / frame-step for mark placing. Align each manually
+              with "Set sync" → click the trace at the same moment (D11 — no push-off). */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {videos.map((v) => (
+              <CameraTile
+                key={v.id}
+                sessionId={sessionId}
+                video={v}
+                active={v.id === activeCameraId}
+                onMakeActive={() => setActiveCameraId(v.id)}
+                aligning={v.id === aligningCameraId}
+                alignClick={alignClick}
+                onArmAlign={() => {
+                  setAligningCameraId(v.id);
+                  setHint(
+                    "Scrub this camera to a landmark, then click the trace at the same moment."
+                  );
+                }}
+                onAlignConsumed={() => setAligningCameraId(null)}
+                onPlayhead={v.id === activeCameraId ? setPlayheadS : undefined}
+                seekRef={v.id === activeCameraId ? seekRef : undefined}
+                frameStepRef={v.id === activeCameraId ? frameStepRef : undefined}
+                onChanged={loadVideos}
+              />
+            ))}
+            {videos.filter((v) => v.role === "external").length < 3 && (
+              <label className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-subtle/40 bg-surface/50 text-muted hover:text-ink">
+                <span className="text-2xl leading-none">+</span>
+                <span className="text-sm font-semibold">
+                  {attachBusy ? "Uploading…" : "Add camera"}
+                </span>
+                <span className="text-[11px]">.mp4 · ≤50 MB</span>
+                <input
+                  type="file"
+                  accept="video/*"
+                  className="hidden"
+                  disabled={attachBusy}
+                  onChange={(e) => attachCamera(e.target.files?.[0])}
+                />
+              </label>
+            )}
+          </div>
           <AnnotationChart
             time={time}
             velocity={vel}
@@ -492,7 +558,7 @@ export default function AnnotatePage({ params }) {
           setViewMode={setViewMode}
           fitAvailable={fitAvailable}
           onSave={save}
-          seekEnabled={!!video?.path}
+          seekEnabled={!!activeCameraId}
         />
         </div>
       </div>

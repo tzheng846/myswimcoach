@@ -16,6 +16,7 @@ import PillarCards from "@/components/portal/PillarCards";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
 import { dropoutWarning } from "@/lib/dropoutWarning";
 import { displayName } from "@/lib/sessionName";
+import AddVideoModal from "@/components/portal/AddVideoModal";
 
 // One chronological neighbour. Rendered as a disabled span at the ends rather than omitted, so
 // the header keeps the same shape on the first and last session of an athlete.
@@ -57,8 +58,11 @@ export default function ReportCardPage({ params }) {
   const [view, setView] = useState("simple");
   const [markerTimeS, setMarkerTimeS] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
-  const [videoCount, setVideoCount] = useState(null); // Phase 69 rework: report-card "Videos (N)" cue
-  const [video, setVideo] = useState(null); // primary video {path, origin_s} for the inline watch-only player
+  // Phase 71: the inline watch player + the Add/Manage cues are sourced from the unified camera
+  // list (GET /videos: phone primary from the legacy columns + externals from session_videos). This
+  // is what makes a web-uploaded external — previously invisible here — play inline like a phone one.
+  const [videos, setVideos] = useState(null); // null = not loaded yet; [] = loaded, none
+  const [showAddVideo, setShowAddVideo] = useState(false);
 
   // Velocity/acceleration trace display prefs (Phase 64-03), shared with the /video route and
   // persisted. Owned here so the video overlay's toggles and the static charts below stay in sync.
@@ -118,7 +122,7 @@ export default function ReportCardPage({ params }) {
       const { data: row, error: err } = await supabase
         .from("sessions")
         .select(
-          "metrics_json, velocity_profile, distance_profile, acceleration_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz, video_path, video_origin_s"
+          "metrics_json, velocity_profile, distance_profile, acceleration_profile, name, notes, is_starred, stroke_type, athlete_id, created_at, sample_rate_hz"
         )
         .eq("id", sessionId)
         .single();
@@ -128,11 +132,6 @@ export default function ReportCardPage({ params }) {
         return;
       }
       setData(row);
-      setVideo(
-        row.video_path
-          ? { path: row.video_path, origin_s: row.video_origin_s ?? null }
-          : null
-      );
       if (resetEditable) {
         setSessionName(row.name ?? "");
         setIsStarred(row.is_starred ?? false);
@@ -169,18 +168,20 @@ export default function ReportCardPage({ params }) {
     load({ resetEditable: true });
   }, [load]);
 
-  // Phase 69 rework: a "Videos (N)" cue on the report card so an attached video is visible.
-  useEffect(() => {
-    let alive = true;
-    apiFetch(`/sessions/${sessionId}/videos`)
-      .then((r) => {
-        if (alive) setVideoCount((r.videos ?? []).length);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
+  // Phase 71: the unified camera list drives the inline watch player + the Add/Manage cues.
+  // A callback so the Add-video modal (and a phone-video origin auto-save) can refresh it.
+  const loadVideos = useCallback(async () => {
+    try {
+      const r = await apiFetch(`/sessions/${sessionId}/videos`);
+      setVideos(r.videos ?? []);
+    } catch {
+      setVideos((prev) => (prev == null ? [] : prev));
+    }
   }, [sessionId]);
+
+  useEffect(() => {
+    loadVideos();
+  }, [loadVideos]);
 
   // Revalidate on return, because mounting is the one moment a bfcache restore skips:
   // the browser brings the whole JS heap back, so React never re-runs and `data` keeps
@@ -251,6 +252,9 @@ export default function ReportCardPage({ params }) {
   if (!data) return <p className="text-muted">Loading…</p>;
 
   const metrics = data.metrics_json ?? {};
+  // Phase 71: one angle shows inline (phone if present, else the first uploaded external).
+  const primaryCam =
+    (videos ?? []).find((v) => v.role === "phone") ?? (videos ?? [])[0] ?? null;
   const strokeType = data.stroke_type;
   // Phase 58-03: every stroke gets full analytics on the web. This was
   //     const isAnalyticsReady = !strokeType || strokeType === "breaststroke";
@@ -408,10 +412,11 @@ export default function ReportCardPage({ params }) {
           </div>
         )}
 
-        {/* Phase 69 rework: the video is BACK on the report card, WATCH-ONLY (video + trace,
-            no attach card, no manual sync controls). Attaching + syncing live on the dedicated
-            Videos page — the "add video" action is deliberately separate from this feed. */}
-        {video ? (
+        {/* Phase 71: the video is sourced from the unified camera list (GET /videos), so a
+            web-uploaded external plays inline here just like a phone video. Watch-only (video +
+            trace, no attach card, no manual sync). "Add video" is a modal; multi-angle alignment
+            lives on the annotate page (via the Manage link → dedicated Videos page until 71-02). */}
+        {primaryCam ? (
           <div>
             <VideoTracePanel
               readOnly
@@ -421,8 +426,7 @@ export default function ReportCardPage({ params }) {
               fsHz={fsHz}
               cycles={metrics.cycles ?? []}
               sessionDurationS={time.length ? time[time.length - 1] : null}
-              video={video}
-              onVideoChange={setVideo}
+              video={primaryCam}
               showVelocity={tracePrefs.showVelocity}
               showAcceleration={tracePrefs.showAcceleration}
               velColor={tracePrefs.velColor}
@@ -432,25 +436,23 @@ export default function ReportCardPage({ params }) {
               onVelColor={tracePrefs.setVelColor}
               onAccelColor={tracePrefs.setAccelColor}
             />
-            <div className="mt-1 text-right">
-              <Link
-                href={`/app/sessions/${sessionId}/videos`}
+            <div className="mt-1 flex items-center justify-end">
+              <button
+                onClick={() => setShowAddVideo(true)}
                 className="text-xs font-semibold text-primary"
               >
-                Manage videos{videoCount ? ` (${videoCount})` : ""} ›
-              </Link>
+                + Add video
+              </button>
             </div>
           </div>
         ) : (
-          <Link
-            href={`/app/sessions/${sessionId}/videos`}
-            className="flex items-center justify-between rounded-xl border border-navy/50 bg-surface px-4 py-3 hover:border-accent"
+          <button
+            onClick={() => setShowAddVideo(true)}
+            className="flex w-full items-center justify-between rounded-xl border border-navy/50 bg-surface px-4 py-3 text-left hover:border-accent"
           >
-            <span className="text-sm font-semibold text-ink">
-              Videos{videoCount ? ` (${videoCount})` : ""}
-            </span>
-            <span className="text-xs text-muted">Add and sync camera angles ›</span>
-          </Link>
+            <span className="text-sm font-semibold text-ink">Videos</span>
+            <span className="text-xs text-muted">+ Add video</span>
+          </button>
         )}
 
         {/* Velocity + acceleration charts (Phase 64-03) + unit toggle. Which traces show is
@@ -587,6 +589,14 @@ export default function ReportCardPage({ params }) {
           />
         </div>
       </div>
+
+      {showAddVideo && (
+        <AddVideoModal
+          sessionId={sessionId}
+          onClose={() => setShowAddVideo(false)}
+          onAdded={() => loadVideos()}
+        />
+      )}
     </div>
   );
 }
