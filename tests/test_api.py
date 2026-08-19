@@ -1150,6 +1150,44 @@ class TestSampleRatePersisted:
         assert all(x is None or isinstance(x, float) for x in accel)
 
 
+# ── Phase 70 QR slate: /process persists recording_token ONLY when sent ───────
+# The phone displays this token as a QR at record start; the web decodes it to match a clip to a
+# session. It must be stored when sent, and ABSENT from the insert when not — so the payload stays
+# valid on a DB that has not yet had patch_13 applied (existing mobile builds send nothing).
+
+class TestRecordingTokenPersisted:
+    def _row(self, api_client, monkeypatch, csv_bytes, token):
+        from unittest.mock import MagicMock
+        import api
+        admin = MagicMock()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        monkeypatch.setattr(
+            api, "_get_coach_row",
+            lambda *a, **k: {"id": "coach-1", "device_limit": None,
+                             "monthly_session_limit": None},
+        )
+        data = {"head_waist_m": "0.0", "athlete_id": "ath-1"}
+        if token is not None:
+            data["recording_token"] = token
+        resp = api_client.post(
+            "/process",
+            files={"file": ("session.csv", io.BytesIO(csv_bytes), "text/csv")},
+            data=data,
+            headers={"Authorization": "Bearer fake-token-mocked"},
+        )
+        assert resp.status_code == 200, resp.text
+        return admin.table.return_value.insert.call_args[0][0]
+
+    def test_token_carried_when_sent(self, api_client, monkeypatch, synthetic_csv_bytes):
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes, "tok_abc123")
+        assert row["recording_token"] == "tok_abc123"
+
+    def test_token_absent_when_not_sent(self, api_client, monkeypatch, synthetic_csv_bytes):
+        """No token → the key must NOT be in the insert (valid on a pre-patch_13 DB)."""
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes, None)
+        assert "recording_token" not in row
+
+
 # ── Schema contract ───────────────────────────────────────────────────────────
 # Promoted from tools/schema_contract.py (Phase 51-01) into the suite so the phantom-column
 # bug class cannot silently return. This guards code against a SNAPSHOT, not against the live

@@ -140,6 +140,7 @@ async def process_session(
     stroke_type: Optional[str] = Form(None),
     device_id: Optional[str] = Form(None),
     firmware_version: Optional[str] = Form(None),
+    recording_token: Optional[str] = Form(None),
     _auth=Depends(require_auth),
 ):
     raw_path = None
@@ -324,6 +325,10 @@ async def process_session(
                         "stroke_type":      stroke_type,
                         "device_id":        device_id,
                     }
+                    # QR slate (Phase 70): store the phone's recording token ONLY when sent, so the
+                    # insert stays valid on a DB that has not yet had patch_13 applied.
+                    if recording_token:
+                        session_row["recording_token"] = recording_token
                     insert_resp = sb_admin.table("sessions").insert(session_row).select("id").execute()
                     session_id_saved = insert_resp.data[0]["id"] if insert_resp.data else None
                     if not (session_save_error and "Storage upload" in session_save_error):
