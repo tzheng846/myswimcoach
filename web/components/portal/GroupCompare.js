@@ -11,6 +11,7 @@ import { supabase } from "@/lib/supabase";
 import { COLOR_A, COLOR_B } from "@/components/portal/CompareChart";
 import { REPORT_METRICS, formatValue } from "@/lib/reportMetrics";
 import { metricComparison } from "@/lib/groupStats";
+import { scopedMetrics } from "@/lib/windowMetrics";
 import { sessionLabel } from "@/lib/sessionName";
 
 const STROKE_LABELS = {
@@ -162,6 +163,7 @@ export default function GroupCompare({ athletes }) {
   const [labelA, setLabelA] = useState("Group A");
   const [labelB, setLabelB] = useState("Group B");
   const [showDetail, setShowDetail] = useState(false);
+  const [scope, setScope] = useState({ mode: "full", from: 0, to: 25 }); // Phase 73-04 window scoping
 
   const selectAthlete = (v) => {
     setAthleteId(v);
@@ -176,7 +178,7 @@ export default function GroupCompare({ athletes }) {
     let cancelled = false;
     supabase
       .from("sessions")
-      .select("id, created_at, name, stroke_type, session:metrics_json->session")
+      .select("id, created_at, name, stroke_type, sample_rate_hz, velocity_profile, distance_profile, session:metrics_json->session, cycles:metrics_json->cycles")
       .eq("athlete_id", athleteId)
       .order("created_at", { ascending: false })
       .then(({ data }) => { if (!cancelled) setAllSessions(data ?? []); });
@@ -207,14 +209,26 @@ export default function GroupCompare({ athletes }) {
   // Per-metric computed comparison (shared by the headline bars and the drill-down).
   const rows = useMemo(() => {
     if (!ready) return [];
-    const valuesFor = (grp, key) => grp.map((s) => s.session?.[key]);
+    // Recompute each session's metrics over the chosen window (scope); "full" = stored values.
+    const scopedFor = (grp) =>
+      grp.map((s) =>
+        scopedMetrics(scope, {
+          sessionScalars: s.session,
+          cycles: s.cycles ?? [],
+          velocityProfile: s.velocity_profile ?? [],
+          distanceProfile: s.distance_profile ?? [],
+          fs: s.sample_rate_hz > 0 ? s.sample_rate_hz : 100,
+        })
+      );
+    const scoA = scopedFor(groupA);
+    const scoB = scopedFor(groupB);
     return REPORT_METRICS.map((metric) => {
-      const valuesA = valuesFor(groupA, metric.key);
-      const valuesB = valuesFor(groupB, metric.key);
+      const valuesA = scoA.map((m) => m[metric.key]);
+      const valuesB = scoB.map((m) => m[metric.key]);
       return { metric, valuesA, valuesB, cmp: metricComparison(metric, valuesA, valuesB) };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, assignment, sessions]);
+  }, [ready, assignment, sessions, scope]);
 
   return (
     <div className="mt-5 space-y-5">
@@ -316,6 +330,51 @@ export default function GroupCompare({ athletes }) {
               <span style={{ color: BAD }} className="font-medium"> red worse</span> · faded = overlapping
             </span>
           </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-muted">Scope</span>
+            {[
+              { k: "full", label: "Full swim" },
+              { k: "stroking", label: "Stroking" },
+              { k: "underwater", label: "Underwater" },
+              { k: "distance", label: "Distance" },
+            ].map((m) => (
+              <button
+                key={m.k}
+                onClick={() => setScope((s) => ({ ...s, mode: m.k }))}
+                className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${
+                  scope.mode === m.k
+                    ? "border-primary bg-primary text-white"
+                    : "border-surface-3 bg-surface-2 text-subtle hover:text-ink"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+            {scope.mode === "distance" && (
+              <span className="flex items-center gap-1 text-xs text-muted">
+                <input
+                  type="number" min={0} step={1} value={scope.from}
+                  onChange={(e) => setScope((s) => ({ ...s, from: Number(e.target.value) }))}
+                  className="w-14 rounded border border-surface-3 bg-surface-2 px-1.5 py-1 text-ink outline-none focus:border-primary"
+                />
+                to
+                <input
+                  type="number" min={0} step={1} value={scope.to}
+                  onChange={(e) => setScope((s) => ({ ...s, to: Number(e.target.value) }))}
+                  className="w-14 rounded border border-surface-3 bg-surface-2 px-1.5 py-1 text-ink outline-none focus:border-primary"
+                />
+                m from push-off
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted">
+            {scope.mode === "full" && "Metrics over each swim as recorded — the dive is included."}
+            {scope.mode === "stroking" && "Stroking phase only — breakout to the last stroke."}
+            {scope.mode === "underwater" && "Dive + underwater only — stroke-based metrics are blank (no strokes here)."}
+            {scope.mode === "distance" &&
+              `${scope.from}–${scope.to} m from push-off — stroke metrics use whole cycles inside the range.`}
+          </p>
 
           <DiffBars rows={rows} labelA={labelA || "Group A"} labelB={labelB || "Group B"} />
 
