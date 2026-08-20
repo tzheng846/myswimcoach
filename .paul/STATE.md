@@ -26,7 +26,231 @@ Status: 65-01 closed — `tools/underwater_probe.py` (`--id` added) + `65-01-FIN
   tiny (12+1, one swimmer, 0 back) — 65-02 must not regress the 11/12 Mode-A sessions. Also logged
   **ROADMAP #68** (persist generated session names; #67 is a separately-appearing external-camera-sync
   phase — now TRACKED: discussed + 67-01 planned 2026-08-16). 63-02 owes checkpoint+unify.
-Last activity: 2026-08-16 — Phase 67 (External Camera Sync) discussed + 67-01 (push-off visual sync) PLAN created, awaiting approval; prior: closed 65-01, next 65-02
+Last activity: 2026-08-17 — Phase 69 (Multi-Camera Video) built end-to-end via auto-loop (plan→apply→unify ×3), code complete + shipped; patch_12 + UAT owed. (Concurrent session advanced Phase 65 to 65-03.)
+
+### 75 APPLIED — 75-01 skeleton/integration built (Report Card Revamp) 2026-08-19
+**Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ○`.** All 3 auto tasks executed, zero deviations,
+zero checkpoints (plan was `autonomous:true`). `phase_metrics.py` (new, pure): 37-entry
+`MetricSpec` REGISTRY covering the full CONTEXT taxonomy, **every entry `status="planned"`,
+`compute=None`** (test-enforced — nothing implemented this plan); `PhaseContext` seam;
+`compute_phases()` engine (never raises). `api.py`: `/process` writes an additive `phases`
+object into `metrics_json` + response (session/cycles/initial_phase/data_quality
+byte-unchanged); new `POST /sessions/{id}/recompute` rebuilds `phases` from STORED
+velocity/distance/accel profiles (no raw-CSV read, D16 backfill seam), 403/404-gated via
+`_owned_session`, idempotent, 422 on missing/mismatched profiles, degrades cleanly on
+pre-Phase-64 sessions with no `acceleration_profile`. GO-signal reserved as
+`metrics_json.phases.go_signal_s` (jsonb, no new column — the migration-free reading of
+D15). Tests: `test_phase_metrics.py` (17) + `test_recompute.py` (8) + 4 new +
+all-pre-existing `test_api.py` assertions. **Full suite 317 passed, zero regressions.**
+Not committed (git commit not requested this session — flag before pushing). Next: **75-02**
+picks ONE metric from the "cheap, ship first" list in the SUMMARY (uw_duration/distance/
+avg_speed/surface_ratio, ivv, breakout_vel, phase_time/dist_budget, splits, pulldown_*) at
+the user's explicit approval (D12 — one at a time, never batched) → `/paul:plan 75`.
+Full detail: [75-01-SUMMARY.md](phases/75-report-card-phase-model/75-01-SUMMARY.md).
+
+### 75 PLANNING — 75-01 created (Report Card Revamp: skeleton/integration) 2026-08-19
+`/paul:plan 75`. **Loop: `PLAN ✓ ──▶ APPLY ○ ──▶ UNIFY ○` — 75-01 created, awaiting approval.**
+Phase 75 CONTEXT (17 decisions) resequenced the report-card revamp **backend-first, 3 steps**
+(D11): (1) skeleton, (2) metrics one-by-one at explicit approval, (3) UI last. **75-01 = Step 1
+ONLY** — the "define + provide space" seam, **zero metrics implemented**:
+- **`phase_metrics.py`** (new, pure): a `MetricSpec` registry — one declarative entry per CONTEXT
+  taxonomy metric (start/underwater/swim/whole; key/label/unit/tier/`status`/compute-slot), **ALL
+  `status="planned"`, compute=None**; `reaction_time` reserved under start (GO-signal slot, D13);
+  `PhaseContext` = the compute-fn seam (t/vel/dist/accel/fs/stroke_type/go_signal_s); `compute_phases(ctx)`
+  returns the 4 phase buckets (every value None today — intended skeleton output).
+- **`api.py`**: `/process` writes an **additive** `phases` object into `metrics_json` + response
+  (session/cycles/initial_phase/data_quality untouched); new **`POST /sessions/{id}/recompute`** =
+  the backfill seam (D16), re-derives phases from **STORED** velocity/distance/accel profiles at the
+  session's own rate — **no raw-CSV read**, mirroring Phase 64. Modeled on the PUT-annotations
+  recompute block; `_owned_session` gives 403/404; idempotent; degrades on pre-64 (no-accel) sessions.
+- **Tests**: `test_phase_metrics.py` (registry invariants + engine seam) + `test_recompute.py`
+  (endpoint auth/round-trip, mirrors `test_annotations.py`) + an additive `test_api.py` assertion.
+- **Storage = jsonb, NO migration** (D10/D15): GO-signal reserved **inside `metrics_json.phases`**,
+  not a new column — the migration-free reading of D15; recorded for UNIFY.
+3 auto tasks, `autonomous: true`. **Boundaries:** no metric math (metrics.py/pipeline untouched),
+no web UI (Step 3), no mobile (D6), no schema; **NO metric implemented — 75-02 ships the first metric
+at the user's explicit approval (D12); a future session must NOT batch-implement into the skeleton.**
+Files: `phase_metrics.py` (new) + `api.py` + `tests/{test_phase_metrics,test_recompute,test_api}.py`.
+Next: review → `/paul:apply .paul/phases/75-report-card-phase-model/75-01-PLAN.md`.
+
+### 74 CODE APPLIED — BLE Dump Reliability (fix "end of dump not received" data loss) 2026-08-19
+**Loop: `PLAN ✓ ──▶ APPLY ✓ (code) ──▶ hardware checkpoint PENDING`.** 3 auto tasks applied 2026-08-19:
+firmware (`ESP_32_V5.ino`) — `dumpBuffer()` no longer wipes the buffer, `clearBuffer()` + `CLEAR`
+command added, `0xEE` marker resent 3×, `TRACE_BUFFER 0`; mobile (`RecordScreen.js`) — 8 s stall +
+`sendDumpHandshake` auto-retry ×2 + `writeCmd('CLEAR')` on confirmed save + received-count in the error;
+(`BleContext.js`) — `requestMTU(185)` on connect. ⚠ **NOT verified — needs a firmware flash + mobile
+build + pool re-test** (74-01 Task 4, blocking). Not committed (cross-repo, hardware-gated). TRIGGER: pool test — iOS app randomly
+showed **"The end-of-dump marker never arrived"** and the buffered session became **unretrievable**
+(user: *"kept trying new sessions until it worked"*); device stayed responsive → firmware NOT frozen.
+⭐ **ROOT CAUSE = DATA LOSS, code-verified:** `dumpBuffer()` (`ESP_32_V5.ino:494-496`) wipes
+`bufCount/dataReady/sessionStartUs` unconditionally after the marker send, so a dump the firmware thinks
+completed clears the buffer even when the phone never got the tail/marker. Amplified by a single-point-
+of-failure (one 1-byte `0xEE` indication, no expected-count, no retry → 30 s stall `RecordScreen.js:359-363`)
+and `notify(false)` congestion/lost-confirm drops with no recovery. Secondary: `TRACE_BUFFER 1` diagnostic
+build flashed (`:86`); no `requestMTU` (latent Android); `log()`=console.log (invisible in TestFlight).
+FIX (D1–D6): firmware **retains buffer until explicit phone `CLEAR`** (or next-recording overwrite) =
+zero data loss + retry-safe; resend `0xEE` 3×; `TRACE_BUFFER→0`; phone **8 s stall + auto-retry META→DUMP
+×2 + CLEAR-on-save + received-count in error**; `requestMTU(185)` on connect. **NO transport rewrite**
+(indications kept — deliberate anti-drop choice from 44-02; blind rewrite riskier than the bug). 3 auto
+tasks + 1 blocking hardware checkpoint (flash + build + stress/forced-stall re-test). `autonomous:false`.
+CONTEXT.md written (C1–C5, D1–D7). Files: `ESP_32_V5.ino` + `swimnetics-mobile/{RecordScreen,BleContext}.js`
+(mobile = separate user-owned repo). ⚠ Firmware/mobile un-verifiable in sandbox — rides a flash + pool test.
+
+### 70 PLANNING — 70-01 created (Video↔Session Matching) 2026-08-19
+`/paul:plan 70`. Manual-matching core (CONTEXT D1–D3): a NEW top-level web page `/app/match` where the
+coach dumps many opaque external clips, sees a **client-side content thumbnail** of each (recognize the
+swim, not guess from `GX010042.MP4`), and assigns each to a session via the existing Phase-69 `POST
+/sessions/{id}/videos`. **No schema / no endpoint / no server CV / no camera-clock assumptions**;
+metadata (mtime/duration) is a DISPLAY-ONLY soft hint (D2, never auto-decides). ⭐ **CONTEXT (2026-08-17)
+predated Phase 71**, which DELETED the per-session Videos page + made single-add a modal — that doesn't
+undercut 70, it sharpens it: single-add is handled, the remaining pain is the cross-session BATCH case,
+so matching gets its own page (not the gone per-session one). Reuses `apiUpload`, `AddVideoModal`'s 50 MB
++ 413/409 messaging, the `sessions/page.js` supabase fetch pattern, and `sessionLabel`/`displayName`. ⚠
+`session_videos` RLS denies anon → never read it from supabase-js. **QR slate DEFERRED** (D4–D9, mobile-
+gated follow-on). 2 tasks (T1 page: multi-file staging + canvas thumbnails/duration + soft-hint grid +
+"Match videos" nav; T2 session picker + assign-to-session via POST /videos + per-clip 413/409 status +
+"Assign all"). `files_modified`: `web/app/app/match/page.js` (new) + `web/app/app/layout.js` (nav).
+autonomous:true; build-green gate; AC-2/AC-3-errors UAT-pending (no live auth/video in sandbox — same
+"built blind" caveat as 69/71). **APPLY ✓ + UNIFY ✓ 2026-08-19 (autonomous loop) — PHASE 70 COMMITTED
+CORE COMPLETE.** Both tasks built; `next build` GREEN (19/19, `/app/match` prerendered ○, +1 page);
+shipped `17f3a77` (`feat(70): video-session matching page`, 2 files, +367) → pushed `1e086ef..17f3a77`
+→ Vercel. AC-1/4 pass (build + prerender + nav + URL revocation); **AC-2 + AC-3 error paths UAT-pending**
+(page is auth-gated → staging/thumbnail/upload need a real login + ≤50 MB clip). 70-01-SUMMARY written.
+Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`. **QR slate = deferred future phase** (D4–D9, mobile-gated;
+backend `recording_token` + jsQR decode + phone QR display). ⚠ Appended block (Current Position above
+owned by concurrent Phase-65 session); ROADMAP table left untouched (Phase-67 local-docs habit).
+
+### 73 COMPLETE — Group Comparison (A/B experiments) shipped 2026-08-19
+**APPLY ✓ + UNIFY ✓ (plan→apply→verify→unify loop).** 73-01 built the "Groups" mode on `/app/compare`:
+pick an athlete + stroke, assign that athlete's same-stroke swims to two labeled groups (single
+`assignment` map ⇒ no dual membership), and per `REPORT_METRICS` metric see group means, **each swim as a
+dot** (SVG strip plot), the direction-aware delta, and a **clear/overlapping** cue. **NO p-values** (D4);
+cue suppressed for n<2. Files: `web/lib/groupStats.js` (pure, **node-checked 17/17**), `GroupCompare.js`
+(new), `compare/page.js` (mode toggle; two-swim UI untouched). `next build` green (/app/compare ○); eslint
+clean on the new files. Shipped **`d66734a`** → Vercel. **⚠ HUMAN STEP:** interactive UAT (auth-gated) —
+an athlete with ≥2 same-stroke sessions → assign A/B → confirm dots/means/delta/cue read right. V2s noted:
+group-average traces, >2 groups, saved experiments, LLM summary. Loop `PLAN ✓ ─▶ APPLY ✓ ─▶ UNIFY ✓`.
+**73-02 (2026-08-19):** UAT — the per-metric **strip plots read as "hard to read / scale-less"**.
+Presented 3 line-chart options as a **published artifact**; user chose **Option C as headline**. Swapped
+the strips for a **mean-profile chart** (parallel axis per `REPORT_METRICS`, two group-mean lines + **±1
+SD ribbons**, up=better, axis labels tinted accent when the groups clearly separate) + **per-metric
+small-multiple line charts** (real labelled Y-axis) behind a "Show per-metric detail" toggle. Only the
+comparison render changed (pickers/assignment/labels intact). `next build` green, eslint clean, shipped
+**`3964139`** → Vercel. ⚠ Interactive UAT still owed (auth-gated).
+**73-03 (2026-08-19):** user preferred **BARS** for the headline. Showed a 2nd artifact (difference bars
++ grouped bars); user chose "**headline = difference bars, keep the line graphs for per-metric detail**".
+Swapped `MeanProfile` → **`DiffBars`** (one horizontal bar per metric = Group B vs A: length=|Δ%|,
+direction=sign, colour green/red via `betterSide`, faded when not `separation==='clear'`); kept the
+`SmallMultiple` line drill-down. `next build` green, eslint clean, shipped **`69e0dfa`** → Vercel.
+⭐ **METRIC-WINDOW FINDING (from api/metrics.py):** `mean_vel_ms`/`max_vel_ms` are over the WHOLE swim
+`vel[baseline_end:swim_end]` (dive+underwater+stroking; top speed is usually the DIVE), while stroke
+metrics (stroke_rate/dps/consistency/coast/fatigue) are over the STROKING cycles only (`ip_end:swim_end`).
+So speed includes the dive but stroke metrics don't — dilutes A/B speed contrast. **NEXT FEATURE (user-
+requested):** "select specific parts" = **swim-phase** (whole / stroking / underwater) **+ distance-range**
+scoping, recomputing metrics over the chosen window — feasible client-side (web has velocity_profile,
+distance_profile, sample_rate, phase boundaries, cycles); scope as 73-04 / its own phase.
+**73-04 SHIPPED (2026-08-19, plan→apply→verify→unify):** added a **Scope selector** to the Groups view —
+**Full / Stroking / Underwater / Distance range** — recomputing the 6 metrics over the chosen window
+CLIENT-SIDE from stored velocity_profile/distance_profile/cycles. New pure `web/lib/windowMetrics.js`
+(**node-verified 17/17**): `full`=stored scalars verbatim (no drift from unstored swim_end); stroking/
+underwater windows from cycles+baseline_end; distance = `[from,to] m` from push-off via distance_profile;
+stroke metrics use WHOLE cycles only (Underwater→blank, no strokes). GroupCompare query now also selects
+`sample_rate_hz, velocity_profile, distance_profile, cycles`; `rows` recompute via `scopedMetrics` keyed on
+`scope`. No backend/schema/mobile; DiffBars/drill-down/two-swim mode untouched. `next build` green, eslint
+clean, shipped **`2f17a1a`** → Vercel. ⚠ Interactive UAT owed (auth-gated).
+
+### 73 DISCUSSED — Group Comparison (A/B experiments) 2026-08-19
+`/paul:discuss` (3 forks). Extend Compare from swim-vs-swim to **group-vs-group A/B experiments**
+("does breathing matter?" = 3 no-breath vs 3 breath). CONTEXT.md written, D1–D11. **Metrics-first, no
+traces** (user: 6 traces = noise); the unit is a per-metric row = dot-strip (each swim a dot by group)
++ direction-aware delta (reuse `reportMetrics.js`) + plain **clear/overlapping** cue. ⭐ **NO p-values**
+(Claude pushed back — n=3 makes them fragile/false-authority; user agreed). One athlete, same stroke,
+2 groups (array → ≤5 later), ephemeral + coach-labeled. **Web-only, no backend/schema** — reuse the
+Compare supabase-read + client-stats pattern; a "Groups" mode toggle on `/app/compare`. Ready →
+`/paul:plan 73`. ⚠ Numbering: 73 (72 reserved for the tablet-hub candidate). Appended block (Current
+Position owned by concurrent Phase-65 session).
+
+### 70 QR SLATE — 70-02/03/04 built end-to-end (autonomous loop) 2026-08-19
+User chose "build all 3 halves now" (QR is otherwise mobile-gated + paid-build-gated). Loop ran
+plan→apply→verify→unify ×3 across THREE repos/surfaces:
+- **70-02 backend** (`e010eee`): `patch_13` adds nullable `sessions.recording_token` + index; `/process`
+  accepts + stores it **only when sent** (pre-patch_13 safe). NO match endpoint — web queries sessions by
+  token via RLS. Tests: `TestRecordingTokenPersisted` (carried/absent). **test_api.py 64 passed.**
+- **70-03 web** (`59411ab`): jsQR@1.4.0 decodes a staged clip's early frames on `/app/match` →
+  `lookupSessionByToken` (supabase RLS, returns null on missing column → manual) → pre-fills the picker
+  + "Matched by QR" badge, **overridable** (D4). `next build` green (19/19, /app/match ○).
+- **70-04 mobile** (`swimnetics-mobile e5e814e`, pushed): RecordScreen mints `Crypto.randomUUID()` at plain
+  record start, shows `<QRCode>` (react-native-qrcode-svg, JS-only on existing react-native-svg) for an
+  external camera, sends `recording_token` to /process. QR only in plain 'recording' UI (not phone-camera).
+  `expo-doctor`: the new dep is CLEAN; the 4 flagged mismatches are PRE-EXISTING SDK drift (reconcile
+  before the paid build — the known dyld-skew gotcha).
+Backend+web pushed `17f3a77..59411ab` → Railway + Vercel. **Loop `PLAN ✓ ─▶ APPLY ✓ ─▶ UNIFY ✓` ×3.**
+⚠ **HUMAN STEPS to make QR real:** (1) apply `patch_13` in the Supabase SQL editor; (2) a **paid EAS
+build** of swimnetics-mobile (device-verify the QR renders + upload carries the token); (3) end-to-end
+test with a real external camera filming the on-screen QR → clip pre-fills on /app/match. Until all three,
+QR is inert-but-safe and matching stays MANUAL (70-01). ⚠ Appended block (Current Position owned by
+concurrent Phase-65 session); ROADMAP table untouched.
+
+### 71 PLANNING — 71-01 created (Video Surface Rework) 2026-08-18
+`/paul:discuss` → `/paul:plan 71`. UAT on Phase 69: a web-uploaded EXTERNAL video is invisible to the
+report-card inline player AND the annotate page — both read the legacy `sessions.video_path`, while
+web uploads land in `session_videos` (69's additive split). **Not a failed upload; a reader/store
+split** (the clip plays fine on the Videos page). CONTEXT.md written, 9 decisions. User asks: add via
+**modal** (not a page), **watch inline** on the report card, **align all cameras on the annotate
+page**, **delete the standalone Videos page**. Phase = two vertical slices:
+- **71-01 (report card) — APPLIED ✓ (2026-08-18), awaiting `/paul:unify`.** Inline video sourced from
+  the unified `GET /videos` (phone else first) → the orphaned external reappears, no migration;
+  add-video MODAL (`AddVideoModal`, posts `POST /videos`); `VideoPane`/`VideoTracePanel` generalized
+  to play a direct signed URL (not only legacy `video_path`) + externals no longer get the phone-only
+  end-anchor. Videos page KEPT (align) until 71-02. Files: `web/components/portal/{VideoPane,
+  VideoTracePanel,AddVideoModal}.js` + `web/app/app/sessions/[id]/page.js`. `next build` GREEN (18/18
+  pages, TS clean); AC-1/2/4 await UAT (sandbox has no live auth/video — "built blind", same as Phase
+  69). **UNIFY ✓ 2026-08-18 — 71-01-SUMMARY written. Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`. Phase 71
+  NOT complete (71-02 next per D10–D13) — no transition/commit; 71-01 held uncommitted to push with
+  71-02.** AC-3 pass (backward-compat); AC-1/2/4 UAT-pending.
+- **71-02 (next, REVISED per 71-01 UAT 2026-08-18) — annotate = the full video hub.** Reads unified
+  `GET /videos` (external appears → fixes "annotate has no video"); hosts ALL cameras (attach / view /
+  align / label / delete); active cam drives marking (playhead/seek/M/frame-step). **REMOVE "Sync to
+  push-off" ENTIRELY** (VideoPane + CameraTile) — user distrusts the auto dive detection; replace with
+  **manual two-point align** ("point to the same moment": scrub video → click the same instant on the
+  trace → `origin = traceTime − videoTime`; ±nudge). **DELETE `/app/sessions/[id]/videos` + the
+  report-card "Manage/align" link** (71-01 added it). Report card KEEPS its "Add video" modal + inline
+  view. See CONTEXT D10–D13. depends_on 71-01. **71-02 PLAN CREATED 2026-08-18, awaiting approval** —
+  3 tasks (T1 remove push-off from VideoPane+CameraTile + rework CameraTile into the annotate tile
+  [two-point align + active-camera marking]; T2 annotate reads `GET /videos` → camera grid + attach;
+  T3 DELETE `videos/page.js` + the report-card link). autonomous:true. ⚠ LAST plan of Phase 71 →
+  transition + phase commit (covers 71-01 **and** 71-02, both uncommitted) at UNIFY; push to Vercel
+  only after UAT. **APPLY ✓ 2026-08-18 — 3 tasks done; `next build` GREEN (18/18, TS clean), push-off
+  grep empty (AC-4), `/app/sessions/[id]/videos` route GONE (AC-5), dev HMR no errors.** **UNIFY ✓
+  2026-08-19 — 71-02-SUMMARY written; PHASE 71 COMPLETE.** Shipped 71-01+71-02 as ONE commit
+  **`1e086ef`** (`fix(71): unified video reader + annotate hub`, 7 files) → pushed `66a9546..1e086ef`
+  → Vercel (prod now live). AC-4/5 pass (grep + route gone); **AC-1/2/3 PASS by user UAT** — user
+  confirmed "Set sync seems to work" on the annotate page. Loop:
+  `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`. `.paul` docs kept local, no doc commit (Phase-67 habit); ROADMAP
+  table untouched. **NEXT:** Phase 70 (video↔session matching, CONTEXT ready → `/paul:plan 70`) or the
+  deferred tablet-layout follow-on (candidate 72, in 71's CONTEXT). ⚠ Optional: confirm 2+ simultaneous
+  external angles on a real multi-cam session.
+⚠ Numbering: took 71 (no dir existed); Phase 70's CONTEXT informally reserved 71 for a free/back
+breakout TODO — renumber to 72 if that lands first. ⚠ **STATE Current Position above is owned by the
+concurrent Phase-65 session — this block is APPENDED, not an overwrite.** ROADMAP table left untouched
+(project keeps `.paul` tracking loose/local per the Phase-67 habit).
+
+### 69 CLOSED — ✅ PHASE 69 (Multi-Camera Video) CODE COMPLETE (3/3), auto-loop 2026-08-17
+Built plan→apply→unify ×3 per the user's auto-loop request; all committed + pushed. **69-01**
+`session_videos` table (externals-only, **ADDITIVE** — legacy columns + 5 web readers + mobile
+untouched, no migration) + external-video API (GET/POST/PATCH/DELETE `/videos`, unified list, 50 MB
+guard, cap 3) + patch_12; live_schema.json updated for the schema-contract test; **suite 58→61**
+(`ca73421`). **69-02** dedicated `/app/sessions/[id]/videos` page + `CameraTile` (attach/label/sync/
+delete, adaptive grid, per-camera push-off sync) (`57d06c9`). **69-03** `MultiCamPlayer` (one master
+timeline drives all cameras + the trace; focused camera sets the clock + audio; others drift-
+corrected — CONTEXT D6) + report-card declutter (VideoTracePanel → compact Videos link) (`f03c4fd`).
+All eslint/build/pytest green; PROJECT.md + ROADMAP evolved (Phase 69 ✅). ⚠ **patch_12 NOT applied
+live** — user runs it in the SQL editor, then `tools/introspect_schema.py`. ⚠ **UAT owed** — the web
+was built BLIND (no live data/videos/auth in the sandbox); the 4-video synced player is the highest
+risk. ⚠ **NUMBERING COLLISION:** the concurrent Phase-65 session logged a "TODO #69 (free/back
+breakout early)" in Current Position above — that is NOT this phase; **Phase 69 = Multi-Camera Video
+owns the number** (ROADMAP row + `.paul/phases/69-multi-camera-video/` exist). The 65-session's TODO
+should renumber to #70. Concurrent session owns Current Position — left untouched.
 
 ### 67-02 CLOSED — ✅ PHASE 67 COMPLETE (2/2 plans), `030f6f9`+`e3ce464` (2026-08-17)
 ✅ **UNIFIED + phase transition done:** 67-02-SUMMARY written, PROJECT.md evolved (external-camera

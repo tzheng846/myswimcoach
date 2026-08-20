@@ -52,6 +52,7 @@ def _get_supabase_admin() -> Client | None:
 import metrics as m
 import vel_acc_extraction as vae
 import annotations as annot
+import phase_metrics as pm
 import coach
 import roster_metrics
 import drills
@@ -207,6 +208,14 @@ async def process_session(
             "warnings":                _dq_warnings,
         }
 
+        # ── Race-phase metric skeleton (Phase 75-01) ───────────────────────────
+        # All-planned registry today — every value is null. go_signal_s is reserved
+        # for the future coach "GO" button (D13); no GO signal exists yet on this path.
+        phases = pm.compute_phases(pm.PhaseContext(
+            t=t_dec, vel=vel, dist=dist_dec, accel=accel, fs=actual_fs,
+            stroke_type=stroke_type, go_signal_s=None,
+        ))
+
         # ── Supabase storage + session save ───────────────────────────────
         session_save_error = None
         storage_path = None
@@ -313,7 +322,7 @@ async def process_session(
                     session_row = {
                         "athlete_id":       athlete_id,
                         "coach_id":         coach_row_id,
-                        "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {}), "data_quality": data_quality}),
+                        "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {}), "data_quality": data_quality, "phases": phases}),
                         "velocity_profile":     _clean(vel.tolist()),
                         "distance_profile":     _clean(dist_dec.tolist()),
                         "acceleration_profile": _clean(accel.tolist()),  # Phase 64-02
@@ -348,6 +357,7 @@ async def process_session(
             "athlete_id_received": athlete_id,
             "session_save_error": session_save_error,
             "data_quality":       _clean(data_quality),
+            "phases":             _clean(phases),
         }
 
     except HTTPException:
@@ -972,6 +982,62 @@ async def delete_annotations(
         except Exception:
             pass  # annotation row already gone; restore can be retried by re-deleting
     return {"ok": True, "metrics_restored": restored}
+
+
+@app.post("/sessions/{session_id}/recompute")
+async def recompute_phases(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Rebuild the session's `phases` object (Phase 75-01) from its STORED
+    velocity/distance/acceleration profiles — no raw-CSV reprocessing. This is the
+    backfill seam (CONTEXT.md D16): a metric added to phase_metrics.REGISTRY later can
+    be filled in on every existing session by re-calling this endpoint, the same pattern
+    Phase 64 used to backfill acceleration_profile. Only metrics_json.phases is touched;
+    session/cycles/initial_phase/data_quality are preserved unchanged. Idempotent —
+    calling it twice in a row yields the same shape, since it always derives fresh from
+    the stored profiles rather than accumulating state.
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    _, row = _owned_session(
+        sb_admin, request.state.user_id, session_id,
+        "velocity_profile, distance_profile, acceleration_profile, metrics_json, "
+        "sample_rate_hz, stroke_type",
+    )
+
+    vel_arr = np.asarray(row.get("velocity_profile") or [], dtype=float)
+    dist_arr = np.asarray(row.get("distance_profile") or [], dtype=float)
+    # acceleration_profile may be absent on pre-Phase-64 sessions — an empty array is a
+    # valid PhaseContext.accel; any future compute fn that needs it handles emptiness.
+    accel_arr = np.asarray(row.get("acceleration_profile") or [], dtype=float)
+    if vel_arr.size < 2 or dist_arr.size != vel_arr.size:
+        raise HTTPException(
+            status_code=422,
+            detail="velocity/distance profiles missing or mismatched",
+        )
+
+    fs = _session_fs(row)
+    t_arr = np.arange(vel_arr.size) / fs
+    ctx = pm.PhaseContext(
+        t=t_arr, vel=vel_arr, dist=dist_arr, accel=accel_arr, fs=fs,
+        stroke_type=row.get("stroke_type"), go_signal_s=None,
+    )
+    phases = pm.compute_phases(ctx)
+
+    old_mj = row.get("metrics_json") or {}
+    new_mj = _clean({**old_mj, "phases": phases})
+    try:
+        sb_admin.table("sessions").update(
+            {"metrics_json": new_mj}
+        ).eq("id", session_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"session_id": session_id, "phases": _clean(phases), "recomputed": True}
 
 
 # Max accepted video upload size. Tracks the ACTIVE Supabase global upload limit — 50 MB on the free

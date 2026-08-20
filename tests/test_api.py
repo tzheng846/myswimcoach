@@ -19,6 +19,7 @@ RESPONSE_TOP_KEYS = [
     "velocity",
     "distance",
     "data_quality",
+    "phases",
 ]
 
 
@@ -101,6 +102,39 @@ class TestDataQuality:
         """data_quality must appear in response even when athlete_id is omitted."""
         data = _post_csv(api_client, synthetic_csv_bytes).json()
         assert "data_quality" in data
+
+
+class TestPhaseMetricsScaffold:
+    """POST /process — Phase 75-01 additive `phases` skeleton (registry all-planned)."""
+
+    def test_phases_has_four_buckets_and_go_signal(self, api_client, synthetic_csv_bytes):
+        phases = _post_csv(api_client, synthetic_csv_bytes).json()["phases"]
+        for bucket in ("start", "underwater", "swim", "whole"):
+            assert bucket in phases
+            assert isinstance(phases[bucket], dict)
+            assert len(phases[bucket]) > 0
+        assert "go_signal_s" in phases
+        assert phases["go_signal_s"] is None  # no GO button yet
+
+    def test_every_phase_metric_is_planned_with_null_value(self, api_client, synthetic_csv_bytes):
+        """This plan implements zero metrics — every entry must read as an empty slot."""
+        phases = _post_csv(api_client, synthetic_csv_bytes).json()["phases"]
+        for bucket in ("start", "underwater", "swim", "whole"):
+            for key, entry in phases[bucket].items():
+                assert entry["value"] is None, f"{bucket}.{key} should be null (planned)"
+                assert entry["status"] == "planned"
+
+    def test_reaction_time_reserved_under_start(self, api_client, synthetic_csv_bytes):
+        phases = _post_csv(api_client, synthetic_csv_bytes).json()["phases"]
+        assert "reaction_time" in phases["start"]
+
+    def test_phases_addition_does_not_disturb_existing_session_dict(self, api_client, synthetic_csv_bytes):
+        """Additive-only proof: session/cycles/data_quality shape is unchanged by this plan."""
+        data = _post_csv(api_client, synthetic_csv_bytes).json()
+        for key in DATA_QUALITY_KEYS:
+            assert key in data["data_quality"]
+        assert isinstance(data["session"], dict)
+        assert isinstance(data["cycles"], list)
 
 
 # ── GET /reports/{token} (public parent report) ───────────────────────────────
