@@ -3,30 +3,106 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **65 (Underwater Phase Detection) — 65-02 ✅ CLOSED (loop unified); 65-03 next (2/3 plans done)** · ⚠ **63 also open; 64 + 66 CLOSED**
-Plan: **65-02 (the fix) ✅ CLOSED — SUMMARY written, loop unified 2026-08-17. Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`. Next: `/paul:plan 65` → 65-03 (underwater metrics + web reporting), or pause.**
-  Shipped: local de-bias guard in `detect_swim_window`. `_cwt_ridge`/`_track_ridge` gained a
-  `low_band_bias` param (default 0.5 → `segment_cycles_wavelet` elementwise-identical); when
-  `f_ref < _WINDOW_FMIN_HZ` (**0.45**, set from data: rail 0.33 < 0.45 < min-legit 0.72) the ridge is
-  recomputed de-biased via the extracted `_window_from_ridge` helper. **Breaststroke EXEMPT (D2)** via
-  a threaded `stroke_type` — one-line change at `compute_session_metrics:774` (a justified boundary
-  nudge; record at UNIFY). RESULTS: indigo ray `ip_end` **2.7→7.1 s, 15→10 cycles** (source stays
-  swim_window, NOT the 16.6 s fallback); 12-session corpus **BYTE-IDENTICAL**; a **2nd butterfly rail
-  found + fixed** in the cross-stroke sweep; free/breast/back unchanged. Suite **282 passed**; fixture
-  regression **GREEN, ZERO re-baseline** (all 4 fixtures plausible, as T1 predicted → `test_segmenter_eval.py`
-  untouched). ⚠ NO DB writes/backfill — stored sessions show pre-fix numbers until 65-03. New TODO **#69**:
-  free/back breakout ~1–2 s EARLY (Mode-A residual, NOT this fix); acceleration evaluated + **REJECTED**
-  as a lever (it is `dv/dt` — no independent info; high-pass amplifies kicks); gate any fix on ground truth.
-Status: 65-01 closed — `tools/underwater_probe.py` (`--id` added) + `65-01-FINDINGS.md` + SUMMARY.
-  ⭐ **Reported bug = Mode C:** `detect_swim_window` FIRES but `f_ref` rails LOW (indigo ray `6ececa0f`
-  → 0.33 Hz) → `ip_end` collapses to `b_end` → dive+kicks = **15 cycles**. Fix (Option A, user-selected
-  2026-08-16): make `f_ref`/`_cwt_ridge` robust to the low rail; do NOT reject to the trough fallback
-  (16.6 s on indigo ray, worse). Mode A (11/12) = ip_end ~2 s late; Mode B (1/12) = fallback-early —
-  both milder. D8 2×-harmonic REFUTED; amplitude refuted; accel inconclusive (dive-confounded). ⚠ n
-  tiny (12+1, one swimmer, 0 back) — 65-02 must not regress the 11/12 Mode-A sessions. Also logged
-  **ROADMAP #68** (persist generated session names; #67 is a separately-appearing external-camera-sync
-  phase — now TRACKED: discussed + 67-01 planned 2026-08-16). 63-02 owes checkpoint+unify.
-Last activity: 2026-08-17 — Phase 69 (Multi-Camera Video) built end-to-end via auto-loop (plan→apply→unify ×3), code complete + shipped; patch_12 + UAT owed. (Concurrent session advanced Phase 65 to 65-03.)
+Phase: **75 (Report Card Revamp — Race-Phase Model) — Step 2 of 3, 75-02 CLOSED (loop complete)** · ⚠ **63 + 65 still open (65-03 ABSORBED into 75); 64 + 66 + 67 + 69 + 71 + 73 CLOSED**
+Plan: **75-02 CLOSED 2026-08-19 — loop complete (PLAN ✓ APPLY ✓ UNIFY ✓); code `337360b` + docs close-loop, pushed to `origin/main`. Next: `/paul:plan 75-03` (kick detector).** `type:execute`, `autonomous:false`,
+  `depends_on ["75-01"]`, wave 1. **10 files** (2 new tools). 3 auto tasks + 1 `checkpoint:human-verify`. 6 ACs.
+  Scope: the **underwater phase's START boundary** + the four window-arithmetic underwater metrics.
+  ⭐ **THE USER'S OWN HYPOTHESIS WAS MEASURED AND IT WINS BY AN ORDER OF MAGNITUDE.** User: *"for every
+  session i've seen, the underwater phase begins at the first big velocity dip."* Implemented as
+  surge-peak → first velocity trough with prominence ≥ 0.40 × v95 and scored against the 38 coach
+  annotations: **mean |err| 0.13 s, 35/38 within 0.5 s, 37/38 within 1.0 s, 0 missed** — versus the
+  incumbent dive-peak rule (`baseline_end_s + dive_duration_s`) at **1.23 s on only 10 of 38** (null on
+  84 of 108 sessions, and ~1.5 s systematically early: it marks the top of the dive, not the end of the
+  glide). Flat 0.30–0.40 plateau, so not a knife-edge fit. Uniform across strokes (free 0.15 / fly 0.10 /
+  breast 0.03). ⚠ CIRCULARITY CAVEAT: the coach placed those marks while looking at the velocity trace,
+  so the rule may partly describe how the mark is clicked; it is still the annotation contract's own
+  definition, so it is the right target for a seed.
+  ⚠ **THE BREAKOUT / END BOUNDARY IS DEFERRED BY USER DIRECTIVE** — *"assume whatever the input for end
+  boundary is correct."* Recorded so nobody re-tests it: current auto `stroke_start` is ~3–4 s off in
+  both directions (freestyle auto window median **0.42 s** wide, 18/32 under 0.5 s), and a rhythm
+  step-down detector tested this session was WORSE (17/37 no-detect, mean |err| 2.95 s). Combined with
+  65-01's already-refuted mean-|vel| step and dive-confounded accel, **three of three levers are now
+  measured and failing** — same open problem as ROADMAP #69 / Phase 58's removed breakout marker.
+  Consequence accepted (P3): metrics blank on most unannotated freestyle rather than showing a wrong number.
+  Decisions: P1 window = `[underwater_start_s, stroke_start_s]` (resolves 65-A1 / CONTEXT open-call-3) ·
+  P2 precedence **annotation → auto**, per-key source recorded, and for `underwater_start` the auto is
+  the NEW detector, never the dive-peak · P3 no trust gate · ~~P4 the dip rule replaces the dive-peak
+  **everywhere incl. the annotate seed** (annotating drops from 4 marks to 1)~~ **← REFUTED AT APPLY, see below** · P5 no `udk` casing ·
+  **P6 Claude's call: kick metrics split to 75-03** (user approved "kick detector + all 7 kick metrics"
+  as the PHASE scope; splitting keeps this plan at PAUL sizing and gives the kick detector its own
+  eyeball loop — flag at UNIFY if unwanted) · P7 `pulldown_*` for breaststroke only.
+  Validation choice (user): synthetic unit tests + user eyeball on real traces — NOT a video-derived
+  kick ground truth.
+Status: **75-01 ✅ CLOSED** (Step 1/3) — `phase_metrics.py` registry (37 specs, all `planned`) +
+  additive `phases` in `/process` + `POST /sessions/{id}/recompute` backfill seam; `1ba589a`; suite 317.
+  ⚠ 75-01's `PhaseContext` carries **NO phase boundaries** — extending it is 75-02's first structural change.
+Last activity: 2026-08-19 — UNIFIED 75-02 — loop closed (see the UNIFIED entry below). Previously: created `.paul/phases/75-report-card-phase-model/75-02-PLAN.md` after a 2-round question loop + a read-only live-DB measurement (108 sessions, 38 annotations) that validated the user's first-big-dip hypothesis and refuted the rhythm step-down breakout detector.
+
+### 75 UNIFIED — 75-02 underwater start boundary + 4 window metrics 2026-08-19
+**Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`.** Closed 2026-08-19: **`337360b`** (`feat(75):
+underwater start + window metrics`, 11 files, 355 tests green) + docs close-loop → pushed
+`origin/main`. ⚠ **PHASE 75 NOT COMPLETE — no transition triggered** (Step 2 of 3; 75-03 kick
+detector unscoped — CONTEXT D14, same PLAN-count==SUMMARY-count override as 75-01). All 3 auto
+tasks executed; the
+`checkpoint:human-verify` was resolved with **one plan premise refuted** (below). Suite
+**317 → 355**. Full reconciliation:
+[75-02-SUMMARY.md](phases/75-report-card-phase-model/75-02-SUMMARY.md).
+
+**Shipped:** `metrics.detect_underwater_start` (surge peak → first trough with prominence
+≥ `0.40 × v95`; returns None rather than guessing) · `phase_metrics.resolve_boundaries`
+with per-key provenance, precedence **annotation → auto** · `metrics_json.phases.boundaries`
++ `schema_version` **1 → 2** · six specs flipped `planned → implemented` (`uw_duration`,
+`uw_distance`, `uw_avg_speed`, `uw_surface_ratio`, and `pulldown_peak_vel`/`pulldown_duration`
+breaststroke-only) · both api.py call sites wired (`/process` seeds; `POST /recompute` now
+also reads `session_annotations.phases`) · `tools/score_underwater.py` +
+`tools/backfill_phases.py` (new).
+
+**AC-1 reproduced at the shipped constant:** mean |err| **0.13 s**, **35/38** within 0.5 s,
+**37/38** within 1.0 s, **0 missed**, vs the incumbent dive-peak rule at 1.23 s on only 10 of 38.
+
+⭐ **BACKFILL APPLIED TO ALL 108 LIVE SESSIONS** (user ran `--apply`; the classifier blocks
+Claude from unattended production writes — expect to run it yourself next time too).
+`schema_version {2: 108}` · sources `detected 64 / manual 38 / none 6` · **60 of 108 got a
+non-null `uw_duration`** (0.58–15.89 s) · all 108 preserved session/cycles/initial_phase/
+data_quality. **The 48 that blanked are blocked by the END boundary, not the start — that
+number IS the size of the breakout problem and the argument for scheduling it.**
+
+**AC-5 idempotency, and the loop it hid:** after the backfill `metrics_json` CONTAINS
+`phases`, and `build_seed` reads `phases.boundaries.underwater_start_s`, so pass 2 feeds
+pass 1's output back in. Simulated across all 108: **45 seeds moved, 0 boundaries drifted**,
+because `resolve_boundaries` deliberately ignores the seed's `underwater_start_s`. That
+comment in the code is load-bearing — do NOT add a seed fallback there.
+
+⚠⚠ **DEVIATION — P4 WAS WRONG. THE SEED HAS NO READER.** The plan promised "annotating a
+session drops from four marks to one". **Nothing renders the seed.** `GET
+/sessions/{id}/annotations` returns it; the only file in `web/` that mentions it is
+`web/app/app/annotate/[id]/page.js:123`, in a comment saying the editor starts BLANK **on
+purpose** (Phase 57 D6: seeding ground truth from the segmenter under evaluation is
+circular). User caught it: *"annotate does not show auto segmentation. In fact as far as im
+aware there are no places for viewing auto segmenting for anything except stroke
+segmenting."* Confirmed — `seed` is consumed by zero files.
+**AC-4 is satisfied as written and useless as intended:** `build_seed` does prefer the
+stored boundary and the tests prove it, but it is a correct answer with no consumer. The
+plan's success criterion "the annotate page visibly improves" is **STRUCK, not deferred.**
+
+**Decision (user, 2026-08-19): close 75-02 as a data-layer plan; do NOT wire the seed into
+the annotate page.** Rationale beyond scope: this plan's own circularity caveat (the 38
+marks were placed while looking at the velocity trace) would go from *suspected* to
+*structural* — future coach marks anchored to the detector, then the detector scored
+against them. **Phase 57 D6 is right; P4 was wrong.** A read-only "ghost" overlay showing
+auto boundaries without pre-filling anything saveable was offered and declined for now;
+it remains the cheapest way to make auto segmentation inspectable without contaminating
+ground truth, and is a **Step-3 candidate**.
+
+**AC-6 held:** `git diff metrics.py` is a SINGLE ADDITIVE HUNK — `detect_underwater_start`
+plus its two constants. `compute_session_metrics`, the segmenter, `detect_swim_window`,
+`detect_initial_phase` and `detect_phases` all untouched. No schema change, no mobile/web change.
+
+**Next: 75-03 = the kick detector + all 7 kick metrics** (`kick_count`, `dist_per_kick`,
+`kick_tempo`, `kick_consistency`, `per_kick_decay`, `first_kick_impulse`, `uw_ivv`),
+validated by synthetic unit tests **+ Claude-generated plots of the underwater segment with
+detected kicks marked** for the user to eyeball. It inherits this plan's window: measurable
+on the 60 sessions that have one, blank on the other 48.
 
 ### 75 UNIFIED — 75-01 loop closed, Step 1/3 of the phase complete (Report Card Revamp) 2026-08-19
 **Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`.** Shipped **`1ba589a`** (`feat(75): phase-metric
@@ -445,6 +521,9 @@ Progress:
 
 Current loop state:
 ```
+Phase 75:  PLAN ──▶ APPLY ──▶ UNIFY   [Step 2 of 3 — 75-02 created, awaiting approval]
+             ✓        ○        ○     [75-01 ✅ CLOSED (Step 1, skeleton); 75-02 = underwater start boundary + 4 window metrics]
+
 Phase 66:  PLAN ──▶ APPLY ──▶ UNIFY
              ✓        ✓        ✓     [✅ PHASE COMPLETE 2026-08-16 — SG accel + per-stroke windows; 120908f + ee1852c → Railway]
 
@@ -1017,10 +1096,10 @@ Plan: `.paul/phases/60-mobile-app-rework/60-01-PLAN.md`. DO NOT APPLY until the 
 
 ## Session Continuity
 
-Last session: 2026-08-10
-Stopped at: Plan 60-01 created
-Next action: commit 58-01 in `swimnetics-mobile`, review 60-01, then `/paul:apply .paul/phases/60-mobile-app-rework/60-01-PLAN.md`
-Resume file: `.paul/phases/60-mobile-app-rework/60-01-PLAN.md`
+Last session: 2026-08-19
+Stopped at: 75-02 UNIFIED — loop closed (underwater start boundary + 4 window metrics; code 337360b). Phase 75 Step 2 of 3.
+Next action: `/paul:plan 75-03` — kick detector + all 7 kick metrics. Inherits 75-02's window (measurable on 60 of 108 sessions, blank on the other 48 for the deferred end-boundary reason).
+Resume file: `.paul/phases/75-report-card-phase-model/75-02-SUMMARY.md`
 
 ---
 
