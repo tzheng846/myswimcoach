@@ -28,6 +28,22 @@ Status: 65-01 closed — `tools/underwater_probe.py` (`--id` added) + `65-01-FIN
   phase — now TRACKED: discussed + 67-01 planned 2026-08-16). 63-02 owes checkpoint+unify.
 Last activity: 2026-08-17 — Phase 69 (Multi-Camera Video) built end-to-end via auto-loop (plan→apply→unify ×3), code complete + shipped; patch_12 + UAT owed. (Concurrent session advanced Phase 65 to 65-03.)
 
+### 75 UNIFIED — 75-01 loop closed, Step 1/3 of the phase complete (Report Card Revamp) 2026-08-19
+**Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`.** Shipped **`1ba589a`** (`feat(75): phase-metric
+registry + recompute skeleton`) → pushed `2f17a1a..1ba589a` → `origin/main` (Railway
+auto-deploys). ⚠ **PHASE 75 NOT COMPLETE — no transition triggered.** A mechanical
+PLAN-count==SUMMARY-count check in the phase dir would misread 1-vs-1 as "last plan in
+phase"; overridden because CONTEXT.md's Build-workflow section explicitly resequenced
+this into **3 ordered steps** (skeleton → metrics one-by-one, approval-gated → UI), of
+which 75-01 was Step 1 only. Steps 2/3 have no PLAN.md yet because they are unscoped, not
+because they're done (CONTEXT D14 — this sequencing is meant to survive exactly this kind
+of session boundary). ROADMAP left untouched, no "shipped" language added to PROJECT.md.
+Full reconciliation + AC results table + next-metric candidate list:
+[75-01-SUMMARY.md](phases/75-report-card-phase-model/75-01-SUMMARY.md).
+Next: user picks ONE metric from the "cheap, ship first" list (uw_duration/distance/
+avg_speed/surface_ratio, ivv, breakout_vel, phase_time/dist_budget, splits, pulldown_*) at
+their explicit approval (D12) → `/paul:plan 75` scopes 75-02.
+
 ### 75 APPLIED — 75-01 skeleton/integration built (Report Card Revamp) 2026-08-19
 **Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ○`.** All 3 auto tasks executed, zero deviations,
 zero checkpoints (plan was `autonomous:true`). `phase_metrics.py` (new, pure): 37-entry
