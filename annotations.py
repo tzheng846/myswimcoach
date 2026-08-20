@@ -98,7 +98,11 @@ def build_seed(metrics_json, fs_hz=FS_HZ):
 
     Sources (all optional — anything undetected stays null, never raises):
       dive_start_s       ← session.baseline_end_s (swim motion begins)
-      underwater_start_s ← dive peak (baseline_end_s + initial_phase.dive_duration_s)
+      underwater_start_s ← phases.boundaries.underwater_start_s when the row has one
+                           (Phase 75-02: metrics.detect_underwater_start's first-big-dip
+                           answer, mean |err| 0.13 s against 38 coach marks), else the
+                           legacy dive peak (baseline_end_s + initial_phase.dive_duration_s),
+                           which is ~1.5 s early because it marks the top of the dive
       stroke_start_s     ← initial_phase.initial_phase_end_idx / fs, else first cycle start
       finish_s           ← last cycle end_idx / fs
       stroke_marks_s     ← each cycle's start_idx / fs (the 39-05 overlay convention)
@@ -114,8 +118,18 @@ def build_seed(metrics_json, fs_hz=FS_HZ):
     baseline_end_s = _num(session.get("baseline_end_s"))
     phases["dive_start_s"] = baseline_end_s
 
+    # Phase 75-02: prefer the stored resolved boundary. It is written by /process and by
+    # POST /recompute (tools/backfill_phases.py applied it to the existing library), and
+    # it comes from the detector, not from the dive peak. Rows recorded before 75-01 have
+    # no `phases` key at all and keep the legacy derivation below, untouched.
+    stored = mj.get("phases") if isinstance(mj.get("phases"), dict) else {}
+    stored_bounds = stored.get("boundaries") if isinstance(stored.get("boundaries"), dict) else {}
+    stored_uw = _num(stored_bounds.get("underwater_start_s"))
+
     dive_dur = _num(initial.get("dive_duration_s"))
-    if initial.get("dive_detected") and baseline_end_s is not None and dive_dur is not None:
+    if stored_uw is not None:
+        phases["underwater_start_s"] = stored_uw
+    elif initial.get("dive_detected") and baseline_end_s is not None and dive_dur is not None:
         phases["underwater_start_s"] = baseline_end_s + dive_dur
 
     ip_end_idx = _num(initial.get("initial_phase_end_idx"))

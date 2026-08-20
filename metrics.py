@@ -707,6 +707,75 @@ def detect_initial_phase(t, vel, baseline_end_idx):
         return _default
 
 
+# ── UNDERWATER START (Phase 75-02) ────────────────────────────────────────────
+#
+# The coach's own rule, verbatim: "for every session i've seen, the underwater phase
+# begins at the first big velocity dip."  Physically that dip is where the free glide
+# ENDS and propulsion resumes — the start / push-off drives velocity to the race peak,
+# the swimmer then coasts in streamline while velocity decays, and dolphin kicking (or
+# the breaststroke pulldown) begins at the bottom of that decay.
+#
+# Measured 2026-08-19 against the 38 hand-marked `underwater_start_s` annotations:
+#     prom frac   0.25    0.30    0.35    0.40    0.50    0.60
+#     mean |err|  0.43s   0.24s   0.18s   0.13s   0.24s   0.74s
+#     within .5s  29/38   33/38   35/38   35/38   33/38   24/38
+# 0.40 is the minimum of a broad, flat 0.30–0.40 plateau — not a knife-edge fit — and it
+# is uniform across strokes (freestyle 0.15 s, butterfly 0.10 s, breaststroke 0.03 s).
+# The rule it replaces (`baseline_end_s + dive_duration_s`, i.e. the first prominent PEAK
+# — the top of the dive) scored 1.23 s on only 10 of those 38 and is null on 84 of 108
+# live sessions, because detect_initial_phase needs TWO peaks to set dive_detected.
+#
+# ⚠ Caveat to carry forward: those marks were placed by a coach looking at the velocity
+# trace, so the rule may partly describe how the mark is clicked rather than independent
+# physiology. It is nonetheless the annotation contract's own definition of the boundary,
+# which makes it the right target for an auto seed.
+_UW_SURGE_WINDOW_S  = 4.0   # the start surge peaks within this long of first motion
+_UW_START_PROM_FRAC = 0.40  # dip prominence, as a fraction of v95 — see table above
+
+
+def detect_underwater_start(t, vel, baseline_end_idx):
+    """First prominent velocity dip after the start surge — where kicking begins.
+
+    Returns a FULL-TRACE index, or None when the trace carries no qualifying dip (same
+    refuse-to-answer convention as detect_swim_window). Pure; never raises.
+
+    ⚠ Uses np.nanpercentile / np.nanargmax rather than the module's _window_v95 helper,
+    which calls np.percentile and therefore returns NaN if a single sample is NaN. This
+    detector is also reached from the API's recompute path, whose input is a STORED
+    velocity_profile that can contain nulls. Do not "consolidate" it onto _window_v95.
+    """
+    try:
+        fs = _compute_fs(t)
+        start = max(0, int(baseline_end_idx))
+        seg = vel[start:]
+        if len(seg) < int(fs):          # under one second of signal — no answer
+            return None
+
+        v95 = float(np.nanpercentile(np.abs(seg), 95))
+        if not np.isfinite(v95) or v95 <= 0:
+            return None
+
+        # The start surge: the fastest the swimmer goes in the first few seconds.
+        lim = int(_UW_SURGE_WINDOW_S * fs)
+        head = seg[:lim] if len(seg) > lim else seg
+        if not np.any(np.isfinite(head)):
+            return None
+        pk = int(np.nanargmax(head))
+
+        tail = seg[pk:]
+        if len(tail) < 3:
+            return None
+
+        troughs, _ = find_peaks(-tail, prominence=_UW_START_PROM_FRAC * v95)
+        if len(troughs) == 0:
+            return None
+
+        return start + pk + int(troughs[0])
+
+    except Exception:
+        return None
+
+
 def time_to_distance(t, dist, target_m, baseline_end_idx, head_waist_m=0.0):
     """
     Elapsed time from baseline_end until the swimmer's head reaches target_m.

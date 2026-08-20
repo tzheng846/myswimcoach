@@ -208,12 +208,17 @@ async def process_session(
             "warnings":                _dq_warnings,
         }
 
-        # ── Race-phase metric skeleton (Phase 75-01) ───────────────────────────
-        # All-planned registry today — every value is null. go_signal_s is reserved
-        # for the future coach "GO" button (D13); no GO signal exists yet on this path.
+        # ── Race-phase metrics (Phase 75-01 skeleton, 75-02 underwater window) ─
+        # go_signal_s is reserved for the future coach "GO" button (D13); no GO signal
+        # exists yet on this path. annotation_phases is None by construction — a session
+        # being processed for the first time cannot already carry a coach annotation, so
+        # every boundary here resolves from the seed or from a detector.
         phases = pm.compute_phases(pm.PhaseContext(
             t=t_dec, vel=vel, dist=dist_dec, accel=accel, fs=actual_fs,
             stroke_type=stroke_type, go_signal_s=None,
+            annotation_phases=None,
+            seed_phases=annot.build_seed(result, actual_fs)["phases"],
+            initial_phase=result.get("initial_phase"),
         ))
 
         # ── Supabase storage + session save ───────────────────────────────
@@ -1022,13 +1027,33 @@ async def recompute_phases(
 
     fs = _session_fs(row)
     t_arr = np.arange(vel_arr.size) / fs
+
+    # The coach's own marks outrank every detector (75-02 P2). Most sessions have no
+    # annotation row; that is not an error, it just means the boundaries resolve from
+    # the seed and the underwater detector instead.
+    ann_phases = None
+    try:
+        _ann = (
+            sb_admin.table("session_annotations")
+            .select("phases")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+        if _ann.data:
+            ann_phases = _ann.data[0].get("phases")
+    except Exception:
+        pass
+
+    old_mj = row.get("metrics_json") or {}
     ctx = pm.PhaseContext(
         t=t_arr, vel=vel_arr, dist=dist_arr, accel=accel_arr, fs=fs,
         stroke_type=row.get("stroke_type"), go_signal_s=None,
+        annotation_phases=ann_phases,
+        seed_phases=annot.build_seed(old_mj, fs)["phases"],
+        initial_phase=old_mj.get("initial_phase"),
     )
     phases = pm.compute_phases(ctx)
-
-    old_mj = row.get("metrics_json") or {}
     new_mj = _clean({**old_mj, "phases": phases})
     try:
         sb_admin.table("sessions").update(

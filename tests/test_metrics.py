@@ -506,3 +506,88 @@ class TestSwimWindowLowRail:
         assert fixed_win is not None and fixed_win[0] > 0    # ip_end lifted off the collapse
         assert fixed_win != railed_win
         assert fixed_win[1] == n                             # swim_end unchanged; only ip_end moved
+
+
+# ── Underwater start (Phase 75-02) ────────────────────────────────────────────
+
+def _dive_glide_kick_trace(fs=90.0, surge_peak=3.0, dip_vel=0.6, kick_mean=1.6,
+                           kick_amp=0.30, dip_t=2.0, duration_s=12.0):
+    """A realistic start → glide → underwater-kick velocity trace.
+
+    Rises to `surge_peak` (the dive/push-off), decays in streamline to `dip_vel` at
+    `dip_t` (the glide), then oscillates about `kick_mean` (dolphin kicking). The dip
+    at `dip_t` is the boundary detect_underwater_start must find.
+    """
+    t = np.arange(0.0, duration_s, 1.0 / fs)
+    rise_t = 0.5
+    vel = np.piecewise(
+        t,
+        [t < rise_t, (t >= rise_t) & (t < dip_t), t >= dip_t],
+        [lambda x: surge_peak * x / rise_t,
+         lambda x: surge_peak - (surge_peak - dip_vel) * (x - rise_t) / (dip_t - rise_t),
+         lambda x: kick_mean + kick_amp * np.sin(2 * np.pi * 2.0 * (x - dip_t))],
+    )
+    return t, vel
+
+
+class TestDetectUnderwaterStart:
+    """Phase 75-02: the coach's 'underwater begins at the first big velocity dip' rule."""
+
+    def test_finds_the_glide_end_dip(self):
+        fs, dip_t = 90.0, 2.0
+        t, vel = _dive_glide_kick_trace(fs=fs, dip_t=dip_t)
+        idx = m.detect_underwater_start(t, vel, 0)
+        assert idx is not None
+        # within one sample of the modelled dip
+        assert abs(idx / fs - dip_t) <= 1.5 / fs
+
+    def test_returns_none_when_no_qualifying_dip(self):
+        fs = 90.0
+        t = np.arange(0.0, 10.0, 1.0 / fs)
+        vel = np.linspace(0.0, 2.0, len(t))       # monotone rise, never dips
+        assert m.detect_underwater_start(t, vel, 0) is None
+
+    def test_tolerates_nans_in_a_stored_profile(self):
+        """The recompute path feeds a stored velocity_profile, which can contain nulls."""
+        fs, dip_t = 90.0, 2.0
+        t, vel = _dive_glide_kick_trace(fs=fs, dip_t=dip_t)
+        vel = vel.copy()
+        vel[::97] = np.nan                        # scattered dropouts, none at the dip
+        idx = m.detect_underwater_start(t, vel, 0)
+        assert idx is not None
+        assert abs(idx / fs - dip_t) <= 1.5 / fs
+
+    def test_returns_none_on_a_trace_under_one_second(self):
+        fs = 90.0
+        t, vel = _dive_glide_kick_trace(fs=fs)
+        assert m.detect_underwater_start(t[:40], vel[:40], 0) is None
+
+    def test_ignores_a_shallow_dip_and_takes_the_next_prominent_one(self):
+        """A ripple during the glide must not be mistaken for the glide end."""
+        fs, dip_t = 90.0, 2.5
+        t, vel = _dive_glide_kick_trace(fs=fs, dip_t=dip_t)
+        vel = vel.copy()
+        v95 = float(np.percentile(np.abs(vel), 95))
+        ripple = int(1.2 * fs)                    # a small notch mid-glide
+        vel[ripple] -= 0.10 * v95                 # prominence well under the 0.40 threshold
+        idx = m.detect_underwater_start(t, vel, 0)
+        assert idx is not None
+        assert idx != ripple
+        assert abs(idx / fs - dip_t) <= 1.5 / fs
+
+    def test_honors_baseline_end_idx_offset(self):
+        """Searching from a later baseline_end must still return a FULL-TRACE index."""
+        fs, dip_t = 90.0, 2.0
+        t, vel = _dive_glide_kick_trace(fs=fs, dip_t=dip_t)
+        pad = int(3.0 * fs)
+        t_pad = np.arange(0.0, (len(vel) + pad) / fs, 1.0 / fs)[: len(vel) + pad]
+        vel_pad = np.concatenate([np.zeros(pad), vel])
+        idx = m.detect_underwater_start(t_pad, vel_pad, pad)
+        assert idx is not None
+        assert abs((idx - pad) / fs - dip_t) <= 1.5 / fs
+
+    def test_never_raises_on_degenerate_input(self):
+        t = np.arange(0.0, 5.0, 1.0 / 90.0)
+        assert m.detect_underwater_start(t, np.zeros(len(t)), 0) is None
+        assert m.detect_underwater_start(t, np.full(len(t), np.nan), 0) is None
+        assert m.detect_underwater_start(t, np.zeros(len(t)), 10_000) is None

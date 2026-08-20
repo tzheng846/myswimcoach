@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+import phase_metrics as pm
+
 # Realistic 30 s @ 100 Hz profiles
 _N = 3000
 _t_fix = np.arange(_N) / 100.0
@@ -35,8 +37,9 @@ SESSION_ROW = {
 AUTH = {"Authorization": "Bearer fake-token-mocked"}
 
 
-def _recompute_admin(session_row=SESSION_ROW, coach_id="coach-1"):
-    """Fake supabase admin: coaches -> coach_id, sessions -> session_row.
+def _recompute_admin(session_row=SESSION_ROW, coach_id="coach-1", annotation=None):
+    """Fake supabase admin: coaches -> coach_id, sessions -> session_row,
+    session_annotations -> annotation (None = the common no-annotation case).
     Table mocks are memoized so tests can assert on the update() call."""
     admin = MagicMock()
     admin._tables = {}
@@ -50,6 +53,8 @@ def _recompute_admin(session_row=SESSION_ROW, coach_id="coach-1"):
             result.data = [{"id": coach_id}] if coach_id else []
         elif name == "sessions":
             result.data = [session_row] if session_row else []
+        elif name == "session_annotations":
+            result.data = [annotation] if annotation else []
         for method in ("select", "eq", "limit", "update", "upsert", "delete", "in_"):
             getattr(t, method).return_value = t
         t.execute.return_value = result
@@ -105,7 +110,7 @@ class TestRecomputeHappyPath:
         assert new_mj["cycles"] == OLD_METRICS_JSON["cycles"]
         assert new_mj["initial_phase"] == OLD_METRICS_JSON["initial_phase"]
         assert new_mj["data_quality"] == OLD_METRICS_JSON["data_quality"]
-        assert new_mj["phases"]["schema_version"] == 1
+        assert new_mj["phases"]["schema_version"] == pm.SCHEMA_VERSION
 
     def test_idempotent_second_call_same_shape(self, api_client, monkeypatch):
         import api
@@ -139,3 +144,49 @@ class TestRecomputeHappyPath:
                             lambda: _recompute_admin(session_row=row))
         resp = api_client.post("/sessions/sess-1/recompute", headers=AUTH)
         assert resp.status_code == 422
+
+
+class TestRecomputeBoundaries:
+    """Phase 75-02: the endpoint resolves boundaries, and a coach annotation outranks
+    the detector on the sessions that have one."""
+
+    def test_no_annotation_row_still_succeeds_and_detects(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: _recompute_admin())
+        resp = api_client.post("/sessions/sess-1/recompute", headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        bounds = resp.json()["phases"]["boundaries"]
+        assert bounds["sources"]["underwater_start_s"] in ("detected", "none")
+        assert bounds["sources"]["underwater_start_s"] != "manual"
+
+    def test_annotation_wins(self, api_client, monkeypatch):
+        import api
+        ann = {"phases": {"dive_start_s": 1.0, "underwater_start_s": 5.0,
+                          "stroke_start_s": 12.0, "finish_s": 28.0}}
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _recompute_admin(annotation=ann))
+        resp = api_client.post("/sessions/sess-1/recompute", headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        phases = resp.json()["phases"]
+        bounds = phases["boundaries"]
+        assert bounds["underwater_start_s"] == 5.0
+        assert bounds["sources"]["underwater_start_s"] == "manual"
+        # a 7 s underwater window inside a 30 s trace is usable, so the metrics fill in
+        assert phases["underwater"]["uw_duration"]["value"] == pytest.approx(7.0)
+        assert phases["underwater"]["uw_distance"]["value"] is not None
+
+    def test_pulldown_emitted_for_this_breaststroke_session(self, api_client, monkeypatch):
+        """SESSION_ROW is breaststroke; its stored initial_phase carries the pulldown."""
+        import api
+        row = {**SESSION_ROW,
+               "metrics_json": {**OLD_METRICS_JSON,
+                                "initial_phase": {**OLD_METRICS_JSON["initial_phase"],
+                                                  "pulldown_peak_vel_ms": 1.7,
+                                                  "pulldown_duration_s": 0.55}}}
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _recompute_admin(session_row=row))
+        resp = api_client.post("/sessions/sess-1/recompute", headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        uw = resp.json()["phases"]["underwater"]
+        assert uw["pulldown_peak_vel"]["value"] == pytest.approx(1.7)
+        assert uw["pulldown_duration"]["value"] == pytest.approx(0.55)

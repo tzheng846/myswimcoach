@@ -108,6 +108,34 @@ class TestBuildSeed:
         assert all(v is None for v in seed["phases"].values())
         assert seed["stroke_marks_s"] == []
 
+    def test_stored_boundary_wins_over_the_dive_peak(self):
+        """Phase 75-02: a row that carries phases.boundaries seeds from the detector."""
+        mj = {**METRICS_JSON,
+              "phases": {"boundaries": {"underwater_start_s": 3.4}}}
+        p = annot.build_seed(mj)["phases"]
+        assert p["underwater_start_s"] == pytest.approx(3.4)   # not 2.0, the dive peak
+
+    def test_falls_back_to_the_dive_peak_without_a_phases_key(self):
+        """Every session recorded before 75-01 has no phases key at all."""
+        assert "phases" not in METRICS_JSON
+        p = annot.build_seed(METRICS_JSON)["phases"]
+        assert p["underwater_start_s"] == pytest.approx(2.0)
+
+    @pytest.mark.parametrize("boundaries", [None, {}, "junk", {"underwater_start_s": None},
+                                            {"underwater_start_s": "3.4"}])
+    def test_malformed_stored_boundary_falls_back(self, boundaries):
+        mj = {**METRICS_JSON, "phases": {"boundaries": boundaries}}
+        p = annot.build_seed(mj)["phases"]
+        assert p["underwater_start_s"] == pytest.approx(2.0)
+
+    def test_stored_boundary_still_obeys_the_ordering_walk(self):
+        """A stored value that would land after stroke_start is dropped like any other."""
+        mj = {**METRICS_JSON,
+              "phases": {"boundaries": {"underwater_start_s": 99.0}}}
+        p = annot.build_seed(mj)["phases"]
+        assert p["underwater_start_s"] is None
+        assert p["stroke_start_s"] == pytest.approx(4.5)
+
     def test_stroke_start_falls_back_to_first_cycle(self):
         mj = {"cycles": [{"start_idx": 300, "end_idx": 500}]}
         seed = annot.build_seed(mj)

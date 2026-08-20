@@ -105,7 +105,7 @@ class TestDataQuality:
 
 
 class TestPhaseMetricsScaffold:
-    """POST /process — Phase 75-01 additive `phases` skeleton (registry all-planned)."""
+    """POST /process — the additive `phases` object (75-01 skeleton, 75-02 boundaries)."""
 
     def test_phases_has_four_buckets_and_go_signal(self, api_client, synthetic_csv_bytes):
         phases = _post_csv(api_client, synthetic_csv_bytes).json()["phases"]
@@ -116,13 +116,30 @@ class TestPhaseMetricsScaffold:
         assert "go_signal_s" in phases
         assert phases["go_signal_s"] is None  # no GO button yet
 
-    def test_every_phase_metric_is_planned_with_null_value(self, api_client, synthetic_csv_bytes):
-        """This plan implements zero metrics — every entry must read as an empty slot."""
+    def test_every_planned_metric_reads_as_an_empty_slot(self, api_client, synthetic_csv_bytes):
+        """A `planned` entry is a reserved slot: null value, and it says so. (75-01
+        asserted this of EVERY metric; 75-02 implements the first six, so the assertion
+        narrows to the still-planned ones and stays true for the rest of Step 2.)"""
         phases = _post_csv(api_client, synthetic_csv_bytes).json()["phases"]
         for bucket in ("start", "underwater", "swim", "whole"):
             for key, entry in phases[bucket].items():
-                assert entry["value"] is None, f"{bucket}.{key} should be null (planned)"
-                assert entry["status"] == "planned"
+                assert entry["status"] in ("planned", "implemented")
+                if entry["status"] == "planned":
+                    assert entry["value"] is None, f"{bucket}.{key} should be null (planned)"
+
+    def test_boundaries_are_resolved_with_per_key_sources(self, api_client, synthetic_csv_bytes):
+        """Phase 75-02: /process has no annotation to read, so nothing resolves 'manual'."""
+        phases = _post_csv(api_client, synthetic_csv_bytes).json()["phases"]
+        bounds = phases["boundaries"]
+        for key in ("dive_start_s", "underwater_start_s", "stroke_start_s", "finish_s"):
+            assert key in bounds
+            assert bounds["sources"][key] in ("auto", "detected", "none")
+        assert bounds["sources"]["underwater_start_s"] in ("detected", "none")
+
+    def test_the_four_underwater_metrics_report_implemented(self, api_client, synthetic_csv_bytes):
+        phases = _post_csv(api_client, synthetic_csv_bytes).json()["phases"]
+        for key in ("uw_duration", "uw_distance", "uw_avg_speed", "uw_surface_ratio"):
+            assert phases["underwater"][key]["status"] == "implemented"
 
     def test_reaction_time_reserved_under_start(self, api_client, synthetic_csv_bytes):
         phases = _post_csv(api_client, synthetic_csv_bytes).json()["phases"]
