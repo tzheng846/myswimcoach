@@ -3,8 +3,31 @@
 ## Current Position
 
 Milestone: v0.5 Commercial Foundation
-Phase: **75 (Report Card Revamp — Race-Phase Model) — Step 2 of 3, 75-02 CLOSED (loop complete)** · ⚠ **63 + 65 still open (65-03 ABSORBED into 75); 64 + 66 + 67 + 69 + 71 + 73 CLOSED**
-Plan: **75-02 CLOSED 2026-08-19 — loop complete (PLAN ✓ APPLY ✓ UNIFY ✓); code `337360b` + docs close-loop, pushed to `origin/main`. Next: `/paul:plan 75-03` (kick detector).** `type:execute`, `autonomous:false`,
+Phase: **77 (Fly Breakout Detection — arm-cycle appearance, butterfly) — 77-01 LOOP CLOSED 2026-08-20.** ⚠ **PHASE TRANSITION NOT YET RUN** (PLAN count == SUMMARY count == 1, so 77 is complete by that test — transition + commit is the immediate next action) · ⚠ **76-01 IS CLOSED** (`76-01-SUMMARY.md` exists, written 2026-08-20 17:21 — the earlier "no SUMMARY" claim was STALE) but **its AC-4 human-verify checkpoint was never run and is still owed**; ⚠ **75-03 IS APPLIED AND UNCLOSED** (no SUMMARY). Both are **uncommitted** · Phase **75 open** (Step 3/3 UI not built) · ⚠ **63 open; 64 + 65 + 66 + 67 + 69 + 71 + 73 CLOSED**
+Plan: **77-01 UNIFIED 2026-08-20** → [77-01-SUMMARY.md](phases/77-fly-breakout-detection/77-01-SUMMARY.md). Shipped `metrics.detect_breakout_fly`: the band-power ratio `P(0.8-1.1 Hz) / P(1.1-1.5 Hz)` detected as a rise AFTER a sustained low (the low-run requirement is what skips the push-off transient), behind a **butterfly-only** branch at `metrics.py:1393` — the same `compute_session_metrics` seam 76 uses — reusing the shared `_breakout_leaves_swim` collapse guard and placed BEFORE the manual override at `:1401` so a human `ip_end` still wins. ⭐ **RE-MEASURED AT UNIFY on the live DB, 16 annotated fly marks: median |err| 2.67 s → 0.38 s, 12/16 within 1 s, 9/16 within 0.5 s, 6 sessions inside 0.12 s, 1 refusal.** Robustness measured, not assumed: all 16 band-edge jitter cells beat the incumbent (worst 0.94 s → physical, not a knife-edge fit) and the auto `detect_underwater_start` (75-02) gives an **identical 0.38 s** (the production seam holds on fly). Fingerprint reproduced: arm 2.53x appears / fundamental 0.45x drops / 2-beat harmonic 2.09x appears. **Suite 403 passed** (baseline 388, +20 tests). ⚠ The old "suite is RED" claim was **stale** — it was already green before this plan. Free/back/breast/None **byte-identical**, verified by rebuilding the pre-77 module and diffing every returned key; `metrics.py` diff is **479 insertions, 0 deletions**, so no 76 symbol could have been touched; `api.py`/`annotations.py` diffs empty.
+⚠ **ALL 5 AC PASS, TWO WITH CORRECTIONS RECORDED IN THE SUMMARY:**
+- **AC-1's refusal premise was REFUTED.** The sustained-low-run gate does **NOT** by itself refuse a stationary stroking trace — the arm cycle's own amplitude modulation satisfies it. Only the unplanned `_FLY_MIN_CONTRAST` gate stops that case. Any future band-ratio detector that draws its thresholds from its own signal's percentile range inherits this hole.
+- **AC-4 passed on the second review pass.** The first was rejected ("most are not even close") and root-caused to the checkpoint TOOL, not the detector — see DEFER-77-A.
+⚠ **DEVIATIONS (all reconciled in the SUMMARY):** `_FLY_MIN_CONTRAST` added unplanned at **1.5**, the top of a measured flat 1.0-1.5 plateau (>=2.0 costs 0.38 → 0.63 s and 3 good detections) · `_FLY_SCALO_HZ=(0.5,5.0)` not the plan's `(0.5,3.0)` (the measurement was made on that grid) · 1.5 s synthetic tolerance (the CWT smears a hard synthetic step ~1 s — that lag is the wavelet, not the detector) · one refusal test asserted with the floor RAISED (the shipped floor passes it by 0.7% — that would test numpy's rounding).
+⚠ Measured and **REJECTED**: the D5 per-session f0 band refinement (2.33 s vs 0.38 s — it peak-picks whatever dominates after `uw_start`, which on a weak underwater is already the arm cycle) — left in the code but OFF. ⚠ Deliberate trade-off: `e50eb628` is a +4.12 s confident miss at contrast 1.5 that 2.0 refused; 1.5 gains 3 good detections for that 1 bad one.
+Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓` (77-01 closed; loop complete).
+
+### ⚠ OPEN ITEMS CARRIED OUT OF 77-01
+
+- **DEFER-77-A — `tools/breakout_band_probe.py` SHOWS EXPLORATORY/REJECTED DETECTORS WHERE IT SHOULD SHOW THE SHIPPED ONE. Three defects, one root cause.** Two surfaces of one defect: (1) `--plot` runs the Phase-76 `_plot()` for EVERY session including butterfly, writing 17 `{sid}_butterfly.png` whose blue "candidate" is the kick-band rule Phase 77 exists *because* it fails on fly — and those sort BEFORE the 16 `fly_{sid}.png` in any listing (same session `1cb736af` reads −6.1 s in one file and +0.54 s in the other; `22b4711b` reads +9.3 s and −0.08 s); (2) the console per-stroke summary prints `[butterfly] SHIPPED median |err| 3.00s`, which is `detect_breakout_kickband` scored on butterfly, NOT what production runs for fly — the real number is ~40 lines further down. (3) ⚠ **THE WORST ONE, found while closing this loop:** `_plot` never renders a shipped detector AT ALL — `tools/breakout_band_probe.py:244` computes `ship_idx` from `metrics.detect_breakout_kickband` and scores it, but `:270` passes **`cand_idx`** (the probe's own exploratory `_detect_breakout`) to `_plot`. So every `{sid}_{stroke}.png`, **FREESTYLE INCLUDED**, draws a detector 76-01's Correction 2 measured as materially different from production (0.86 s vs 0.42 s). Only `_fly_plot` renders what ships. ⚠⚠ **CONSEQUENCE: PHASE 76'S STILL-OWED AC-4 CHECKPOINT CANNOT BE SATISFIED BY THE CURRENT TOOL** — the freestyle plots do not show the freestyle detector that shipped. **This cost a full review cycle at 77-01's checkpoint. Fix (3) BEFORE running Phase 76's checkpoint, and all three before the next breakout phase runs a human-verify checkpoint.**
+- **D6 — comparability break + backfill for stored butterfly sessions** is a **separate post-approval step the USER runs** (Claude is blocked from unattended production writes).
+- **D7 — flag at 75-03 apply time** that fly kick metrics now inherit a correct `stroke_start` (the kick window is `[uw_start, stroke_start]`).
+- **Ground-truth question, raised and unresolved.** On several fly traces the coach mark sits well AFTER where velocity visibly starts oscillating (`1cb736af` oscillates from ~4.5 s but is marked at 11.4 s; `85b18b3f` from ~3.5 s, marked 10.8 s). That gap is underwater dolphin kicking, which looks like stroking on a velocity trace. Not a code issue — a question about the MARKS, if fly accuracy is ever revisited.
+
+**Last activity:** 2026-08-20 — UNIFIED 77-01. Re-ran the scorer against the live DB (reproduced 0.38 s exactly) and the full suite (403 passed), diagnosed the rejected checkpoint to the probe's reporting rather than the detector, wrote `77-01-SUMMARY.md`, archived `HANDOFF-2026-08-20.md`.
+
+**Next action:** user chose (2026-08-20) to **commit 76 and 77 as SEPARATE, accurate commits**, leaving 75-03 uncommitted until its own loop closes. 76-01 needed no UNIFY after all — it was already closed. Then run the Phase 77 transition (PROJECT.md + ROADMAP status).
+
+---
+[Prior — 76-01, PLANNED 2026-08-20; the entry was written before APPLY ran and was never updated] Phase: **76 (Breakout Detection — kick-band disappearance) — 76-01 PLANNED, awaiting approval** · Phase **75 open** (Step 2/3: 75-02 CLOSED; 75-03 kick detector planned-not-applied, now depends on 76) · ⚠ **63 open; 64 + 65 + 66 + 67 + 69 + 71 + 73 CLOSED**
+Plan: **76-01 created 2026-08-20** — `type:execute`, `autonomous:false`, `depends_on []`, wave 1. **3 files** (metrics.py + tests + tools/breakout_band_probe.py). 3 auto tasks + 1 `checkpoint:human-verify`. 5 ACs. ⭐ **THE USER'S 7th BREAKOUT HYPOTHESIS WAS MEASURED AND IT WINS** where 6 prior levers failed (amplitude / mean-vel step / accel surge / 2× harmonic / rhythm step-down / first-deep-trough). User: *"dolphin kick is cyclic → a frequency band is active for an extended period; breakout = when that band disappears."* The kick band (**1.8–3.2 Hz**) sits ABOVE production's 0.25–2.0 Hz CWT ridge window, so every prior ridge detector was structurally blind to it. Scored on 33 annotated free/fly DB sessions vs the coach's `stroke_start_s` (`tools/breakout_band_probe.py`, read-only, already run): **freestyle median |err| 2.07 → 0.30 s, 11/16 within 0.5 s (current 2/16)**. ⚠ **Butterfly EXCLUDED** (kick-band method 4.46 s, WORSE) — fly keeps undulating at ~2 Hz on the surface so the band never drops (physically principled, scalogram-confirmed). Scope: **freestyle + backstroke** (back n=0 ground truth → ships flagged unvalidated, 59-05 stance); butterfly/breast byte-identical; **refuse-to-answer** gate falls back to today's `detect_swim_window` `ip_end` on weak/short underwater. Integration = per-stroke `ip_end` override in `compute_session_metrics` (D4), propagates to `initial_phase` → `build_seed.stroke_start_s` → underwater window with NO annotations.py / phase_metrics.py edit. D6: **75-03 (kick metrics) now depends on 76** — the kick window is `[uw_start, stroke_start]`. Backfill of ~37 stored free/back sessions = separate post-approval step (D5). **Awaiting approval to APPLY.**
+Loop: `PLAN ✓ ──▶ APPLY ○ ──▶ UNIFY ○` (76-01 created, awaiting approval).
+[Prior — 75-02, CLOSED 2026-08-19; Next was `/paul:plan 75-03` (kick detector), now sequenced after 76] `type:execute`, `autonomous:false`,
   `depends_on ["75-01"]`, wave 1. **10 files** (2 new tools). 3 auto tasks + 1 `checkpoint:human-verify`. 6 ACs.
   Scope: the **underwater phase's START boundary** + the four window-arithmetic underwater metrics.
   ⭐ **THE USER'S OWN HYPOTHESIS WAS MEASURED AND IT WINS BY AN ORDER OF MAGNITUDE.** User: *"for every
@@ -36,7 +59,7 @@ Plan: **75-02 CLOSED 2026-08-19 — loop complete (PLAN ✓ APPLY ✓ UNIFY ✓)
 Status: **75-01 ✅ CLOSED** (Step 1/3) — `phase_metrics.py` registry (37 specs, all `planned`) +
   additive `phases` in `/process` + `POST /sessions/{id}/recompute` backfill seam; `1ba589a`; suite 317.
   ⚠ 75-01's `PhaseContext` carries **NO phase boundaries** — extending it is 75-02's first structural change.
-Last activity: 2026-08-19 — UNIFIED 75-02 — loop closed (see the UNIFIED entry below). Previously: created `.paul/phases/75-report-card-phase-model/75-02-PLAN.md` after a 2-round question loop + a read-only live-DB measurement (108 sessions, 38 annotations) that validated the user's first-big-dip hypothesis and refuted the rhythm step-down breakout detector.
+Last activity: 2026-08-20 — created `.paul/phases/76-breakout-detection/76-01-PLAN.md`. Tested the user's kick-band-disappearance hypothesis end-to-end BEFORE planning: built `tools/breakout_band_probe.py`, scored it read-only against 33 annotated DB sessions + eyeballed scalogram plots. Result: decisive freestyle win (0.30 s median), butterfly excluded (surface undulation). Plan productionizes it free/back-only with a refuse gate. Previously (2026-08-19): UNIFIED 75-02 — loop closed (see the UNIFIED entry below).
 
 ### 75 UNIFIED — 75-02 underwater start boundary + 4 window metrics 2026-08-19
 **Loop: `PLAN ✓ ──▶ APPLY ✓ ──▶ UNIFY ✓`.** Closed 2026-08-19: **`337360b`** (`feat(75):
@@ -521,8 +544,15 @@ Progress:
 
 Current loop state:
 ```
-Phase 75:  PLAN ──▶ APPLY ──▶ UNIFY   [Step 2 of 3 — 75-02 created, awaiting approval]
-             ✓        ○        ○     [75-01 ✅ CLOSED (Step 1, skeleton); 75-02 = underwater start boundary + 4 window metrics]
+Phase 77:  PLAN --> APPLY --> UNIFY   [77-01 created 2026-08-20, awaiting approval]
+             ✓        ○        ○     [fly breakout via arm-cycle appearance; measured 2.67 -> 0.35 s median |err|]
+
+Phase 76:  PLAN --> APPLY --> UNIFY   [⚠ APPLIED IN THE WORKING TREE, LOOP NOT CLOSED]
+             ✓        ✓        ○     [⚠ no SUMMARY, uncommitted, and the suite is RED because of it
+                                    - freestyle stroke_count 11 -> 0 on the committed fixture]
+
+Phase 75:  PLAN ──▶ APPLY ──▶ UNIFY   [Step 3 of 3 — 75-02 CLOSED; ⚠ 75-03 APPLIED, LOOP NOT CLOSED (no SUMMARY, uncommitted); UI step not built]
+             ✓        ✓        ○     [75-01 + 75-02 ✅ CLOSED; 75-03 (7 underwater kick metrics) applied but unsummarised/uncommitted]
 
 Phase 66:  PLAN ──▶ APPLY ──▶ UNIFY
              ✓        ✓        ✓     [✅ PHASE COMPLETE 2026-08-16 — SG accel + per-stroke windows; 120908f + ee1852c → Railway]
@@ -1096,7 +1126,20 @@ Plan: `.paul/phases/60-mobile-app-rework/60-01-PLAN.md`. DO NOT APPLY until the 
 
 ## Session Continuity
 
-Last session: 2026-08-19
+Last session: 2026-08-20
+Stopped at: **77-01 APPLY — all 4 auto tasks done and verified; the blocking `checkpoint:human-verify` (task 5 of 5) is NOT done.** `metrics.detect_breakout_fly` (the arm ÷ fundamental band-power ratio, rise-after-sustained-low) ships behind a butterfly-only branch at the same `compute_session_metrics` seam 76 uses, reusing the shared `_breakout_leaves_swim` collapse guard. **MEASURED against the live DB, 16 annotated fly marks: median |err| 2.67 s → 0.38 s, 12/16 within 1 s, 1 refusal.** Robustness measured, not assumed: the 4×4 band-edge jitter grid tops out at 0.94 s (every cell beats the incumbent → physical, not a knife-edge fit) and the auto `detect_underwater_start` (75-02) gives an identical 0.38 s (the production seam holds on fly). Suite **403 passed** (baseline 388) — ⚠ the previous entry's "the suite is RED" is **stale**, it was already green before this plan started. Free/back/breast/None verified byte-identical by rebuilding the pre-77 module and diffing every returned key; `api.py`/`annotations.py` diffs empty.
+Next action: run `python tools/breakout_band_probe.py --plot` (read-only), show the user the butterfly PNGs, and get "approved" or a named constant to adjust — then `/paul:unify`. **4 deviations + 1 finding must be reconciled at UNIFY** (see the handoff): a `_FLY_MIN_CONTRAST` gate the plan did not specify (needed because the low/rise thresholds come from the ratio's OWN range, so a rippling ratio could otherwise never be refused; set to 1.5, the top of a measured flat plateau — ≥2.0 costs accuracy), `_FLY_SCALO_HZ = (0.5, 5.0)` rather than the plan's `(0.5, 3.0)` (the 0.35 s result was measured on that grid), a 1.5 s synthetic tolerance (the CWT smears a hard synthetic step ~1 s), one refusal test asserted with the floor raised (the shipped floor would pass it by 0.7% — testing rounding, not the detector), and the finding that the sustained-low-run gate does NOT by itself refuse stationary stroking. Also measured and REJECTED: the D5 per-session f0 band refinement (2.33 s vs 0.38 s) — left in the code but off.
+Resume file: `.paul/HANDOFF-2026-08-20.md`
+Resume context:
+- ⚠ **Nothing is committed, and this sits on two other unclosed loops** — 76-01 and 75-03 are applied but unsummarised and uncommitted. `git status` does not show only Phase 77.
+- ⚠ `tools/breakout_band_probe.py` is **untracked** — `git add` it before any commit.
+- ⚠ One deliberate trade-off to disclose at UNIFY: session `e50eb628` is a +4.12 s confident miss at contrast 1.5 that contrast 2.0 correctly refused; 1.5 gains 3 good detections and re-admits that 1 bad one (0.63 → 0.38 s median).
+- Post-approval, NOT tasks: **D6** the comparability break + backfill for stored butterfly sessions is a separate step the user runs (Claude is blocked from prod writes); **D7** flag at 75-03 apply time that fly kick metrics now inherit a correct `stroke_start`.
+- Phase 76 has **no ROADMAP row** either (77's row now references it); adding one was out of this plan's scope.
+
+---
+
+[Prior] Last session: 2026-08-19
 Stopped at: 75-02 UNIFIED — loop closed (underwater start boundary + 4 window metrics; code 337360b). Phase 75 Step 2 of 3.
 Next action: `/paul:plan 75-03` — kick detector + all 7 kick metrics. Inherits 75-02's window (measurable on 60 of 108 sessions, blank on the other 48 for the deferred end-boundary reason).
 Resume file: `.paul/phases/75-report-card-phase-model/75-02-SUMMARY.md`

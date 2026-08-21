@@ -987,6 +987,239 @@ def _breakout_leaves_swim(t, vel, breakout_idx, swim_end_idx):
         return True
 
 
+# ── BREAKOUT BY ARM-CYCLE APPEARANCE (Phase 77) ───────────────────────────────
+#
+# The Underwater→Swim breakout for BUTTERFLY. The Phase-76 detector above cannot be
+# reused here and measured WORSE than the incumbent on fly (4.46 s vs 2.43 s) for a
+# physical reason: butterfly is a dolphin kick with arms bolted on. Its SURFACE stroke
+# IS two dolphin kicks per arm cycle, in the same ~2 Hz band, so the kick band never
+# switches off (Pk_uw/sf ≈ 1) and there is no disappearance to detect.
+#
+# Fly is an APPEARANCE problem instead. Measured on the 16 annotated fly sessions, the
+# breakout is a spectral REORGANIZATION — the single underwater ~1.2 Hz kick line SPLITS
+# into an arm cycle plus two kick beats. The per-frequency P_surface/P_uw fingerprint
+# (the ratio cancels the CWT 1/f bias; freestyle is the positive control, its kick bands
+# drop 0.19-0.29x):
+#
+#     0.8-1.1 Hz  arm cycle             1.81x (14/16)   APPEARS
+#     1.1-1.5 Hz  uw kick fundamental   0.52x ( 5/16)   DROPS
+#     1.5-2.0 Hz  2-beat harmonic       2.04x (15/16)   APPEARS
+#
+# So the feature is the RATIO arm ÷ fundamental, which encodes the appearance AND the
+# disappearance in one scale-invariant number, and the detector is a rise-AFTER-sustained-
+# low (requiring the low run first is what skips the push-off transient). Scored against
+# the coach's stroke_start_s marks: median |err| 2.67 s (incumbent) → 0.35 s, 12/15 ≤ 1 s.
+#
+# ⚠ Raw arm-band appearance alone was REJECTED — only 1.45x uw→sf, far weaker than the
+# ratio. ⚠ No learned model (D2): 16 sessions from ONE swimmer is where 59-05's no-overfit
+# rule bites hardest, and one physical ratio already wins.
+#
+# ⚠ BUTTERFLY ONLY — the caller (compute_session_metrics) enforces it. Free/back stay on
+# detect_breakout_kickband; breaststroke has a pulldown, not a kick train, and is untouched.
+_FLY_ARM_HZ     = (0.8, 1.1)    # arm-cycle band — APPEARS at breakout
+_FLY_FUND_HZ    = (1.1, 1.5)    # uw dolphin-kick fundamental — DROPS at breakout
+_FLY_SCALO_HZ   = (0.5, 5.0)    # wider CWT so both bands are visible; the same grid the
+                                # 0.35 s measurement was made on (breakout_band_probe.py)
+_FLY_SCALO_N    = _KICK_SCALO_N  # geometric scales spanning _FLY_SCALO_HZ
+_FLY_SMOOTH_S   = 0.4           # rolling-mean smoothing of the ratio trace (s)
+_FLY_LOW_FRAC   = 0.5           # ratio is "underwater-low" below this × its 20-80 pct range
+_FLY_RISE_FRAC  = 0.5           # ratio is "surface-high" above this × its 20-80 pct range
+_FLY_MIN_LOW_S  = 0.8           # sustained low required BEFORE a rise counts (skips push-off)
+_FLY_HOLD_S     = 0.5           # the rise must persist this long to count as the breakout
+_FLY_MIN_CONTRAST = 1.5         # the 80th pct of the ratio must be at least this x its 20th,
+                                # or there was no reorganization to detect -> refuse (D4).
+                                # ⚠ NOT decoration, and ⚠ NOT free. The low/rise thresholds
+                                # are taken from the ratio's OWN 20-80 range, so without this
+                                # a threshold always sits inside the observed spread and a
+                                # merely RIPPLING ratio eventually supplies a low run and a
+                                # "rise" — the detector could then never refuse for lack of
+                                # signal, only for running out of window.
+                                # Measured on the 16 annotated fly sessions (the contrast
+                                # sweep tools/breakout_band_probe.py prints). Refusals fall
+                                # back to the incumbent, so
+                                # over-refusing costs accuracy directly:
+                                #     floor   1.0    1.5    2.0    2.5    3.0    4.0
+                                #     median  0.38   0.38   0.63   0.63   0.80   2.04
+                                #     <=1.0s  12/16  12/16  10/16  10/16   9/16   4/16
+                                #     refused  1      1      4      5      6     12
+                                # 1.0-1.5 is a flat plateau; 1.5 is its top, keeping a real
+                                # floor without paying anything. Anything >= 2.0 starts
+                                # converting good detections into incumbent fallbacks.
+                                # ⚠ On a SYNTHETIC stationary tone the contrast lands at
+                                # 1.35-1.49, i.e. just under this floor — see the test class
+                                # for why those cases are asserted with the floor raised
+                                # rather than on that margin.
+
+
+# Per-session band refinement (D5). UNSUPERVISED — it reads the session's own underwater
+# spectrum, never the ground-truth marks, so it does not violate the no-overfit rule. It is
+# hardening with a fixed-band fallback, not rescue: the fixed bands already survive a 4×4
+# band-edge jitter grid (every cell beats the incumbent). Default set by MEASUREMENT — see
+# the refine-bands row in tools/breakout_band_probe.py.
+_FLY_REFINE_BANDS = False       # ⚠ MEASURED AND REJECTED, not merely left off. On the 16
+                                # annotated fly sessions: fixed bands 0.38 s median |err|
+                                # (1 refusal) vs per-session f0 2.33 s (7 refusals). The
+                                # peak-pick keys on whatever dominates the first seconds
+                                # after uw_start, which on a short or weak underwater is
+                                # already the arm cycle — so it derives its "fundamental"
+                                # from the very thing it is supposed to measure against.
+                                # Kept (not deleted) because it is the swimmer-invariant
+                                # idea and one corpus of ONE swimmer cannot refute it;
+                                # flip it only against a multi-swimmer corpus.
+_FLY_F0_WINDOW_S  = 3.0         # length of the post-uw_start span the f0 peak-pick reads
+_FLY_F0_HZ        = (1.0, 1.6)  # where a dolphin-kick fundamental can plausibly sit
+_FLY_ARM_OF_F0    = 1.3         # arm cycle ≈ fundamental / this
+_FLY_F0_HALF_HZ   = 0.20        # half-width of the derived fundamental band
+_FLY_ARM_HALF_HZ  = 0.15        # half-width of the derived arm band
+
+
+def _fly_scalogram(vel, fs):
+    """(power[n_f, n_t], freqs_hz) over _FLY_SCALO_HZ, or (None, None) if unreadable.
+
+    A DEDICATED wider CWT, NOT _cwt_ridge — the production ridge's 0.25-2.0 Hz grid clips
+    the 2-beat harmonic, and its grid spacing is itself part of what the 0.35 s result was
+    measured on. Same wavelet and detrend as production; np.nan_to_num because stored
+    velocity_profiles carry magnet-dropout nulls.
+    """
+    active = _detrend_for_cwt(np.nan_to_num(np.asarray(vel, dtype=float)), fs)
+    if not np.any(np.isfinite(active)) or float(np.max(np.abs(active))) < 1e-9:
+        return None, None
+    dt = 1.0 / fs
+    target = np.geomspace(_FLY_SCALO_HZ[0], _FLY_SCALO_HZ[1], _FLY_SCALO_N)
+    scales = pywt.central_frequency(_WAVELET) / (target * dt)
+    coeffs, freqs = pywt.cwt(active, scales, _WAVELET, sampling_period=dt)
+    return np.abs(coeffs) ** 2, freqs
+
+
+def _fly_band(power, freqs, band, fs):
+    """Smoothed mean power in `band` at each sample, or None when no scale lands in it."""
+    sel = (freqs >= band[0]) & (freqs <= band[1])
+    if not sel.any():
+        return None
+    p = power[sel].mean(axis=0)
+    w = max(1, int(_FLY_SMOOTH_S * fs))
+    return np.convolve(p, np.ones(w) / w, mode="same")
+
+
+def _fly_bands(power, freqs, fs, uw_start_idx):
+    """The (arm, fundamental) bands to use for this session, in Hz.
+
+    Fixed physical bands by default. With _FLY_REFINE_BANDS, peak-pick the underwater
+    window's OWN spectrum for its kick fundamental f0 and derive both bands from it, so
+    the detector can follow a swimmer whose kick rate differs from this corpus's. Falls
+    back to the fixed bands whenever f0 is unreadable.
+    """
+    if not _FLY_REFINE_BANDS:
+        return _FLY_ARM_HZ, _FLY_FUND_HZ
+    i0 = max(0, int(uw_start_idx))
+    i1 = min(power.shape[1], i0 + int(_FLY_F0_WINDOW_S * fs))
+    sel = (freqs >= _FLY_F0_HZ[0]) & (freqs <= _FLY_F0_HZ[1])
+    if i1 <= i0 or not sel.any():
+        return _FLY_ARM_HZ, _FLY_FUND_HZ
+    col = power[sel, i0:i1].mean(axis=1)
+    if not np.any(np.isfinite(col)):
+        return _FLY_ARM_HZ, _FLY_FUND_HZ
+    f0 = float(freqs[sel][int(np.argmax(col))])
+    if not np.isfinite(f0) or f0 <= 0:
+        return _FLY_ARM_HZ, _FLY_FUND_HZ
+    arm_c = f0 / _FLY_ARM_OF_F0
+    return ((arm_c - _FLY_ARM_HALF_HZ, arm_c + _FLY_ARM_HALF_HZ),
+            (f0 - _FLY_F0_HALF_HZ, f0 + _FLY_F0_HALF_HZ))
+
+
+def _fly_band_ratio(vel, fs, uw_start_idx=0):
+    """Smoothed P(arm band) / P(fundamental band) at each sample, or None if unreadable.
+
+    The fly breakout feature: it rises when the ~1 Hz arm cycle turns on underneath the
+    ~2 Hz kick that keeps running. Scale-invariant, so it needs no amplitude calibration.
+    """
+    power, freqs = _fly_scalogram(vel, fs)
+    if power is None:
+        return None
+    arm_hz, fund_hz = _fly_bands(power, freqs, fs, uw_start_idx)
+    arm  = _fly_band(power, freqs, arm_hz, fs)
+    fund = _fly_band(power, freqs, fund_hz, fs)
+    if arm is None or fund is None:
+        return None
+    return arm / (fund + 1e-12)
+
+
+def detect_breakout_fly(t, vel, uw_start_idx, swim_end_idx=None):
+    """Underwater→Swim breakout via arm-cycle appearance (BUTTERFLY).
+
+    Returns the full-trace index where the arm ÷ fundamental band-power ratio rises AFTER
+    a sustained low run, or None when the ratio carries no trustworthy answer — the
+    refuse-to-answer convention (see detect_swim_window). Refuses when:
+      * uw_start is degenerate or the window is under two seconds;
+      * the signal is too flat / all-NaN to carry a scalogram, or the ratio has no range;
+      * the ratio's in-window contrast is under _FLY_MIN_CONTRAST — it ripples but never
+        reorganizes, so a rise found in it would be noise dressed as a breakout;
+      * no sustained low run exists after uw_start — without the settled underwater kick
+        region there is nothing for a rise to be measured against, and the push-off
+        transient would trigger instead;
+      * the ratio never cleanly steps up INSIDE the swim window. This is the short-
+        underwater class: the arm structure only becomes unambiguous past swim_end, so
+        bounding the search there turns those +2 to +4 s confident misses into refusals
+        and the caller keeps the incumbent boundary. Same bound detect_breakout_kickband
+        applies, for the same reason.
+
+    Pure; never raises. BUTTERFLY only — do not call for free/back (their surface kick
+    band disappears, which is detect_breakout_kickband's signal) or breaststroke.
+    """
+    try:
+        fs = _compute_fs(t)
+        n  = len(vel)
+        s  = max(0, int(uw_start_idx))
+        end = min(int(swim_end_idx), n) if swim_end_idx is not None else n
+        if s >= end - 1 or (end - s) < int(2 * fs):
+            return None
+
+        ratio = _fly_band_ratio(vel, fs, s)
+        if ratio is None:
+            return None
+
+        seg = ratio[s:end]
+        seg = seg[np.isfinite(seg)]
+        if seg.size < int(2 * fs):
+            return None
+
+        lo, hi = np.percentile(seg, 20), np.percentile(seg, 80)
+        if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-9:
+            return None
+        if lo <= 0 or (hi / lo) < _FLY_MIN_CONTRAST:
+            return None                      # no reorganization in-window -> refuse
+        low_thr  = lo + _FLY_LOW_FRAC * (hi - lo)
+        rise_thr = lo + _FLY_RISE_FRAC * (hi - lo)
+
+        min_low = max(1, int(_FLY_MIN_LOW_S * fs))
+        hold    = max(1, int(_FLY_HOLD_S * fs))
+        low_run, established, rise_run = 0, False, 0
+        for i in range(s, end):
+            v = ratio[i]
+            if not np.isfinite(v):
+                continue
+            if not established:
+                # the underwater phase: the fundamental dominates, so the ratio sits low
+                if v <= low_thr:
+                    low_run += 1
+                    if low_run >= min_low:
+                        established = True
+                else:
+                    low_run = 0
+                continue
+            if v >= rise_thr:
+                rise_run += 1
+                if rise_run >= hold:
+                    bk = i - hold + 1        # where the arm cycle first turned on
+                    return min(max(bk, s + 1), end - 1)
+            else:
+                rise_run = 0
+        return None                          # never rose in-window → refuse
+
+    except Exception:
+        return None
+
+
 def time_to_distance(t, dist, target_m, baseline_end_idx, head_waist_m=0.0):
     """
     Elapsed time from baseline_end until the swimmer's head reaches target_m.
@@ -1145,6 +1378,22 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
         uw = detect_underwater_start(t, vel, b_end)
         if uw is not None:
             bk = detect_breakout_kickband(t, vel, uw, swim_end)
+            if bk is not None and _breakout_leaves_swim(t, vel, bk, swim_end):
+                ip_end = min(max(int(bk), b_end), swim_end - 1)
+                initial_phase["initial_phase_end_idx"] = ip_end
+
+    # ── breakout by arm-cycle APPEARANCE (Phase 77) ────────────────────────
+    # Butterfly only, and a sibling of the block above rather than a widening of it: fly
+    # keeps its ~2 Hz kick band on the surface (the stroke IS two dolphin kicks per arm
+    # cycle), so nothing disappears and the 76 detector measured WORSE than the incumbent
+    # here. What appears instead is a ~1 Hz arm cycle underneath the kick, which
+    # detect_breakout_fly reads as a rise in the arm ÷ fundamental band-power ratio.
+    # The two branches are mutually exclusive by stroke_type. Same collapse guard, same
+    # refusal fallback, and still BEFORE the manual override so a human ip_end wins.
+    if stroke_type == "butterfly" and swim_end > b_end:
+        uw = detect_underwater_start(t, vel, b_end)
+        if uw is not None:
+            bk = detect_breakout_fly(t, vel, uw, swim_end)
             if bk is not None and _breakout_leaves_swim(t, vel, bk, swim_end):
                 ip_end = min(max(int(bk), b_end), swim_end - 1)
                 initial_phase["initial_phase_end_idx"] = ip_end

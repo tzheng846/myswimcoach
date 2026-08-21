@@ -822,6 +822,122 @@ class TestBreakoutIntegration:
         assert r_a["session"] == r_b["session"]
 
 
+def _fly_kicks_then_strokes(fs=90.0, kick_s=4.0, stroke_s=6.0):
+    """A butterfly-shaped segment: a pure ~1.2 Hz underwater kick fundamental, then the
+    surface stroke — a ~0.9 Hz arm cycle summed with its ~1.8 Hz two-beat kick harmonic.
+
+    That sum is the whole point of Phase 77: the ~2 Hz kick band NEVER disappears on fly
+    (it is the two dolphin kicks per arm cycle), so only the ARM band appearing separates
+    the phases. Measured ratio on this fixture: 0.36 underwater, 5.7 on the surface.
+
+    ⚠ Deliberately NO constant lead-in and NO dead tail. Both are step discontinuities,
+    and the CWT smears a step across ~1 s at these frequencies, which manufactures a ratio
+    rise that has nothing to do with an arm cycle. An earlier version of this fixture had
+    both and made the refusal cases below fire on their own edges.
+
+    Returns t, vel, uw_start_idx, breakout_idx, swim_end_idx.
+    """
+    def sine(dur, f, b, a):
+        n = int(dur * fs)
+        return b + a * np.sin(2 * np.pi * f * (np.arange(n) / fs))
+
+    kicks = sine(kick_s, 1.2, 1.5, 0.6) if kick_s > 0 else np.empty(0)
+    arms  = (sine(stroke_s, 0.9, 1.4, 0.6) + sine(stroke_s, 1.8, 0.0, 0.5)
+             if stroke_s > 0 else np.empty(0))
+    vel = np.concatenate([kicks, arms])
+    t = np.arange(len(vel)) / fs
+    return t, vel, 0, len(kicks), len(vel)
+
+
+class TestBreakoutFly:
+    """Phase 77: Underwater→Swim breakout via arm-cycle appearance (butterfly)."""
+
+    def test_marks_the_arm_cycle_appearance(self):
+        fs = 90.0
+        t, vel, uw, breakout, swim_end = _fly_kicks_then_strokes(fs=fs)
+        bk = m.detect_breakout_fly(t, vel, uw, swim_end)
+        assert bk is not None
+        assert uw < bk < swim_end                        # strictly inside the window
+        # 1.5 s, not 1.0: the CWT smears this fixture's HARD step over ~1 s at these
+        # frequencies, so ~1.1 s of lag is the wavelet, not the detector. The accuracy
+        # claim that matters is the DB score (AC-2, 0.35 s median), not this fixture.
+        assert abs(bk - breakout) / fs <= 1.5            # near the modelled transition
+
+    def test_none_when_the_arm_cycle_never_appears(self):
+        """A pure ~1.2 Hz kick for the whole window: the ratio never steps up → None.
+
+        This is the case that separates Phase 77 from Phase 76 — nothing DISAPPEARS here
+        either, so a disappearance detector would have nothing to say about it.
+
+        Refused by the contrast gate (measured contrast 1.35 vs a 1.5 floor).
+        """
+        fs = 90.0
+        t, vel, uw, _, swim_end = _fly_kicks_then_strokes(fs=fs, kick_s=10.0, stroke_s=0.0)
+        assert m.detect_breakout_fly(t, vel, uw, swim_end) is None
+
+    def test_stationary_stroking_is_refused_by_contrast_not_by_the_low_run(self, monkeypatch):
+        """Arms from the first sample — a surface-fly trace with no underwater phase at all.
+
+        ⚠ This test is asserted with the floor RAISED, and the reason is a real finding
+        rather than test convenience: the sustained-low-run requirement does NOT refuse
+        this case on its own. The arm cycle's own amplitude modulation dips the ratio for
+        long enough to satisfy min_low, so the low-run gate is happy and only the contrast
+        gate stops it. At the shipped 1.5 floor it does refuse, but by 0.7% (measured
+        contrast 1.49) — a margin thin enough that asserting on it would be testing numpy's
+        rounding, not the detector. So: assert the mechanism at a floor that unambiguously
+        separates stationary (1.35-1.49) from a real reorganization (16.5 on this fixture),
+        and record the thin real-world margin here rather than hiding it.
+        """
+        fs = 90.0
+        t, vel, uw, _, swim_end = _fly_kicks_then_strokes(fs=fs, kick_s=0.0, stroke_s=10.0)
+        monkeypatch.setattr(m, "_FLY_MIN_CONTRAST", 3.0)
+        assert m.detect_breakout_fly(t, vel, uw, swim_end) is None
+
+    def test_none_when_the_rise_is_outside_the_swim_window(self):
+        """Short-underwater class: bounding the search to swim_end turns the confident
+        late miss into a refusal, exactly as detect_breakout_kickband does."""
+        fs = 90.0
+        t, vel, uw, breakout, _ = _fly_kicks_then_strokes(fs=fs)
+        assert m.detect_breakout_fly(t, vel, uw, swim_end_idx=breakout) is None
+
+    def test_tolerates_nans_in_a_stored_profile(self):
+        fs = 90.0
+        t, vel, uw, breakout, swim_end = _fly_kicks_then_strokes(fs=fs)
+        vel = vel.copy()
+        vel[::101] = np.nan                              # scattered magnet dropouts
+        bk = m.detect_breakout_fly(t, vel, uw, swim_end)
+        assert bk is not None
+        assert abs(bk - breakout) / fs <= 1.5
+
+    def test_never_raises_on_degenerate_input(self):
+        t = np.arange(0.0, 5.0, 1.0 / 90.0)
+        assert m.detect_breakout_fly(t, np.zeros(len(t)), 0) is None
+        assert m.detect_breakout_fly(t, np.full(len(t), np.nan), 0) is None
+        assert m.detect_breakout_fly(t, np.zeros(len(t)), 10_000) is None
+        # window under two seconds → None
+        assert m.detect_breakout_fly(t[:40], np.ones(40), 0, 40) is None
+
+    def test_contrast_gate_refuses_a_ratio_that_only_ripples(self, monkeypatch):
+        """The gate is exercised by RAISING the floor above a known-good step rather than
+        by shrinking the step, so the test stays valid whatever the measured floor is
+        (same construction as the Phase-76 min-run test)."""
+        fs = 90.0
+        t, vel, uw, _, swim_end = _fly_kicks_then_strokes(fs=fs)
+        assert m.detect_breakout_fly(t, vel, uw, swim_end) is not None    # baseline
+        monkeypatch.setattr(m, "_FLY_MIN_CONTRAST", 1e6)                 # floor > any step
+        assert m.detect_breakout_fly(t, vel, uw, swim_end) is None
+
+    def test_band_refinement_falls_back_to_the_fixed_bands(self, monkeypatch):
+        """D5: the per-session f0 refinement is unsupervised hardening with a fixed-band
+        fallback — it must never make the detector raise or lose the transition."""
+        fs = 90.0
+        t, vel, uw, breakout, swim_end = _fly_kicks_then_strokes(fs=fs)
+        monkeypatch.setattr(m, "_FLY_REFINE_BANDS", True)
+        bk = m.detect_breakout_fly(t, vel, uw, swim_end)
+        assert bk is not None
+        assert abs(bk - breakout) / fs <= 1.5
+
+
 class TestBreakoutCollapseGuard:
     """Phase 76 fix (2026-08-20): a breakout override must leave a swim behind it.
 
@@ -868,3 +984,128 @@ class TestBreakoutCollapseGuard:
                 t, vel, dist, stroke_type=stroke)["session"]["stroke_count"]
             assert n > 0, f"{stroke}: breakout override collapsed the swim window"
             assert abs(n - base / 2) <= 1, f"{stroke}: {n} vs base {base}"
+
+
+def _full_fly_trace(fs=90.0):
+    """baseline → dive surge → glide dip → ~1.2 Hz underwater dolphin kicks → surface fly
+    (~0.9 Hz arm cycle + its ~1.8 Hz two-beat harmonic) → dead tail.
+
+    The butterfly counterpart of _full_free_trace, and the one structural difference is the
+    whole reason Phase 77 exists: the surface segment KEEPS a ~2 Hz component, so a
+    kick-band-disappearance rule has nothing to find here. Returns t, vel, dist,
+    breakout_idx (the kick→stroke transition).
+    """
+    def const(dur, v):
+        return np.full(int(dur * fs), v)
+
+    def sine(dur, f, b, a):
+        return b + a * np.sin(2 * np.pi * f * (np.arange(int(dur * fs)) / fs))
+
+    baseline = const(1.0, 0.0)
+    rise     = np.linspace(0.0, 3.0, int(0.4 * fs))
+    glide    = np.linspace(3.0, 0.5, int(1.3 * fs))       # decays to the dip
+    kicks    = sine(4.0, 1.2, 1.5, 0.6)                   # underwater dolphin kicks
+    fly      = (sine(7.0, 0.9, 1.4, 0.6)                  # surface arm cycle...
+                + sine(7.0, 1.8, 0.0, 0.5))               # ...plus its two kick beats
+    tail     = const(2.0, 0.02)
+    vel = np.concatenate([baseline, rise, glide, kicks, fly, tail])
+    t = np.arange(len(vel)) / fs
+    dist = np.concatenate([[0.0], np.cumsum(np.abs(vel[:-1]) / fs)])
+    breakout_idx = len(baseline) + len(rise) + len(glide) + len(kicks)
+    return t, vel, dist, breakout_idx
+
+
+class TestBreakoutFlyIntegration:
+    """Phase 77: the butterfly ip_end override in compute_session_metrics."""
+
+    def test_butterfly_moves_ip_end_to_the_breakout(self):
+        fs = 90.0
+        t, vel, dist, breakout = _full_fly_trace(fs=fs)
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="butterfly")
+        ip_end = r["initial_phase"]["initial_phase_end_idx"]
+        assert abs(ip_end - breakout) / fs <= 1.5        # see TestBreakoutFly on the 1.5 s
+
+    def test_detector_called_for_butterfly_only(self, monkeypatch):
+        """AC-3: free/back/breast/None never enter the branch, so nothing about them can
+        move. The complement of Phase 76's test_detector_not_called_for_butterfly."""
+        t, vel, dist, _ = _full_fly_trace()
+        for stroke in ("freestyle", "backstroke", "breaststroke", None):
+            called = []
+            monkeypatch.setattr(m, "detect_breakout_fly", lambda *a, **k: called.append(1))
+            m.compute_session_metrics(t, vel, dist, stroke_type=stroke)
+            assert called == [], stroke
+        called = []
+        real = m.detect_breakout_fly
+        monkeypatch.setattr(m, "detect_breakout_fly",
+                            lambda *a, **k: called.append(1) or real(*a, **k))
+        m.compute_session_metrics(t, vel, dist, stroke_type="butterfly")
+        assert called
+
+    def test_free_back_and_breast_are_unchanged_by_this_plan(self, real_session):
+        """AC-3/AC-5 regression guard, on the committed real fixture rather than a
+        synthetic one. These are the values the pre-Phase-77 module produces — verified by
+        rebuilding it with both Phase-77 hunks stripped and diffing every returned key, so
+        the numbers below are a snapshot of the old behaviour, not of the new.
+        """
+        t, vel, dist = real_session
+        expected = {"freestyle": (1428, 5), "backstroke": (1428, 5),
+                    "breaststroke": (1428, 9), None: (1428, 11)}
+        for stroke, (ip_end, n_cycles) in expected.items():
+            r = m.compute_session_metrics(t, vel, dist, stroke_type=stroke)
+            assert r["initial_phase"]["initial_phase_end_idx"] == ip_end, stroke
+            assert r["session"]["stroke_count"] == n_cycles, stroke
+
+    def test_manual_ip_end_wins_over_the_detector(self, monkeypatch):
+        """AC-3: Phase 47 precedence — a human boundary governs whatever the detector says.
+
+        Held against the SAME stroke_type both times, because stroke_type also selects the
+        segmenter (SEGMENTER_BY_STROKE): butterfly and None legitimately produce different
+        cycles from identical boundaries, so comparing across strokes would test that
+        instead of the override.
+        """
+        t, vel, dist, breakout = _full_fly_trace()
+        man = {"ip_end_idx": breakout + int(1.5 * 90.0)}
+        monkeypatch.setattr(m, "detect_breakout_fly",
+                            lambda *a, **k: breakout)      # detector says one thing
+        r_a = m.compute_session_metrics(t, vel, dist, stroke_type="butterfly", manual=man)
+        monkeypatch.setattr(m, "detect_breakout_fly",
+                            lambda *a, **k: None)          # detector says another
+        r_b = m.compute_session_metrics(t, vel, dist, stroke_type="butterfly", manual=man)
+        assert r_a["cycles"] == r_b["cycles"]              # manual governs, detector ignored
+        assert r_a["session"] == r_b["session"]
+        # ⚠ Not asserted: initial_phase["initial_phase_end_idx"] == the manual value. The
+        # manual block sets the LOCAL ip_end that segmentation uses but does not write back
+        # into the initial_phase dict, so that key keeps the detector's answer. Pre-existing
+        # and shared with the 76 branch and 59-03's window block — noted, not changed here.
+
+    def test_refusal_falls_back_to_the_swim_window_value(self, monkeypatch):
+        """When the detector refuses, ip_end is exactly the pre-branch
+        (detect_swim_window) value — identical to the None-stroke path."""
+        monkeypatch.setattr(m, "detect_breakout_fly", lambda *a, **k: None)
+        t, vel, dist, _ = _full_fly_trace()
+        r_fly  = m.compute_session_metrics(t, vel, dist, stroke_type="butterfly")
+        r_none = m.compute_session_metrics(t, vel, dist, stroke_type=None)
+        assert (r_fly["initial_phase"]["initial_phase_end_idx"]
+                == r_none["initial_phase"]["initial_phase_end_idx"])
+
+    def test_collapsed_breakout_is_vetoed_and_the_incumbent_stands(self, monkeypatch):
+        """The shared collapse guard applies to the fly branch too: a detector answering
+        just before swim_end is disbelieved rather than shipping stroke_count = 0.
+        Measured motivation — the 76 kick-band rule produces exactly this on 7 of the 16
+        real fly sessions (+6.5 to +11.1 s)."""
+        t, vel, dist, _ = _full_fly_trace(fs=90.0)
+        r_none = m.compute_session_metrics(t, vel, dist, stroke_type=None)
+        monkeypatch.setattr(m, "detect_breakout_fly",
+                            lambda tt, vv, uw, se=None: int(se) - 20)
+        r_fly = m.compute_session_metrics(t, vel, dist, stroke_type="butterfly")
+        assert (r_fly["initial_phase"]["initial_phase_end_idx"]
+                == r_none["initial_phase"]["initial_phase_end_idx"])
+        assert r_fly["session"]["stroke_count"] > 0
+
+    def test_real_session_as_butterfly_still_segments(self, real_session):
+        """The Phase-76 collapse regression, re-run through the new branch: the committed
+        breaststroke fixture driven as butterfly must never ship an empty swim."""
+        t, vel, dist = real_session
+        n = m.compute_session_metrics(
+            t, vel, dist, stroke_type="butterfly")["session"]["stroke_count"]
+        assert n > 0
