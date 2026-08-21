@@ -104,8 +104,26 @@ and rewrites `dive_start_s` — and any dependent phase metrics — across all s
 (57 / 59-03 / 61-01 / 65 / 76-77). Until it runs, new/recomputed sessions use the foot-of-surge rule
 while untouched historical rows keep the old marker (mixed library — expected, resolved by the backfill).
 
-## Commit note
-Phase 79 is uncommitted and **intermingled in the working tree with Phase 78** (multiswimmer
-diagnostic) and 75-03 (kick metrics). Separate the commits by file set — 79 = `metrics.py`,
-`phase_metrics.py` (dive_start block), `annotations.py`, the 3 test files, `PIPELINE.md §3`,
-`tools/score_dive_start.py`.
+## Reconciliation (UNIFY)
+- **Plan was pre-executed.** Tasks 1–2 code + the Task 3 tool were already in the working tree from a
+  prior session (STATE never updated, no SUMMARY). This `/paul:apply` ran the *owed* remainder: the
+  X-sweep (Task 3 execution), the eyeball checkpoint (3.5, approved), and Task 4 docs — i.e. a
+  resume-validate-document, not a from-scratch build. All 4 tasks + the checkpoint are complete.
+- **X decision:** the plan guessed X ≈ 2; the sweep confirmed **X = 2.0** as the robust pick (accuracy
+  statistically tied across X∈[1.25, 2.0]; 2.0 chosen for the widest jump-and-sink-tug margin). No
+  deviation from plan intent.
+- **AC-3 rationale corrected:** the first SUMMARY draft mis-attributed underwater non-regression to
+  "seeds from baseline_end"; `resolve_boundaries` actually re-seeds underwater from the new
+  `dive_start`. Replaced with a direct measurement — 16/37 seeds move, ΔMAE = 0.000 s.
+
+## Commit
+- **`e1934ba` `feat(79): dive_start = foot of launch surge`** — the Phase 79 **code + tests + phase
+  records** (`metrics.py`, `annotations.py`, the `resolve_boundaries` hunks of `phase_metrics.py`, the
+  dive/boundary hunks of `tests/test_phase_metrics.py`, `tests/test_metrics.py`,
+  `tests/test_annotations.py`, `tools/score_dive_start.py`, this PLAN + SUMMARY). Staged-snapshot tests
+  green (262 passed). The two shared code files were **hunk-split** to leave 75-03's kick work
+  uncommitted.
+- **Docs deferred, deliberately:** `PIPELINE.md §3`, `.paul/STATE.md`, `.paul/ROADMAP.md` carry Phase
+  79 edits **interleaved with uncommitted Phase 78 / 75-03** and are living multi-phase docs — they land
+  with the docs/78 commit, not this one. This is a scoping deviation from the plan's `files_modified`
+  (which listed `PIPELINE.md` / `STATE.md`), forced by the intermingled tree.

@@ -134,7 +134,7 @@ segmentation / phase-metrics work (Phases 75–77) is the current frontier.
 | 75 | Report Card Revamp (Race-Phase Model: Start / Underwater / Swim) | 🚧 Step-3 UI + remaining metrics owed | |
 | 76 | Breakout Detection (free/back — kick-band disappearance) | ✅ | 2026-08-20 |
 | 77 | Fly Breakout Detection (arm-cycle appearance) | ✅ | 2026-08-20 |
-| 78 | Multi-Swimmer Segmentation Diagnostic (pure, no fixes) | 📋 planned (78-01 plan, awaiting approval) | |
-| 79 | Redefine dive_start_s (foot of first ≥X m/s surge) | ✅ complete (`e1934ba`; X=2.0, MAE 0.72→0.15 s; backfill owed) | |
+| 78 | Multi-Swimmer Segmentation Diagnostic (pure, no fixes) | ✅ complete (4/~15 swimmers annotated — coverage gap, not "one swimmer") | 2026-08-21 |
+| 79 | Redefine dive_start_s (foot of first ≥X m/s surge) | ✅ complete (`e1934ba`; X=2.0, MAE 0.72→0.15 s; backfill applied) | 2026-08-21 |
 
 _Phase 72 was never used. 56 / 62 / 68 are unscheduled TODOs with no phase directory — live tracking is in [STATE.md](STATE.md)._

@@ -83,8 +83,8 @@ the caller keeps the incumbent boundary rather than shipping a confident wrong o
 > anchors the marker at the low **foot** just before it (`detect_dive_start`: last prominent trough left
 > of the first crossing, prominence ≥ `0.15 × X`). When no sample reaches X (a weak wall push-off), it
 > **falls back to `baseline_end`**, so it is never worse than the old rule. Swept against 36 hand-marked
-> `dive_start_s` (`tools/score_dive_start.py`): 0.15 s mean\|err\| vs baseline_end's 0.72 s. ⚠ Redefining
-> a stored boundary is a comparability break → **backfill owed** (`.paul/STATE.md`).
+> `dive_start_s` (`tools/score_dive_start.py`): 0.15 s mean\|err\| vs baseline_end's 0.72 s. Redefining
+> a stored boundary is a comparability break; the library was **backfilled 2026-08-21** (`.paul/STATE.md`).
 
 ### The breakout, three different mechanisms
 Selected by `stroke_type` in `compute_session_metrics` ([metrics.py:1377](metrics.py:1377) free/back,

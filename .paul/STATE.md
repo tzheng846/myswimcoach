@@ -19,24 +19,22 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   `resolve_boundaries` (auto `stroke_start` err **3.56 s → 0.40 s**). Suite 426 green.
   See [75-03-SUMMARY.md](phases/75-report-card-phase-model/75-03-SUMMARY.md).
 - **Phase 75 Step 3** (report-card UI) — not started. Nothing from Phase 75 is visible in any UI yet.
-- **Phase 78** (multi-swimmer segmentation diagnostic — owed item 2) — **APPLIED, uncommitted, eyeball
-  checkpoint pending.** Resolved (fork **b**): *scored* corpus = **4 swimmers** (Tony/Leo/Chantee/Dane),
+- **Phase 78** (multi-swimmer segmentation diagnostic — owed item 2) — **✅ CLOSED + committed
+  2026-08-21** (`status: complete`, AC-1/2/3 met — pure diagnostic, no detector changes). Resolved
+  (fork **b**): *scored* corpus = **4 swimmers** (Tony/Leo/Chantee/Dane),
   but the DB holds **~15 humans** — Titus (8), AlexGroup (9, a stand-in = 8 named testers), Jenna (2),
   Michael (1) are **real but unannotated** (37/92 sessions labeled). Validation is confined by
   *annotation coverage*, not data. See [78-01-SUMMARY.md](phases/78-multiswimmer-seg-diagnostic/78-01-SUMMARY.md).
   New owed gaps below (items 9–12).
 - **Phase 79** (redefine `dive_start_s` = foot of first ≥X surge — owed item 1) — **✅ LOOP CLOSED
   (PLAN→APPLY→UNIFY), 2026-08-21, X=2.0.** Code committed **`e1934ba`**; docs (PIPELINE §3 / STATE /
-  ROADMAP) deferred — 78-intermingled; **USER backfill owed.**
+  ROADMAP) landed; **backfill applied 2026-08-21.**
   ([79-01-SUMMARY.md](phases/79-dive-start-redefine/79-01-SUMMARY.md)).
-- **Working tree (uncommitted, intermingled — confirm before committing):** 75-03 (`metrics.py`
-  `detect_underwater_kicks` + `detect_swim_boundaries`, `phase_metrics.py` kick fns + `stroke_start`/
-  `finish` detected branch, `tests/test_phase_metrics.py`, `tools/plot_kicks.py`, `PIPELINE.md §3`);
-  Phase 79 docs (`PIPELINE.md §3`, STATE, ROADMAP; code already in `e1934ba`); Phase 78
-  (`tools/annotated_roster.py`, `tools/score_boundaries_by_swimmer.py`, `tools/score_segmenter.py`,
-  `PIPELINE.md §8`). ⚠ `metrics.py`/`phase_metrics.py`/`PIPELINE.md`/`tests` blend 75-03 + 79-docs
-  WITHIN files. `ESP_32_V5.ino` + `assets/icon/` + `scratch/` + `segmenter_report.json` also
-  dirty/untracked — **unrelated to this arc.**
+- **Working tree — arc is fully committed.** 75-03 = `7035157`, Phase 79 = `e1934ba`, Phase 78 +
+  this doc reconciliation = the docs commit. Remaining dirty files are **unrelated to this arc and
+  deliberately left uncommitted:** `ESP_32_V5/ESP_32_V5.ino` (firmware), `assets/icon/`, `scratch/`,
+  `segmenter_report.json`, plus a whitespace-only formatter reflow of `DATA-FLOW.md` (accidental table
+  re-padding + one mangled addendum line — not committed; revert or re-do intentionally).
 
 ## Segmentation status — the 4 phase boundaries
 Mechanisms in [PIPELINE.md §3](../PIPELINE.md).
@@ -58,9 +56,9 @@ for the annotate draft (mirrors the 75-02 underwater precedent). When no sample 
 push-off) → **falls back to `baseline_end`** (source `auto`), so never worse than the old rule. Swept
 (`tools/score_dive_start.py`, 36 hand-marked sessions): **0.15 s mean|err| vs `baseline_end` 0.72 s**;
 detector-only 0.11 s (16/16); all 36/36 within 0.5 s. X=2.0 chosen for tug-margin (accuracy statistically
-tied across X∈[1.25,2.0]). ⚠ **USER BACKFILL OWED** (Claude blocked from prod writes): run
-`python tools/backfill_phases.py --apply` to re-resolve stored `dive_start_s` across the library
-(comparability break; standing pattern 57/59-03/61-01/65/76-77). Code committed `e1934ba`; docs deferred to the 78 commit.
+tied across X∈[1.25,2.0]). ✅ **BACKFILL APPLIED 2026-08-21** (user-run `python tools/backfill_phases.py
+--apply`): stored `dive_start_s` re-resolved across the library, comparability break closed (standing
+pattern 57/59-03/61-01/65/76-77). Code committed `e1934ba`; docs landed with the Phase 78 commit.
 
 **2. ✅ RESOLVED (Phase 78, eyeball checkpoint pending). → [78-01-SUMMARY.md](phases/78-multiswimmer-seg-diagnostic/78-01-SUMMARY.md).**
 Answer = fork **(b): validation is confined by ANNOTATION COVERAGE, not data.** "One swimmer" was
@@ -87,13 +85,13 @@ before item 5, all three before the next breakout human-verify. Detail in
 **5. Run Phase 76's AC-4 eyeball.** Never run — both 76 corrections were found by measurement, not the
 checkpoint. Needs item 4(a) first.
 
-**6. Backfills (USER runs — Claude is blocked from prod writes).** ⚠ CORRECTED 2026-08-21: the earlier
+**6. ✅ DONE (2026-08-21) — Backfills applied (user-run).** ⚠ CORRECTED 2026-08-21: the earlier
 claim that `backfill_phases.py --apply` refreshes 76/77's `stroke_start` was **wrong** — it only re-ran
-`compute_phases`, which read the stale stored `initial_phase_end_idx`. **Now fixed** (75-03):
+`compute_phases`, which read the stale stored `initial_phase_end_idx`. **Fixed** (75-03):
 `resolve_boundaries` resolves `stroke_start`/`finish` via `metrics.detect_swim_boundaries`, so a single
 `python tools/backfill_phases.py --apply` refreshes **all four** boundaries + 75-03's kick metrics from
-live detectors (dry-run confirms sources = `detected`/`manual`, no `auto`). Run it to land the
-comparability break across the library. Standing pattern (57 / 59-03 / 61-01 / 65 / 79).
+live detectors. **Ran 2026-08-21** — comparability break landed across the library (dive_start +
+all-four-boundary refresh in one pass). Standing pattern (57 / 59-03 / 61-01 / 65 / 79).
 
 **7. Remaining Step-2 metrics — one at a time, approval-gated** ([phase_metrics.REGISTRY](../phase_metrics.py)):
 Start (11 — incl. `reaction_time`, which needs the coach GO-button + phone↔encoder clock sync), Swim

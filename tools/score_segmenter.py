@@ -326,8 +326,9 @@ def print_report(rows, tol, exclude):
     n_ex = sum(1 for r in rows if r["session_id"] in exclude)
     print("=" * 100)
     print(f"SEGMENTER SCORING - {len(rows)} annotated sessions, primary tolerance +/-{tol:.2f} s")
-    print("!! ONE SWIMMER, one pool, one device. These numbers are a change-detector,")
-    print("  not a definition of correctness.")
+    print("!! SCORED on 4 annotated swimmers (Tony/Leo/Chantee/Dane) of 9 athlete rows;")
+    print("  55/92 DB sessions unlabeled - Titus/AlexGroup/Jenna/Michael unscored, back n=0 (Phase 78).")
+    print("  A change-detector, not a definition of correctness.")
     print(f"Excluded from precision/F1 (partial labels): {n_ex}")
     print("=" * 100)
 
