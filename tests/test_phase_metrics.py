@@ -177,6 +177,30 @@ def _uw_trace(fs=100.0, dur_s=20.0, dip_t=3.0, speed=1.0):
     return t, vel, dist
 
 
+def _dive_surge_trace(fs=100.0, dur_s=14.0):
+    """Phase 79: low onset, a sub-X jump-sink tug, then a dive surge crossing X≈2. The
+    launch FOOT (sink trough) sits at 0.9 s; steady stroking (1.0 m/s) follows. Unlike
+    _uw_trace this does NOT start above X, so detect_dive_start has a foot to anchor."""
+    n = int(dur_s * fs)
+    t = np.arange(n) / fs
+    vel = np.full(n, 1.0)
+    tug, sink, crest = 0.4, 0.9, 1.6
+    vel = np.piecewise(
+        t,
+        [t < tug,
+         (t >= tug) & (t < sink),
+         (t >= sink) & (t < crest),
+         (t >= crest) & (t < 3.0)],
+        [lambda x: 0.9 * x / tug,
+         lambda x: 0.9 - (0.9 - 0.15) * (x - tug) / (sink - tug),
+         lambda x: 0.15 + (3.0 - 0.15) * (x - sink) / (crest - sink),
+         lambda x: 3.0 - (3.0 - 1.0) * (x - crest) / (3.0 - crest),
+         1.0],
+    )
+    dist = np.concatenate([[0.0], np.cumsum(vel[:-1] / fs)])
+    return t, vel, dist
+
+
 def _ctx(fs=100.0, **kw):
     t, vel, dist = _uw_trace(fs=fs)
     defaults = dict(t=t, vel=vel, dist=dist, accel=np.gradient(vel, t), fs=fs,
@@ -250,6 +274,51 @@ class TestBoundaryResolution:
         out = compute_phases(ctx)
         assert out["boundaries"]["underwater_start_s"] == 3.0
         assert ctx.bounds is out["boundaries"]
+
+    # ── Phase 79: dive_start foot-of-surge detector + baseline_end fallback ────
+
+    def test_unannotated_dive_start_comes_from_the_detector(self):
+        t, vel, dist = _dive_surge_trace()
+        ctx = PhaseContext(t=t, vel=vel, dist=dist, accel=np.gradient(vel, t), fs=100.0,
+                           stroke_type="freestyle",
+                           seed_phases={"dive_start_s": 0.0})    # baseline_end seed
+        b = resolve_boundaries(ctx)
+        assert b["sources"]["dive_start_s"] == "detected"
+        assert abs(b["dive_start_s"] - 0.9) < 0.05                # the launch foot
+        assert b["dive_start_s"] != 0.0                           # overrode the seed
+
+    def test_dive_start_falls_back_to_baseline_end_when_no_surge_reaches_x(self):
+        n = 1400
+        t = np.arange(n) / 100.0
+        vel = np.full(n, 1.2)                                     # steady, never crosses X=2
+        dist = np.concatenate([[0.0], np.cumsum(vel[:-1] / 100.0)])
+        ctx = PhaseContext(t=t, vel=vel, dist=dist, accel=np.zeros(n), fs=100.0,
+                           stroke_type="freestyle",
+                           seed_phases={"dive_start_s": 0.5})     # baseline_end seed stands
+        b = resolve_boundaries(ctx)
+        assert b["dive_start_s"] == 0.5
+        assert b["sources"]["dive_start_s"] == "auto"
+
+    def test_manual_dive_start_wins_over_the_detector(self):
+        t, vel, dist = _dive_surge_trace()                        # a real ≥X surge exists
+        ctx = PhaseContext(t=t, vel=vel, dist=dist, accel=np.gradient(vel, t), fs=100.0,
+                           stroke_type="freestyle",
+                           annotation_phases={"dive_start_s": 0.3},
+                           seed_phases={"dive_start_s": 0.0})
+        b = resolve_boundaries(ctx)
+        assert b["dive_start_s"] == 0.3                           # coach's mark, untouched
+        assert b["sources"]["dive_start_s"] == "manual"
+
+    def test_dive_start_detector_exception_degrades_to_the_seed(self, monkeypatch):
+        monkeypatch.setattr("phase_metrics.metrics.detect_dive_start",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        t, vel, dist = _dive_surge_trace()
+        ctx = PhaseContext(t=t, vel=vel, dist=dist, accel=np.gradient(vel, t), fs=100.0,
+                           stroke_type="freestyle",
+                           seed_phases={"dive_start_s": 0.5})
+        b = resolve_boundaries(ctx)
+        assert b["dive_start_s"] == 0.5                           # fell back, no raise
+        assert b["sources"]["dive_start_s"] == "auto"
 
 
 class TestUnderwaterWindowMetrics:

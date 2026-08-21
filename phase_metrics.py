@@ -132,8 +132,10 @@ def resolve_boundaries(ctx) -> dict:
 
     sources[key] is one of:
       "manual"   — the coach's saved annotation
-      "auto"     — annotations.build_seed's derivation (dive_start/stroke_start/finish)
-      "detected" — metrics.detect_underwater_start (underwater_start only)
+      "auto"     — annotations.build_seed's derivation (stroke_start/finish, or dive_start
+                   when no ≥X surge crosses so the baseline_end seed stands)
+      "detected" — metrics.detect_dive_start (dive_start) or detect_underwater_start
+                   (underwater_start)
       "none"     — not resolvable
     """
     ann, seed = ctx.annotation_phases, ctx.seed_phases
@@ -148,6 +150,21 @@ def resolve_boundaries(ctx) -> dict:
         v = _phase_val(seed, key)
         if v is not None:
             bounds[key], sources[key] = v, "auto"
+
+    # Phase 79: where the coach has NOT marked dive_start_s, prefer the foot-of-surge
+    # detector over the baseline_end seed. It anchors the race Start at the low point just
+    # before the first ≥X m/s launch surge, skipping the jump-and-sink block artifact that
+    # baseline_end trips on. On no ≥X surge, detect_dive_start returns None and the seed's
+    # baseline_end value stands as "auto" — never worse than the old rule. Resolved BEFORE
+    # underwater_start below, which seeds its search off dive_start_s.
+    if sources["dive_start_s"] != "manual":
+        try:
+            idx = metrics.detect_dive_start(ctx.t, ctx.vel)
+        except Exception:
+            idx = None
+        if idx is not None and ctx.fs and ctx.fs > 0:
+            bounds["dive_start_s"] = float(idx) / float(ctx.fs)
+            sources["dive_start_s"] = "detected"
 
     manual_uw = _phase_val(ann, "underwater_start_s")
     if manual_uw is not None:

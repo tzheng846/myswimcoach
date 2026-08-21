@@ -136,6 +136,27 @@ class TestBuildSeed:
         assert p["underwater_start_s"] is None
         assert p["stroke_start_s"] == pytest.approx(4.5)
 
+    def test_stored_dive_start_wins_over_baseline_end(self):
+        """Phase 79: a row that carries phases.boundaries.dive_start_s seeds from the
+        foot-of-surge detector, not from motion-onset baseline_end (1.2)."""
+        mj = {**METRICS_JSON,
+              "phases": {"boundaries": {"dive_start_s": 0.7}}}
+        p = annot.build_seed(mj)["phases"]
+        assert p["dive_start_s"] == pytest.approx(0.7)
+
+    def test_dive_start_falls_back_to_baseline_end_without_a_phases_key(self):
+        """Pre-79 rows have no phases key → dive_start keeps motion-onset baseline_end."""
+        assert "phases" not in METRICS_JSON
+        p = annot.build_seed(METRICS_JSON)["phases"]
+        assert p["dive_start_s"] == pytest.approx(1.2)
+
+    @pytest.mark.parametrize("boundaries", [None, {}, "junk", {"dive_start_s": None},
+                                            {"dive_start_s": "0.7"}])
+    def test_malformed_stored_dive_start_falls_back(self, boundaries):
+        mj = {**METRICS_JSON, "phases": {"boundaries": boundaries}}
+        p = annot.build_seed(mj)["phases"]
+        assert p["dive_start_s"] == pytest.approx(1.2)
+
     def test_stroke_start_falls_back_to_first_cycle(self):
         mj = {"cycles": [{"start_idx": 300, "end_idx": 500}]}
         seed = annot.build_seed(mj)

@@ -593,6 +593,112 @@ class TestDetectUnderwaterStart:
         assert m.detect_underwater_start(t, np.zeros(len(t)), 10_000) is None
 
 
+# ── Dive start (Phase 79) ─────────────────────────────────────────────────────
+
+def _block_artifact_dive_trace(fs=90.0, tug_peak=0.9, sink_vel=0.15, surge_peak=3.0,
+                               tug_t=0.4, sink_t=0.9, crest_t=1.6, glide_vel=1.5,
+                               duration_s=6.0):
+    """A start trace with the block artifact detect_dive_start must skip.
+
+    The swimmer jumps off the block (a sub-threshold tug peaking at `tug_peak`), sinks to
+    a trough at `sink_t`, then the real dive surges past X to a crest at `crest_t` before
+    settling into a glide. The trough at `sink_t` is the launch FOOT the detector returns;
+    the tug never reaches X, so it must be ignored.
+    """
+    t = np.arange(0.0, duration_s, 1.0 / fs)
+    vel = np.piecewise(
+        t,
+        [t < tug_t,
+         (t >= tug_t) & (t < sink_t),
+         (t >= sink_t) & (t < crest_t),
+         t >= crest_t],
+        [lambda x: tug_peak * x / tug_t,
+         lambda x: tug_peak - (tug_peak - sink_vel) * (x - tug_t) / (sink_t - tug_t),
+         lambda x: sink_vel + (surge_peak - sink_vel) * (x - sink_t) / (crest_t - sink_t),
+         lambda x: glide_vel + (surge_peak - glide_vel) * np.exp(-(x - crest_t) * 1.5)],
+    )
+    return t, vel
+
+
+class TestDetectDiveStart:
+    """Phase 79: dive_start = the FOOT of the first surge that clears X m/s."""
+
+    def test_dive_start_is_the_surge_foot_after_the_artifact(self):
+        fs, tug_t, sink_t, crest_t = 90.0, 0.4, 0.9, 1.6
+        t, vel = _block_artifact_dive_trace(fs=fs, tug_t=tug_t, sink_t=sink_t, crest_t=crest_t)
+        idx = m.detect_dive_start(t, vel, threshold=2.0)
+        assert idx is not None
+        # the launch foot, within a sample or two of the modelled sink
+        assert abs(idx / fs - sink_t) <= 2.0 / fs
+        # strictly AFTER the block tug and BEFORE the surge crest
+        assert idx > int(tug_t * fs)
+        assert idx < int(crest_t * fs)
+
+    def test_dive_start_none_when_nothing_reaches_the_threshold(self):
+        fs = 90.0
+        t = np.arange(0.0, 6.0, 1.0 / fs)
+        vel = np.full(len(t), 1.2)                 # flat, always below X
+        assert m.detect_dive_start(t, vel, threshold=2.0) is None
+
+    def test_dive_start_none_on_a_monotonic_rise_into_the_crossing(self):
+        """A ramp that crosses X but never dips has no foot to anchor to."""
+        fs = 90.0
+        t = np.arange(0.0, 6.0, 1.0 / fs)
+        vel = np.linspace(0.0, 3.0, len(t))        # crosses X at 2/3, no interior trough
+        assert m.detect_dive_start(t, vel, threshold=2.0) is None
+
+    def test_dive_start_tolerates_nans_in_a_stored_profile(self):
+        """The recompute path feeds a stored velocity_profile, which can contain nulls."""
+        fs, sink_t = 90.0, 0.9
+        t, vel = _block_artifact_dive_trace(fs=fs, sink_t=sink_t)
+        vel = vel.copy()
+        vel[::97] = np.nan                         # scattered dropouts, none at the foot
+        idx = m.detect_dive_start(t, vel, threshold=2.0)
+        assert idx is not None
+        assert abs(idx / fs - sink_t) <= 2.0 / fs
+
+    def test_dive_start_takes_the_last_trough_before_the_crossing(self):
+        """Two dips before the surge → the foot is the one NEAREST the crossing."""
+        fs = 90.0
+        t, vel = _block_artifact_dive_trace(fs=fs, tug_t=0.4, sink_t=0.9, crest_t=1.9)
+        vel = vel.copy()
+        # carve a second, earlier dip into the leading tug — it must NOT be chosen
+        early = int(0.6 * fs)
+        vel[early] = 0.05
+        idx = m.detect_dive_start(t, vel, threshold=2.0)
+        assert idx is not None
+        assert idx > early                         # the later trough (sink), not the early notch
+
+    def test_dive_start_skips_a_shallow_ripple_on_the_rising_edge(self):
+        """Phase 79 fix: a shallow wiggle on the surge's rising edge (nearer the crossing
+        than the true foot) must be rejected in favour of the deep valley below it."""
+        fs = 90.0
+        t, vel = _block_artifact_dive_trace(fs=fs, sink_t=0.9, crest_t=2.2)
+        vel = vel.copy()
+        ripple = int(1.5 * fs)                     # partway up the surge, below the crossing
+        vel[ripple] -= 0.15                        # ~0.15 m/s dip, under prom_frac*X (=0.3)
+        idx = m.detect_dive_start(t, vel, threshold=2.0)
+        assert idx is not None
+        assert abs(idx / fs - 0.9) <= 3.0 / fs     # the true foot, not the 1.5 s ripple
+        assert idx < ripple
+
+    def test_dive_start_none_when_only_a_shallow_ripple_precedes_the_crossing(self):
+        """No prominent valley (only a sub-threshold wiggle) → None, so the caller falls
+        back to baseline_end rather than anchoring on noise."""
+        fs = 90.0
+        t = np.arange(0.0, 4.0, 1.0 / fs)
+        vel = np.linspace(0.0, 3.0, len(t)).copy()  # monotone ramp crossing X at 2/3
+        c = int(np.flatnonzero(vel >= 2.0)[0])
+        vel[c - 20] -= 0.10                         # a tiny notch, well under prom_frac*X
+        assert m.detect_dive_start(t, vel, threshold=2.0) is None
+
+    def test_dive_start_never_raises_on_degenerate_input(self):
+        t = np.arange(0.0, 5.0, 1.0 / 90.0)
+        assert m.detect_dive_start(t, np.zeros(len(t)), threshold=2.0) is None
+        assert m.detect_dive_start(t, np.full(len(t), np.nan), threshold=2.0) is None
+        assert m.detect_dive_start(t[:2], np.zeros(2), threshold=2.0) is None
+
+
 def _uw_kick_segment(fs=90.0, n_kicks=6, base=1.0, amp=0.6, win_s=5.0, pad_s=1.0):
     """Low glide, then n_kicks evenly-spaced propulsive bumps over win_s, then glide.
     Returns t, vel and the (i0, i1) window bounds bracketing the kicks."""

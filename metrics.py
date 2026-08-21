@@ -707,6 +707,70 @@ def detect_initial_phase(t, vel, baseline_end_idx):
         return _default
 
 
+# ── DIVE START (Phase 79) ─────────────────────────────────────────────────────
+#
+# `dive_start_s` opens the race-Start phase. It USED to key on baseline_end — the first
+# point the rolling mean of |vel| holds above a low floor for 0.5 s, i.e. motion onset.
+# That fires early: at the start the swimmer jumps off the block and sinks, tugging the
+# tether line below true dive speed, and the low floor trips on that artifact.
+#
+# The coach's rule (2026-08-20, refined 2026-08-21): the launch is the first surge that
+# clears a real speed X — the jump-and-sink tug never reaches it, a dive/push-off does.
+# Anchor the marker at the FOOT of that surge (the local minimum immediately left of the
+# first upward crossing of X), not its crest: that low point is the true launch start,
+# after the block artifact. Fall back to baseline_end when nothing crosses X (e.g. a weak
+# wall push-off) — never worse than the old rule. X swept in tools/score_dive_start.py.
+_DIVE_CROSS_MS = 2.0        # X: the launch surge must clear this speed (m/s). Tunable — swept.
+_DIVE_FOOT_PROM_FRAC = 0.15 # foot-trough min prominence as a fraction of X (0.3 m/s at X=2).
+                            # A shallow ripple on the surge's noisy rising edge is a local min
+                            # too; without this it would be taken as the foot instead of the
+                            # real valley below it. Scaled to X (not v95) so the cutoff is
+                            # stable — independent of the post-touch tail that drags v95 down.
+
+
+def detect_dive_start(t, vel, threshold=_DIVE_CROSS_MS, prom_frac=_DIVE_FOOT_PROM_FRAC):
+    """Foot of the first launch surge that clears `threshold` m/s — the race Start.
+
+    Returns a FULL-TRACE index: the last PROMINENT local minimum left of the first upward
+    crossing of `threshold` (the low foot of the launch surge, AFTER the jump-and-sink
+    block artifact). The trough must be at least `prom_frac * threshold` deep, so a shallow
+    ripple on the surge's rising edge is skipped in favour of the true valley below it.
+    Returns None when no sample reaches `threshold`, or when no prominent trough precedes
+    the crossing — the caller then falls back to baseline_end. Pure; never raises.
+
+    ⚠ NaN-safe like detect_underwater_start: reached from POST /recompute over a STORED
+    velocity_profile that can carry magnet-dropout nulls. Uses finite-aware comparisons
+    and does NOT route through _window_v95 (which returns NaN on a single null).
+    """
+    try:
+        v = np.asarray(vel, dtype=float)
+        if v.size < 3:
+            return None
+
+        # First upward crossing of X: the earliest finite sample at or above threshold.
+        # The tug never reaches X, so the first crossing is the real dive/push-off surge.
+        above = np.isfinite(v) & (v >= float(threshold))
+        crossings = np.flatnonzero(above)
+        if crossings.size == 0:
+            return None
+        c = int(crossings[0])
+        head = v[:c]
+        if head.size < 3:
+            return None
+
+        # The surge foot: the LAST *prominent* local minimum left of the crossing (the real
+        # valley nearest c). find_peaks(-head) with a prominence floor rejects rising-edge
+        # ripples; the last survivor is the foot. None when none is prominent enough (or the
+        # rise into the crossing is monotonic) → caller falls back to baseline_end.
+        troughs, _ = find_peaks(-head, prominence=prom_frac * float(threshold))
+        if troughs.size == 0:
+            return None
+        return int(troughs[-1])
+
+    except Exception:
+        return None
+
+
 # ── UNDERWATER START (Phase 75-02) ────────────────────────────────────────────
 #
 # The coach's own rule, verbatim: "for every session i've seen, the underwater phase

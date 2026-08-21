@@ -97,7 +97,9 @@ def build_seed(metrics_json, fs_hz=FS_HZ):
     FS_HZ fallback for rows recorded before Phase 52.
 
     Sources (all optional — anything undetected stays null, never raises):
-      dive_start_s       ← session.baseline_end_s (swim motion begins)
+      dive_start_s       ← phases.boundaries.dive_start_s when the row has one (Phase 79:
+                           metrics.detect_dive_start's foot-of-surge answer), else
+                           session.baseline_end_s (motion onset, pre-79 rows)
       underwater_start_s ← phases.boundaries.underwater_start_s when the row has one
                            (Phase 75-02: metrics.detect_underwater_start's first-big-dip
                            answer, mean |err| 0.13 s against 38 coach marks), else the
@@ -116,15 +118,19 @@ def build_seed(metrics_json, fs_hz=FS_HZ):
     phases = {k: None for k in PHASE_KEYS}
 
     baseline_end_s = _num(session.get("baseline_end_s"))
-    phases["dive_start_s"] = baseline_end_s
 
-    # Phase 75-02: prefer the stored resolved boundary. It is written by /process and by
-    # POST /recompute (tools/backfill_phases.py applied it to the existing library), and
-    # it comes from the detector, not from the dive peak. Rows recorded before 75-01 have
-    # no `phases` key at all and keep the legacy derivation below, untouched.
+    # Phase 75-02 / 79: prefer the stored resolved boundary. It is written by /process and by
+    # POST /recompute (tools/backfill_phases.py applied it to the existing library), and it
+    # comes from a detector, not from motion-onset or the dive peak. Rows recorded before
+    # 75-01 have no `phases` key at all and keep the legacy derivation below, untouched.
     stored = mj.get("phases") if isinstance(mj.get("phases"), dict) else {}
     stored_bounds = stored.get("boundaries") if isinstance(stored.get("boundaries"), dict) else {}
+    stored_dive = _num(stored_bounds.get("dive_start_s"))
     stored_uw = _num(stored_bounds.get("underwater_start_s"))
+
+    # Phase 79: the stored dive_start_s (detect_dive_start's foot-of-surge) supersedes
+    # baseline_end when present; pre-79 rows fall back to baseline_end (motion onset).
+    phases["dive_start_s"] = stored_dive if stored_dive is not None else baseline_end_s
 
     dive_dur = _num(initial.get("dive_duration_s"))
     if stored_uw is not None:
