@@ -776,6 +776,217 @@ def detect_underwater_start(t, vel, baseline_end_idx):
         return None
 
 
+_UW_KICK_PROM_FRAC = 0.15   # min downkick-peak prominence, as a fraction of the window v95
+_UW_KICK_MAX_HZ    = 4.0    # kick-rate ceiling → min peak spacing = fs / this (reject ripples)
+
+
+def detect_underwater_kicks(t, vel, uw_start_idx, uw_end_idx):
+    """Propulsive dolphin-downkick peaks inside the underwater window [uw_start, uw_end).
+
+    Each downkick is one axial velocity surge, so the kicks are the prominent peaks of the
+    window slice. Returns a FULL-TRACE int array of peak indices — possibly EMPTY when the
+    window carries no clear surge (a glide-only underwater) — or None when the window is
+    itself degenerate (empty, reversed, or no finite signal). Pure; never raises.
+
+    ⚠ Reached from POST /recompute over a STORED velocity_profile that can carry magnet-
+    dropout nulls (→ NaN). Unlike detect_underwater_start (which hunts a single early trough
+    and tolerates sparse NaN by luck), a prominence-based MULTI-peak search scans widely for
+    each peak's base, so one interior NaN would poison every kick's prominence. Interior
+    dropouts are therefore linearly filled first — peaks are about oscillation shape, not
+    exact values, so the fill is safe.
+    """
+    try:
+        i0 = max(0, int(uw_start_idx))
+        i1 = min(len(vel), int(uw_end_idx))
+        seg = np.asarray(vel[i0:i1], dtype=float)
+        good = np.isfinite(seg)
+        if len(seg) < 3 or not np.any(good):
+            return None
+        if not np.all(good):
+            idx = np.arange(len(seg))
+            seg = np.interp(idx, idx[good], seg[good])
+
+        v95 = float(np.percentile(np.abs(seg), 95))
+        if not np.isfinite(v95) or v95 <= 0:
+            return None
+
+        fs = _compute_fs(t)
+        min_dist = max(1, int(round(fs / _UW_KICK_MAX_HZ)))
+
+        peaks, _ = find_peaks(seg, prominence=_UW_KICK_PROM_FRAC * v95, distance=min_dist)
+        return i0 + np.asarray(peaks, dtype=int)
+
+    except Exception:
+        return None
+
+
+# ── BREAKOUT BY KICK-BAND DISAPPEARANCE (Phase 76) ────────────────────────────
+#
+# The Underwater→Swim breakout for the flutter strokes (freestyle, backstroke). Six
+# prior levers failed to place it — amplitude, mean-vel step, accel surge, 2x harmonic,
+# rhythm step-down, first-deep-trough (65-01 / 75-02). The signal that works: dolphin
+# kicking is cyclic, so a KICK BAND (~1.8-3.2 Hz) carries sustained power through the
+# whole underwater phase and then goes quiet when arm stroking takes over. That band
+# sits ABOVE production's 0.25-2.0 Hz ridge window, which is exactly why every ridge
+# detector was structurally blind to it.
+#
+# ⚠ FREE/BACK ONLY — the caller (compute_session_metrics) enforces it. Butterfly RETAINS
+# the band on the surface: its stroke IS two dolphin kicks per arm cycle (~2 Hz), so the
+# band never disappears and this rule scores WORSE than the incumbent there — measured,
+# not assumed (tools/breakout_band_probe.py: butterfly median |err| 4.46 s vs a 2.43 s
+# incumbent, Pk_uw/sf ≈ 1). It must never be called for butterfly or breaststroke.
+#
+# ⚠ Constants are physically motivated (dolphin-kick rate), NOT fit to the corpus (D3).
+_KICK_BAND_HZ    = (1.8, 3.2)   # dolphin-kick band — ABOVE the 0.25-2.0 Hz stroke ridge
+_KICK_SCALO_HZ   = (0.5, 5.0)   # wider scalogram so the kick band is actually visible
+_KICK_SCALO_N    = 96           # geometric scales spanning _KICK_SCALO_HZ
+_KICK_SMOOTH_S   = 0.4          # rolling-mean smoothing of the band-power trace (s)
+_KICK_DROP_FRAC  = 0.35         # band is "quiet" below this × the active-run 95th-pct power
+_KICK_HOLD_S     = 0.6          # quiet must persist this long to count as the breakout
+_KICK_MIN_RUN_S  = 0.5          # a sustained kick run shorter than this → refuse (D2).
+                                # 1.0 originally; corrected 2026-08-20, when the probe was first
+                                # pointed at the SHIPPED detector (76-01 Task 3) and showed the
+                                # gate vetoing 4 of 16 freestyle sessions this detector had
+                                # already placed to within 0.5 s — short but real underwaters.
+                                # Those 4 fell back to the incumbent (+1.85 to +3.25 s) and pulled
+                                # median |err| to 0.81 s, outside 76-01 AC-2. Measured plateau:
+                                # 0.0-0.6 all give 0.42 s, so 0.5 is mid-plateau rather than a
+                                # knife-edge fit, and still keeps a real floor. _breakout_leaves_swim
+                                # below now covers the late-wrong-answer case this half-proxied.
+
+
+def _kick_band_power(vel, fs):
+    """Smoothed mean |CWT|² in _KICK_BAND_HZ at each sample, or None if unreadable.
+
+    A DEDICATED wider CWT (_KICK_SCALO_HZ), NOT _cwt_ridge — the production ridge's
+    0.25-2.0 Hz grid cannot see the kick band, which is the whole point. Same wavelet and
+    detrend as production; np.nan_to_num because stored velocity_profiles carry nulls.
+    """
+    active = _detrend_for_cwt(np.nan_to_num(np.asarray(vel, dtype=float)), fs)
+    if not np.any(np.isfinite(active)) or float(np.max(np.abs(active))) < 1e-9:
+        return None
+    dt = 1.0 / fs
+    target = np.geomspace(_KICK_SCALO_HZ[0], _KICK_SCALO_HZ[1], _KICK_SCALO_N)
+    scales = pywt.central_frequency(_WAVELET) / (target * dt)
+    coeffs, freqs = pywt.cwt(active, scales, _WAVELET, sampling_period=dt)
+    power = np.abs(coeffs) ** 2
+    sel = (freqs >= _KICK_BAND_HZ[0]) & (freqs <= _KICK_BAND_HZ[1])
+    if not sel.any():
+        return None
+    p = power[sel].mean(axis=0)
+    w = max(1, int(_KICK_SMOOTH_S * fs))
+    return np.convolve(p, np.ones(w) / w, mode="same")
+
+
+def detect_breakout_kickband(t, vel, uw_start_idx, swim_end_idx=None):
+    """Underwater→Swim breakout via kick-band disappearance (free/back).
+
+    Returns the full-trace index where the sustained ~2 Hz dolphin-kick band goes quiet,
+    or None when the band carries no trustworthy answer — the refuse-to-answer convention
+    (see detect_swim_window). Refuses when:
+      * uw_start is degenerate or the signal is too short/flat to carry a scalogram;
+      * no kick-band run is active after uw_start;
+      * the active kick run before the drop is shorter than _KICK_MIN_RUN_S (weak/short
+        underwater — the swimmer barely kicked);
+      * the band never cleanly goes quiet INSIDE the swim window. This last one is the
+        "kept dolphin-kicking past the breakout" / weak-contrast session (Pk_uw/sf ≈ 1):
+        the only quiet is the dead tail after swim_end, so bounding the search to
+        swim_end turns those +4 s confident misses into a refusal → the caller keeps the
+        incumbent boundary. Measured to matter on ~4 of 16 annotated freestyle sessions.
+
+    Pure; never raises. FREE/BACK only — do not call for butterfly/breaststroke (the band
+    does not disappear on the surface for undulatory strokes).
+    """
+    try:
+        fs = _compute_fs(t)
+        n  = len(vel)
+        s  = max(0, int(uw_start_idx))
+        end = min(int(swim_end_idx), n) if swim_end_idx is not None else n
+        if s >= end - 1 or (end - s) < int(2 * fs):
+            return None
+
+        pk = _kick_band_power(vel, fs)
+        if pk is None:
+            return None
+
+        ref = float(np.percentile(pk[s:end], 95))
+        if not np.isfinite(ref) or ref < 1e-12:
+            return None
+
+        active = pk > _KICK_DROP_FRAC * ref
+        rel = np.flatnonzero(active[s:end])
+        if rel.size == 0:
+            return None
+        kick_start = s + int(rel[0])
+
+        hold    = max(1, int(_KICK_HOLD_S * fs))
+        min_run = int(_KICK_MIN_RUN_S * fs)
+        run_below = 0
+        for i in range(kick_start, end):
+            if not active[i]:
+                run_below += 1
+                if run_below >= hold:
+                    bk = i - hold + 1            # where the band first went quiet
+                    if (bk - kick_start) < min_run:
+                        return None              # kick run too short to trust the drop
+                    return min(max(bk, s + 1), end - 1)
+            else:
+                run_below = 0
+        return None                              # never went quiet in-window → refuse
+
+    except Exception:
+        return None
+
+
+# ── collapse guard, shared by every breakout detector (Phase 76 fix, 2026-08-20) ───
+_BREAKOUT_MIN_SWIM_CYCLES = 2.0   # a breakout override must leave at least this many
+                                  # stroke cycles of swim behind it, or it is disbelieved
+
+
+def _breakout_leaves_swim(t, vel, breakout_idx, swim_end_idx):
+    """True when the swim a breakout override would leave behind still looks like swimming.
+
+    The detect_breakout_* functions answer a LOCAL question — "did the kick band go quiet",
+    "did the arm cycle turn on" — and none of them can see what its answer does to the swim
+    it leaves behind. When one is wrong late, `ip_end` lands near `swim_end`, the segmenter
+    gets a couple of seconds to work with, and the session ships `stroke_count = 0`: a
+    confidently EMPTY answer, which is the one outcome the refuse-to-answer convention
+    exists to prevent. Measured on the committed processed/breaststroke_sample.csv fixture
+    driven as freestyle: ip_end 15.95 s → 25.54 s, stroke_count 11 → 0.
+
+    So this is the plausibility gate _window_from_ridge already applies to the swim window
+    (_WINDOW_MIN_CYCLES = 4.0), applied to the window an override would LEAVE: does
+    [breakout_idx, swim_end_idx) span at least _BREAKOUT_MIN_SWIM_CYCLES at the rhythm the
+    ridge actually tracks there? Measured on the 23 annotated free/back/fly DB sessions —
+    every real freestyle detection leaves >= 2.45 cycles, while collapsed windows leave
+    0.47-1.72, so the floor sits in a real gap and is not fitted to the fixture.
+
+    The asymmetry matches _WINDOW_MIN_CYCLES and 76-D2: refusing costs only the breakout
+    improvement on that session (the caller keeps its incumbent boundary), while accepting
+    a collapse ships an empty session. Returns True when no frequency can be measured —
+    there is then nothing to disbelieve WITH, and the detector's own gates still apply.
+
+    Pure; never raises.
+    """
+    try:
+        fs = _compute_fs(t)
+        span_s = (int(swim_end_idx) - int(breakout_idx)) / fs
+        if span_s <= 0:
+            return False
+        ridge_freq, _ridge_power = _cwt_ridge(vel, fs)
+        if ridge_freq is None:
+            return True
+        seg = ridge_freq[int(breakout_idx):int(swim_end_idx)]
+        if seg.size == 0:
+            return True
+        f_local = float(np.median(seg))
+        if not np.isfinite(f_local) or f_local <= 0:
+            return True
+        return (span_s * f_local) >= _BREAKOUT_MIN_SWIM_CYCLES
+    except Exception:
+        return True
+
+
 def time_to_distance(t, dist, target_m, baseline_end_idx, head_waist_m=0.0):
     """
     Elapsed time from baseline_end until the swimmer's head reaches target_m.
@@ -919,6 +1130,25 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
     if win is not None:
         ip_end = min(max(int(win[0]), b_end), swim_end - 1)
         initial_phase["initial_phase_end_idx"] = ip_end
+
+    # ── breakout by kick-band disappearance (Phase 76) ─────────────────────
+    # Free/back only: supersede the rhythm-settle ip_end with the true Underwater→Swim
+    # breakout where the ~2 Hz dolphin-kick band goes quiet. detect_underwater_start is
+    # the SAME window start resolve_boundaries uses, so the underwater-metric window and
+    # the segmentation start agree by construction. Refuses (→ keeps the value above) on
+    # weak/short/kept-kicking underwater, and _breakout_leaves_swim vetoes any answer
+    # that would leave less than ~2 stroke cycles of swim behind it (a late wrong
+    # breakout otherwise ships stroke_count = 0). Butterfly/breaststroke/None never enter the
+    # branch, so their ip_end and every downstream metric stay byte-identical. Runs
+    # BEFORE the manual override, so a human ip_end still wins (Phase 47 precedence).
+    if stroke_type in ("freestyle", "backstroke") and swim_end > b_end:
+        uw = detect_underwater_start(t, vel, b_end)
+        if uw is not None:
+            bk = detect_breakout_kickband(t, vel, uw, swim_end)
+            if bk is not None and _breakout_leaves_swim(t, vel, bk, swim_end):
+                ip_end = min(max(int(bk), b_end), swim_end - 1)
+                initial_phase["initial_phase_end_idx"] = ip_end
+
     if manual.get("ip_end_idx") is not None:
         ip_end = min(max(int(manual["ip_end_idx"]), b_end), swim_end - 1)
 

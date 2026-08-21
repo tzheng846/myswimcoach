@@ -591,3 +591,280 @@ class TestDetectUnderwaterStart:
         assert m.detect_underwater_start(t, np.zeros(len(t)), 0) is None
         assert m.detect_underwater_start(t, np.full(len(t), np.nan), 0) is None
         assert m.detect_underwater_start(t, np.zeros(len(t)), 10_000) is None
+
+
+def _uw_kick_segment(fs=90.0, n_kicks=6, base=1.0, amp=0.6, win_s=5.0, pad_s=1.0):
+    """Low glide, then n_kicks evenly-spaced propulsive bumps over win_s, then glide.
+    Returns t, vel and the (i0, i1) window bounds bracketing the kicks."""
+    total = 2 * pad_s + win_s
+    n = int(total * fs)
+    t = np.arange(n) / fs
+    vel = np.full(n, base)
+    i0, i1 = int(pad_s * fs), int((pad_s + win_s) * fs)
+    for c in np.linspace(pad_s, pad_s + win_s, n_kicks + 2)[1:-1]:
+        vel += amp * np.exp(-0.5 * ((t - c) / 0.06) ** 2)
+    return t, vel, i0, i1
+
+
+class TestDetectUnderwaterKicks:
+    """Phase 75-03: a propulsive downkick = one prominent velocity peak in the window."""
+
+    def test_counts_the_known_bumps(self):
+        t, vel, i0, i1 = _uw_kick_segment(n_kicks=6)
+        peaks = m.detect_underwater_kicks(t, vel, i0, i1)
+        assert peaks is not None
+        assert len(peaks) == 6
+        assert np.all((peaks >= i0) & (peaks < i1))    # full-trace, in-window
+        assert np.all(np.diff(peaks) > 0)              # strictly increasing
+
+    def test_min_distance_collapses_kicks_closer_than_the_ceiling(self):
+        fs = 90.0
+        n = int(3.0 * fs)
+        t = np.arange(n) / fs
+        vel = np.full(n, 1.0)
+        for c in (1.0, 1.10):                          # 0.10 s apart, under fs/4 = 0.25 s
+            vel += 0.6 * np.exp(-0.5 * ((t - c) / 0.03) ** 2)
+        peaks = m.detect_underwater_kicks(t, vel, 0, n)
+        assert peaks is not None
+        assert len(peaks) == 1
+
+    def test_empty_array_when_window_is_flat(self):
+        fs = 90.0
+        n = int(4.0 * fs)
+        t = np.arange(n) / fs
+        peaks = m.detect_underwater_kicks(t, np.full(n, 1.0), 0, n)
+        assert peaks is not None
+        assert len(peaks) == 0                         # valid window, just no kicks
+
+    def test_tolerates_nans_in_the_window(self):
+        t, vel, i0, i1 = _uw_kick_segment(n_kicks=5)
+        vel = vel.copy()
+        vel[i0 + 3 :: 37] = np.nan                     # scattered dropouts
+        peaks = m.detect_underwater_kicks(t, vel, i0, i1)
+        assert peaks is not None
+        assert len(peaks) >= 4                          # a NaN may shave at most one edge peak
+
+    def test_none_on_degenerate_window(self):
+        t, vel, i0, i1 = _uw_kick_segment()
+        assert m.detect_underwater_kicks(t, vel, i1, i0) is None            # reversed
+        assert m.detect_underwater_kicks(t, vel, 5, 6) is None              # < 3 samples
+        assert m.detect_underwater_kicks(t, np.full(len(t), np.nan), i0, i1) is None
+
+
+def _kicks_then_strokes(fs=90.0, kick_hz=2.2, kick_s=3.0, stroke_hz=1.0,
+                        stroke_s=5.0, tail_s=2.0, amp=0.6, base=1.4):
+    """~2 Hz dolphin kicks (IN the 1.8-3.2 Hz band) → ~1 Hz arm strokes (BELOW it) → dead
+    tail. The kick→stroke transition is the breakout detect_breakout_kickband must mark:
+    the kick band is loud during the kicks and goes quiet once stroking takes over.
+    Returns t, vel, uw_start(0), breakout_idx, swim_end_idx."""
+    def seg(dur, f):
+        n = int(dur * fs)
+        return base + amp * np.sin(2 * np.pi * f * (np.arange(n) / fs))
+    kicks, strokes = seg(kick_s, kick_hz), seg(stroke_s, stroke_hz)
+    vel = np.concatenate([kicks, strokes, np.full(int(tail_s * fs), 0.02)])
+    t = np.arange(len(vel)) / fs
+    return t, vel, 0, len(kicks), len(kicks) + len(strokes)
+
+
+class TestBreakoutKickband:
+    """Phase 76: Underwater→Swim breakout via kick-band disappearance (free/back)."""
+
+    def test_marks_the_kick_to_stroke_transition(self):
+        fs = 90.0
+        t, vel, uw, breakout, swim_end = _kicks_then_strokes(fs=fs)
+        bk = m.detect_breakout_kickband(t, vel, uw, swim_end)
+        assert bk is not None
+        assert uw < bk < swim_end                        # strictly inside the window
+        assert abs(bk - breakout) / fs <= 1.0            # near the modelled transition
+
+    def test_none_when_no_kick_phase(self):
+        """Pure ~1 Hz stroking: the kick band is never loud → nothing disappears → None."""
+        fs = 90.0
+        t, vel, uw, _, swim_end = _kicks_then_strokes(fs=fs, kick_s=0.0)
+        assert m.detect_breakout_kickband(t, vel, uw, swim_end) is None
+
+    def test_none_when_kick_run_too_short(self, monkeypatch):
+        """A kick run shorter than _KICK_MIN_RUN_S is weak/short underwater → refuse (D2).
+
+        The gate is exercised by RAISING the floor above a known-good 3 s kick run rather
+        than by shrinking the run under the shipped floor: _KICK_SMOOTH_S is 0.4 s, so a
+        burst short enough to beat a 0.5 s floor is smeared past it by the smoothing and
+        the pairing stops being meaningful. This tests the mechanism, so it stays valid
+        whatever the measured floor is. (It was 1.0 s; corrected to 0.5 s on 2026-08-20
+        when the probe was first pointed at the shipped detector and the gate turned out
+        to be vetoing 4 of 16 real freestyle sessions it had already placed correctly.)
+        """
+        fs = 90.0
+        t, vel, uw, _, swim_end = _kicks_then_strokes(fs=fs, kick_s=3.0)
+        assert m.detect_breakout_kickband(t, vel, uw, swim_end) is not None   # baseline
+        monkeypatch.setattr(m, "_KICK_MIN_RUN_S", 10.0)                       # floor > run
+        assert m.detect_breakout_kickband(t, vel, uw, swim_end) is None
+
+    def test_none_when_band_never_quiets_in_window(self):
+        """The 'kept dolphin-kicking' case: kicks fill the whole window, the only quiet is
+        the dead tail AFTER swim_end → bounding to swim_end refuses rather than mismarks."""
+        fs = 90.0
+        t, vel, uw, breakout, _ = _kicks_then_strokes(fs=fs, kick_s=4.0, stroke_s=0.0)
+        # swim_end at the end of the kicks: no in-window quiet exists
+        assert m.detect_breakout_kickband(t, vel, uw, swim_end_idx=breakout) is None
+
+    def test_tolerates_nans_in_a_stored_profile(self):
+        fs = 90.0
+        t, vel, uw, breakout, swim_end = _kicks_then_strokes(fs=fs)
+        vel = vel.copy()
+        vel[::101] = np.nan                              # scattered dropouts
+        bk = m.detect_breakout_kickband(t, vel, uw, swim_end)
+        assert bk is not None
+        assert abs(bk - breakout) / fs <= 1.0
+
+    def test_never_raises_on_degenerate_input(self):
+        t = np.arange(0.0, 5.0, 1.0 / 90.0)
+        assert m.detect_breakout_kickband(t, np.zeros(len(t)), 0) is None
+        assert m.detect_breakout_kickband(t, np.full(len(t), np.nan), 0) is None
+        assert m.detect_breakout_kickband(t, np.zeros(len(t)), 10_000) is None
+        # window under two seconds → None
+        assert m.detect_breakout_kickband(t[:40], np.ones(40), 0, 40) is None
+
+
+def _full_free_trace(fs=90.0):
+    """baseline → dive surge → glide dip → ~2 Hz underwater kicks → ~1 Hz surface strokes →
+    dead tail. A freestyle-shaped trace exercising the whole front end of
+    compute_session_metrics. Returns t, vel, dist, breakout_idx (kick→stroke transition)."""
+    def const(dur, v):
+        return np.full(int(dur * fs), v)
+
+    def sine(dur, f, b, a):
+        return b + a * np.sin(2 * np.pi * f * (np.arange(int(dur * fs)) / fs))
+
+    baseline = const(1.0, 0.0)
+    rise     = np.linspace(0.0, 3.0, int(0.4 * fs))
+    glide    = np.linspace(3.0, 0.5, int(1.3 * fs))     # decays to the dip
+    kicks    = sine(3.0, 2.2, 1.5, 0.6)                 # underwater dolphin kicks
+    strokes  = sine(6.0, 1.0, 1.4, 0.5)                 # surface arm strokes
+    tail     = const(2.0, 0.02)
+    vel = np.concatenate([baseline, rise, glide, kicks, strokes, tail])
+    t = np.arange(len(vel)) / fs
+    dist = np.concatenate([[0.0], np.cumsum(np.abs(vel[:-1]) / fs)])
+    breakout_idx = len(baseline) + len(rise) + len(glide) + len(kicks)
+    return t, vel, dist, breakout_idx
+
+
+class TestBreakoutIntegration:
+    """Phase 76: the per-stroke ip_end override in compute_session_metrics."""
+
+    def test_freestyle_moves_ip_end_to_the_breakout(self):
+        fs = 90.0
+        t, vel, dist, breakout = _full_free_trace(fs=fs)
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle")
+        ip_end = r["initial_phase"]["initial_phase_end_idx"]
+        assert abs(ip_end - breakout) / fs <= 1.0        # detector placed it at the breakout
+
+    def test_freestyle_and_backstroke_use_the_same_detector(self):
+        """D1: the two flutter strokes share ONE begin-stroke detector. Same trace → same
+        ip_end, because both route through detect_breakout_kickband identically (backstroke
+        is physically analogous to freestyle: surface = arm strokes + flutter, not
+        undulation). Ships flagged unvalidated for back (n=0 ground truth), 59-05 stance."""
+        t, vel, dist, _ = _full_free_trace()
+        free = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle")
+        back = m.compute_session_metrics(t, vel, dist, stroke_type="backstroke")
+        assert (free["initial_phase"]["initial_phase_end_idx"]
+                == back["initial_phase"]["initial_phase_end_idx"])
+
+    def test_backstroke_enters_the_branch(self, monkeypatch):
+        called = []
+        real = m.detect_breakout_kickband
+        monkeypatch.setattr(m, "detect_breakout_kickband",
+                            lambda *a, **k: called.append(1) or real(*a, **k))
+        t, vel, dist, _ = _full_free_trace()
+        m.compute_session_metrics(t, vel, dist, stroke_type="backstroke")
+        assert called                                    # back shares the free detector
+
+    def test_detector_not_called_for_butterfly(self, monkeypatch):
+        """AC-3: fly never enters the branch → ip_end + every metric byte-identical."""
+        called = []
+        monkeypatch.setattr(m, "detect_breakout_kickband",
+                            lambda *a, **k: called.append(1))
+        t, vel, dist, _ = _full_free_trace()
+        m.compute_session_metrics(t, vel, dist, stroke_type="butterfly")
+        assert called == []
+
+    def test_detector_called_for_freestyle(self, monkeypatch):
+        called = []
+        real = m.detect_breakout_kickband
+        monkeypatch.setattr(m, "detect_breakout_kickband",
+                            lambda *a, **k: called.append(1) or real(*a, **k))
+        t, vel, dist, _ = _full_free_trace()
+        m.compute_session_metrics(t, vel, dist, stroke_type="freestyle")
+        assert called                                    # free/back do enter the branch
+
+    def test_refusal_falls_back_to_the_swim_window_value(self, monkeypatch):
+        """When the detector refuses, ip_end is exactly the pre-branch (detect_swim_window)
+        value — identical to the None-stroke path, which never enters the branch."""
+        monkeypatch.setattr(m, "detect_breakout_kickband", lambda *a, **k: None)
+        t, vel, dist, _ = _full_free_trace()
+        r_free = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle")
+        r_none = m.compute_session_metrics(t, vel, dist, stroke_type=None)
+        assert (r_free["initial_phase"]["initial_phase_end_idx"]
+                == r_none["initial_phase"]["initial_phase_end_idx"])
+
+    def test_manual_ip_end_wins_over_the_detector(self, monkeypatch):
+        """AC-3: a manual ip_end_idx overrides the detector — the analysis is identical
+        no matter what the detector returns."""
+        t, vel, dist, breakout = _full_free_trace()
+        man = {"ip_end_idx": breakout + int(1.5 * 90.0)}
+        monkeypatch.setattr(m, "detect_breakout_kickband",
+                            lambda *a, **k: breakout)     # detector says one thing
+        r_a = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle", manual=man)
+        monkeypatch.setattr(m, "detect_breakout_kickband",
+                            lambda *a, **k: None)          # detector says another
+        r_b = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle", manual=man)
+        assert r_a["cycles"] == r_b["cycles"]              # manual governs, detector ignored
+        assert r_a["session"] == r_b["session"]
+
+
+class TestBreakoutCollapseGuard:
+    """Phase 76 fix (2026-08-20): a breakout override must leave a swim behind it.
+
+    The detectors answer a LOCAL question and cannot see that a late wrong answer leaves
+    the segmenter two seconds to work with. Before the guard, the committed breaststroke
+    fixture driven as freestyle shipped stroke_count = 0 — a confidently EMPTY session.
+    """
+
+    def test_guard_rejects_a_window_with_no_room_to_stroke(self):
+        t, vel, dist, breakout = _full_free_trace(fs=90.0)
+        swim_end = len(vel) - 1
+        assert m._breakout_leaves_swim(t, vel, swim_end - 20, swim_end) is False
+
+    def test_guard_accepts_a_real_swim(self):
+        t, vel, dist, breakout = _full_free_trace(fs=90.0)
+        assert m._breakout_leaves_swim(t, vel, breakout, len(vel) - 1) is True
+
+    def test_guard_never_raises_on_degenerate_input(self):
+        t, vel, dist, _ = _full_free_trace(fs=90.0)
+        for bk, end in ((0, 0), (10, 5), (-5, 3), (len(vel), len(vel))):
+            assert m._breakout_leaves_swim(t, vel, bk, end) in (True, False)
+        flat = np.zeros_like(vel)
+        assert m._breakout_leaves_swim(t, flat, 10, len(flat) - 1) in (True, False)
+
+    def test_collapsed_breakout_is_vetoed_and_the_incumbent_stands(self, monkeypatch):
+        """A detector that answers just before swim_end is disbelieved, so ip_end is the
+        pre-branch detect_swim_window value — identical to the None-stroke path."""
+        t, vel, dist, _ = _full_free_trace(fs=90.0)
+        r_none = m.compute_session_metrics(t, vel, dist, stroke_type=None)
+        monkeypatch.setattr(m, "detect_breakout_kickband",
+                            lambda tt, vv, uw, se=None: int(se) - 20)
+        r_free = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle")
+        assert (r_free["initial_phase"]["initial_phase_end_idx"]
+                == r_none["initial_phase"]["initial_phase_end_idx"])
+
+    def test_real_session_as_freestyle_still_segments(self, real_session):
+        """The regression itself. processed/breaststroke_sample.csv carries no dolphin-kick
+        band, so detect_breakout_kickband answers late (t=25.54 s of a 31.1 s trace) and
+        used to collapse stroke_count 11 -> 0. The guard vetoes it."""
+        t, vel, dist = real_session
+        base = m.compute_session_metrics(t, vel, dist)["session"]["stroke_count"]
+        for stroke in ("freestyle", "backstroke"):
+            n = m.compute_session_metrics(
+                t, vel, dist, stroke_type=stroke)["session"]["stroke_count"]
+            assert n > 0, f"{stroke}: breakout override collapsed the swim window"
+            assert abs(n - base / 2) <= 1, f"{stroke}: {n} vs base {base}"
