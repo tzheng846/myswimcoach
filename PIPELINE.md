@@ -54,8 +54,12 @@ One lap, no turns. Exactly one of each phase per recording. Maps 1:1 onto the an
 | 3 | **Swim** | strokes; the **first stroke = breakout** (marked special, still a stroke) | `stroke_start_s` … `finish_s` |
 
 **Boundary resolution** — `phase_metrics.resolve_boundaries(ctx)` resolves the four boundaries once
-per session, with per-key provenance in `sources`. Precedence: **coach annotation (`manual`) →
-auto-seed (`auto`) → detector (`detected`) → `none`**. A human mark always wins. The seed's legacy
+per session, with per-key provenance in `sources`. Precedence: **coach annotation (`manual`) → live
+detector (`detected`) → auto-seed (`auto`) → `none`**. A human mark always wins; otherwise a detector
+run on the trace is preferred over the seed, and the seed is only the fallback when the detector
+returns `None`. This now holds for **all four** boundaries (Phase 79 added it for `stroke_start_s` +
+`finish_s` via `detect_swim_boundaries`), so `backfill_phases.py` / `POST /recompute` refresh every
+boundary from live detectors — no longer inheriting a stale `initial_phase_end_idx`. The seed's legacy
 `underwater_start_s` is deliberately ignored (it was the dive-peak derivation the detector replaced).
 
 ---
@@ -67,16 +71,20 @@ the caller keeps the incumbent boundary rather than shipping a confident wrong o
 
 | Boundary | Detector | Mechanism | Accuracy (1 swimmer) |
 |---|---|---|---|
-| `dive_start_s` (start) | `session.baseline_end_s` via `build_seed` | **motion onset** — first point where the rolling mean of \|vel\| holds above `_BASELINE_THRESH` (a low floor) for 0.5 s | ⚠ known defect ↓ |
+| `dive_start_s` (start) | **`detect_dive_start`** (79) | **foot of the launch surge** — the last prominent trough (≥ `0.15 × X`) left of the first upward crossing of `X = 2.0` m/s; falls back to `baseline_end` (motion onset via `build_seed`) when no ≥X surge exists | median **0.15 s** vs 36 marks (detector-only 0.11 s, 16/16); vs baseline_end 0.72 s |
 | `underwater_start_s` ("dolphin-kick start") | **`detect_underwater_start`** (75-02) | from `baseline_end`, the start-surge peak within 4 s, then the **first velocity trough** with prominence ≥ `0.40 × v95` | median **0.13 s** vs 38 marks; answers 102/108 |
-| `stroke_start_s` = **breakout** | per-stroke, 3 mechanisms ↓ | | |
-| `finish_s` | `detect_swim_window` | rhythm-based (CWT ridge); end of cyclic stroking | inherited (Phase 59/65) |
+| `stroke_start_s` = **breakout** | `detect_swim_boundaries` → per-stroke, 3 mechanisms ↓ | | |
+| `finish_s` | `detect_swim_boundaries` (= `detect_swim_window` end) | rhythm-based (CWT ridge); end of cyclic stroking | inherited (Phase 59/65) |
 
-> ⚠ **`dive_start_s` keys on motion onset, so a low-velocity artifact fires it early.** As the swimmer
-> leaves the block they jump and sink, tugging the line below true dive speed; the low baseline
-> threshold trips on that. **Intended rule (not yet implemented): the first velocity peak ≥ 2 m/s** —
-> the tug never reaches it, a real dive/push-off does. Open caveat for implementation: a weak wall
-> push-off may not reach 2 m/s. Tracked as owed in `.paul/STATE.md`.
+> **`dive_start_s` = foot of the launch surge (Phase 79).** As the swimmer leaves the block they jump
+> and sink, tugging the line below true dive speed; the old motion-onset rule (`baseline_end`) tripped on
+> that artifact and fired early (worst seen: 12 s early on a udk session). The shipped rule finds the
+> first surge that clears `X = 2.0` m/s — the tug never reaches it, a real dive/push-off does — and
+> anchors the marker at the low **foot** just before it (`detect_dive_start`: last prominent trough left
+> of the first crossing, prominence ≥ `0.15 × X`). When no sample reaches X (a weak wall push-off), it
+> **falls back to `baseline_end`**, so it is never worse than the old rule. Swept against 36 hand-marked
+> `dive_start_s` (`tools/score_dive_start.py`): 0.15 s mean\|err\| vs baseline_end's 0.72 s. ⚠ Redefining
+> a stored boundary is a comparability break → **backfill owed** (`.paul/STATE.md`).
 
 ### The breakout, three different mechanisms
 Selected by `stroke_type` in `compute_session_metrics` ([metrics.py:1377](metrics.py:1377) free/back,
@@ -98,6 +106,15 @@ the manual override (so a coach still wins).
   `stroke_start` still comes from `detect_swim_window` / the pulldown path, because a pulldown is one
   pull+glide+kick, not a kick train — neither disappearance nor arm-appearance applies. **Least-trusted
   breakout of the four.**
+
+**Reachable off the stored velocity, not just raw CSV.** The block above lives inside
+`compute_session_metrics` (raw-CSV `/process`). `metrics.detect_swim_boundaries(t, vel, stroke_type)`
+is a pure standalone that **mirrors** it (rhythm window + the stroke-appropriate breakout override) and
+returns `(stroke_start_idx, finish_idx)`; `resolve_boundaries` calls it so the auto path —
+`backfill_phases.py` / `POST /recompute` — resolves `stroke_start`/`finish` from live detectors with no
+raw-CSV read. Before this, both came from the seed's stale `initial_phase_end_idx` (median **3.56 s**
+off annotation on the stored library → **0.40 s** after). The hot path is left untouched, so the two
+copies are pinned together by `test_detect_swim_boundaries_matches_pipeline` (drift guard).
 
 ### Why one detector can't serve all strokes
 The kick-band gate is a **one-band energy meter**, not a waveform detector — `|CWT|²` averaged over
@@ -183,13 +200,19 @@ arrays, never the raw CSV).
 ---
 
 ## 8. Validation reality (read before trusting any number)
-- **Annotated corpus spans multiple swimmers** — Tony, Leo, Titus, and *AlexGroup* (a stand-in
-  athlete whose session-ids are individual testers' names). Counts by stroke: ~16 free / 17 fly /
-  breast n=2 / **back n=0**. ⚠ **Unresolved:** the Phase 76/77 breakout-tuning records call their
-  scoring corpus *"one swimmer"* — either that is wrong, or those detectors were fit on a
-  single-swimmer subset while more labeled data exists. Being reconciled in a follow-up (see
-  `.paul/STATE.md`). Until then treat cross-swimmer generalisation of the breakout constants as
-  unproven; the band-edge **jitter grid** is the only in-corpus evidence.
+- **Scored on 4 swimmers; ~15 exist — an annotation-coverage gap** (resolved Phase 78, fork (b),
+  `tools/annotated_roster.py`). The *"one swimmer"* stamp was wrong (4 are annotated: **Tony** 18,
+  **Leo** 14, **Chantee** 3, **Dane** 2), but so is "clean multi-swimmer set." **92 sessions exist,
+  only 37 (40%) annotated.** STATE's roster instinct was right: **Titus** (8) and **AlexGroup** (9)
+  are real athlete rows — AlexGroup is a stand-in whose session *names* are individual testers
+  (Henry/Ben/Desi/Spencer/Alina/Tate/Olivia/Anna) — plus Jenna (2), Michael (1). **All unannotated**,
+  so no scorer sees them. Annotated counts by stroke: free 16 (Tony 8, Leo 8) · fly 16 (Tony 10, Leo
+  3, Chantee 3) · breast 4 (Leo 2, Dane 2) · udk 1 · **back 0** (its 2 DB sessions — Tony, AlexGroup —
+  are unlabeled, hence n=0, not because backstroke wasn't swum). ⚠ Where measured: underwater 0.13 s
+  and freestyle breakout 0.42 s **hold across swimmers**; fly breakout is Tony/Leo-driven and
+  **degrades on Chantee** (0.87 s, the only post-tuning swimmer). Cross-swimmer generalisation is
+  *tested on 4, unknown on ~11 more sitting in the DB.* Highest-leverage fix = annotate the backlog,
+  then re-run the diagnostic (see `.paul/phases/78-multiswimmer-seg-diagnostic/78-01-SUMMARY.md`).
 - **No absolute thresholds** for non-breaststroke strokes (display doctrine = within-athlete
   contrast / trend). Breaststroke is the only stroke with data behind its rating bands; the others
   borrow that table, deliberately and visibly.

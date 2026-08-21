@@ -1368,6 +1368,61 @@ def extract_cycle_peaks(vel, cycles):
     return cycles
 
 
+def detect_swim_boundaries(t, vel, stroke_type=None):
+    """(stroke_start_idx, finish_idx) for the AUTO path — the rhythm-window + breakout
+    resolution compute_session_metrics performs, MINUS the manual overrides.
+
+    stroke_start_idx is the initial-phase end after the Phase 59-03 rhythm window and the
+    Phase 76/77 breakout override; finish_idx is the swim-window end. Both are full-trace
+    sample indices. Returns (None, None) when the trace is unusable. Pure; never raises.
+
+    Exists so resolve_boundaries / backfill_phases / POST recompute can refresh stroke_start
+    and finish from the newest detectors off the STORED velocity, without a raw-CSV
+    reprocess. It deliberately MIRRORS the block in compute_session_metrics (kept there so
+    that hot path is untouched); tests/test_phase_metrics.py::test_detect_swim_boundaries_
+    matches_pipeline locks the two together against drift.
+    """
+    try:
+        n = len(vel)
+        if n < 3:
+            return None, None
+        phases = detect_phases(t, vel)
+        b_end = phases["baseline_end"]
+        swim_end = phases["swim_end"]
+
+        win = detect_swim_window(t, vel, stroke_type)
+        if win is not None:
+            swim_end = min(max(int(win[1]), b_end + 1), n)
+
+        initial_phase = detect_initial_phase(t, vel, b_end)
+        ip_end = initial_phase["initial_phase_end_idx"]
+        if win is not None:
+            ip_end = min(max(int(win[0]), b_end), swim_end - 1)
+
+        if stroke_type in ("freestyle", "backstroke") and swim_end > b_end:
+            uw = detect_underwater_start(t, vel, b_end)
+            if uw is not None:
+                bk = detect_breakout_kickband(t, vel, uw, swim_end)
+                if bk is not None and _breakout_leaves_swim(t, vel, bk, swim_end):
+                    ip_end = min(max(int(bk), b_end), swim_end - 1)
+
+        if stroke_type == "butterfly" and swim_end > b_end:
+            uw = detect_underwater_start(t, vel, b_end)
+            if uw is not None:
+                bk = detect_breakout_fly(t, vel, uw, swim_end)
+                if bk is not None and _breakout_leaves_swim(t, vel, bk, swim_end):
+                    ip_end = min(max(int(bk), b_end), swim_end - 1)
+
+        ip_end, swim_end = int(ip_end), int(swim_end)
+        if ip_end <= 0 or swim_end <= ip_end:
+            return None, None                          # no real swim region → degenerate trace
+        # swim_end is an EXCLUSIVE slice bound in compute_session_metrics; as a finish TIME it
+        # must land on a real sample, so clamp the end-of-trace case to the last index.
+        return ip_end, min(swim_end, n - 1)
+    except Exception:
+        return None, None
+
+
 # ── METRICS ──────────────────────────────────────────────────────────────────
 
 def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_type=None):

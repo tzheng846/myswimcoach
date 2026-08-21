@@ -228,10 +228,12 @@ class TestBoundaryResolution:
         b = resolve_boundaries(ctx)
         assert b["sources"]["underwater_start_s"] == "detected"
         assert abs(b["underwater_start_s"] - 3.0) < 0.15
-        # the other three fall back to the seed
-        assert b["stroke_start_s"] == 8.0
-        assert b["sources"]["stroke_start_s"] == "auto"
-        assert b["sources"]["finish_s"] == "auto"
+        # stroke_start + finish now come from detect_swim_boundaries, overriding the stale seed;
+        # dive_start has no ≥X surge to anchor here, so its baseline_end seed stands.
+        assert b["sources"]["stroke_start_s"] == "detected"
+        assert b["stroke_start_s"] != 8.0
+        assert b["sources"]["finish_s"] == "detected"
+        assert b["sources"]["dive_start_s"] == "auto"
 
     def test_detected_value_is_not_the_legacy_dive_peak(self):
         """The seed's own underwater_start_s (the dive-peak rule) must be ignored."""
@@ -350,9 +352,11 @@ class TestUnderwaterWindowMetrics:
         for key in ("uw_duration", "uw_distance", "uw_avg_speed", "uw_surface_ratio"):
             assert out[key]["status"] == "implemented"
 
-    def test_null_stroke_start_blanks_all_four(self):
-        v = self._values(_ctx(annotation_phases={"underwater_start_s": 3.0},
-                              seed_phases={"finish_s": 18.0}))
+    def test_null_stroke_start_blanks_all_four(self, monkeypatch):
+        # No stroke_start anywhere: not annotated, not seeded, and the detector finds none.
+        monkeypatch.setattr("phase_metrics.metrics.detect_swim_boundaries",
+                            lambda *a, **k: (None, None))
+        v = self._values(_ctx(annotation_phases={"underwater_start_s": 3.0}))
         for key in ("uw_duration", "uw_distance", "uw_avg_speed", "uw_surface_ratio"):
             assert v[key] is None
 
@@ -413,3 +417,134 @@ class TestPulldownPassthrough:
     def test_missing_initial_phase_is_not_an_error(self):
         out = compute_phases(_ctx(stroke_type="breaststroke"))["underwater"]
         assert out["pulldown_peak_vel"]["value"] is None
+
+
+# ── Phase 75-03: the underwater kick detector + seven kick metrics ────────────
+
+def _kick_trace(fs=100.0, n_kicks=6, uw_start=3.0, uw_end=8.0, base=1.0, amp=0.6,
+                dur_s=20.0, amps=None):
+    """_uw_trace plus n_kicks evenly-spaced propulsive bumps strictly inside
+    (uw_start, uw_end). dist is the exact integral of vel. amps overrides per-bump height."""
+    t, vel, _ = _uw_trace(fs=fs, dur_s=dur_s, dip_t=uw_start, speed=base)
+    centers = np.linspace(uw_start, uw_end, n_kicks + 2)[1:-1]
+    if amps is None:
+        amps = [amp] * len(centers)
+    for c, a in zip(centers, amps):
+        vel = vel + a * np.exp(-0.5 * ((t - c) / 0.06) ** 2)
+    dist = np.concatenate([[0.0], np.cumsum(vel[:-1] / fs)])
+    return t, vel, dist
+
+
+def _kick_ctx(fs=100.0, uw_start=3.0, uw_end=8.0, stroke_type="freestyle",
+              n_kicks=6, amps=None, **kw):
+    t, vel, dist = _kick_trace(fs=fs, n_kicks=n_kicks, uw_start=uw_start, uw_end=uw_end,
+                               amps=amps)
+    defaults = dict(
+        t=t, vel=vel, dist=dist, accel=np.gradient(vel, t), fs=fs,
+        stroke_type=stroke_type,
+        annotation_phases={"underwater_start_s": uw_start, "stroke_start_s": uw_end,
+                           "finish_s": 18.0},
+    )
+    defaults.update(kw)
+    return PhaseContext(**defaults)
+
+
+class TestKickMetrics:
+    """AC-2/AC-3: seven metrics off metrics.detect_underwater_kicks."""
+
+    _KEYS = ("kick_count", "kick_tempo", "kick_consistency", "dist_per_kick",
+             "per_kick_decay", "first_kick_impulse", "uw_ivv")
+
+    def _uw(self, ctx):
+        out = compute_phases(ctx)["underwater"]
+        return {k: out[k]["value"] for k in out}
+
+    def test_kick_count_matches_the_known_bumps(self):
+        assert self._uw(_kick_ctx(n_kicks=6))["kick_count"] == 6
+
+    def test_tempo_and_consistency_from_intervals(self):
+        v = self._uw(_kick_ctx(n_kicks=6))
+        assert v["kick_tempo"] is not None and 0.5 < v["kick_tempo"] < 3.0
+        assert v["kick_consistency"] is not None and v["kick_consistency"] < 0.15  # even spacing
+
+    def test_dist_per_kick_is_total_uw_distance_over_count(self):
+        ctx = _kick_ctx(n_kicks=5)
+        i0, i1 = int(3.0 * ctx.fs), int(8.0 * ctx.fs)
+        exp = float(ctx.dist[i1] - ctx.dist[i0]) / 5
+        assert self._uw(ctx)["dist_per_kick"] == pytest.approx(exp, rel=1e-6)
+
+    def test_first_kick_impulse_positive(self):
+        assert self._uw(_kick_ctx(n_kicks=6))["first_kick_impulse"] > 0
+
+    def test_per_kick_decay_sign_tracks_fading_kicks(self):
+        fading = self._uw(_kick_ctx(n_kicks=5, amps=[1.0, 0.9, 0.8, 0.7, 0.6]))
+        assert fading["per_kick_decay"] is not None and fading["per_kick_decay"] < 0
+        building = self._uw(_kick_ctx(n_kicks=5, amps=[0.6, 0.7, 0.8, 0.9, 1.0]))
+        assert building["per_kick_decay"] > 0
+
+    def test_uw_ivv_is_detector_independent(self):
+        """A window with no clean kicks still yields uw_ivv (std/mean); the count is 0 and
+        the interval-based metrics blank."""
+        v = self._uw(_kick_ctx(n_kicks=0))
+        assert v["uw_ivv"] is not None
+        assert v["kick_count"] == 0
+        assert v["kick_tempo"] is None
+        assert v["kick_consistency"] is None
+
+    def test_single_kick_yields_partial_metrics(self):
+        v = self._uw(_kick_ctx(n_kicks=1))
+        assert v["kick_count"] == 1
+        assert v["dist_per_kick"] is not None
+        assert v["first_kick_impulse"] is not None
+        assert v["kick_tempo"] is None
+        assert v["kick_consistency"] is None
+        assert v["per_kick_decay"] is None
+
+    def test_breaststroke_blanks_all_seven(self):
+        v = self._uw(_kick_ctx(n_kicks=6, stroke_type="breaststroke"))
+        for k in self._KEYS:
+            assert v[k] is None, f"{k} should be None for breaststroke"
+
+    def test_no_underwater_window_blanks_all_seven(self, monkeypatch):
+        # No stroke_start resolvable → the underwater window can't form.
+        monkeypatch.setattr("phase_metrics.metrics.detect_swim_boundaries",
+                            lambda *a, **k: (None, None))
+        ctx = _ctx(annotation_phases={"underwater_start_s": 3.0})
+        v = self._uw(ctx)
+        for k in self._KEYS:
+            assert v[k] is None, f"{k} should be None without a window"
+
+    def test_all_seven_report_implemented(self):
+        out = compute_phases(_kick_ctx())["underwater"]
+        for k in self._KEYS:
+            assert out[k]["status"] == "implemented"
+
+
+# ── stroke_start / finish detector: drift guard against the real pipeline ──────
+# detect_swim_boundaries deliberately duplicates the boundary block in
+# compute_session_metrics (kept there so the hot metric path is untouched). This pins the
+# two together on the ground-truth fixtures: if the pipeline's stroke_start ever diverges
+# from the standalone detector resolve_boundaries now uses, this test fails loudly.
+
+import json                                                    # noqa: E402
+from pathlib import Path                                       # noqa: E402
+import metrics as _metrics                                     # noqa: E402
+
+_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "segmenter_truth.json"
+
+
+@pytest.mark.parametrize("row", json.loads(_FIXTURE.read_text())["sessions"],
+                         ids=lambda r: f"{r['stroke_type']}-{r['session_id'][:8]}")
+def test_detect_swim_boundaries_matches_pipeline(row):
+    fs = float(row["sample_rate_hz"])
+    vel = np.array([np.nan if v is None else float(v)
+                    for v in row["velocity_profile"]], dtype=float)
+    t = np.arange(vel.size) / fs
+    dist = np.concatenate([[0.0], np.cumsum(vel[:-1] / fs)])
+    stroke = row["stroke_type"]
+
+    ss_idx, _ = _metrics.detect_swim_boundaries(t, vel, stroke)
+    pipeline_ip_end = _metrics.compute_session_metrics(
+        t, vel, dist, stroke_type=stroke)["initial_phase"]["initial_phase_end_idx"]
+
+    assert ss_idx == pipeline_ip_end

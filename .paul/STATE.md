@@ -12,46 +12,70 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   per-phase metrics, then build the UI.
 - **Phase 77** (fly breakout) — closed + committed (`d6e00c8`, `0ff29e7`).
 - **Phase 76** (free/back breakout) — closed + committed (`046b8d1`).
-- **Phase 75-03** (7 underwater kick metrics) — **APPLIED, uncommitted, eyeball checkpoint NOT run.**
+- **Phase 75-03** (7 underwater kick metrics + `detect_underwater_kicks`) — **✅ CLOSED 2026-08-21.**
+  Eyeball (AC-4) approved on ground-truth windows; hypothesis 1 (peaks+prominence) accepted. The
+  review surfaced + FIXED a bigger defect: stored `stroke_start`/`finish` were stale and the backfill
+  couldn't refresh them → new `metrics.detect_swim_boundaries` + `detected` branch in
+  `resolve_boundaries` (auto `stroke_start` err **3.56 s → 0.40 s**). Suite 426 green.
+  See [75-03-SUMMARY.md](phases/75-report-card-phase-model/75-03-SUMMARY.md).
 - **Phase 75 Step 3** (report-card UI) — not started. Nothing from Phase 75 is visible in any UI yet.
-- **Working tree:** `phase_metrics.py` + `tests/test_phase_metrics.py` dirty (= 75-03). `ESP_32_V5.ino`
-  + `assets/icon/` also dirty/untracked — **unrelated to this arc; confirm before committing.**
+- **Phase 78** (multi-swimmer segmentation diagnostic — owed item 2) — **APPLIED, uncommitted, eyeball
+  checkpoint pending.** Resolved (fork **b**): *scored* corpus = **4 swimmers** (Tony/Leo/Chantee/Dane),
+  but the DB holds **~15 humans** — Titus (8), AlexGroup (9, a stand-in = 8 named testers), Jenna (2),
+  Michael (1) are **real but unannotated** (37/92 sessions labeled). Validation is confined by
+  *annotation coverage*, not data. See [78-01-SUMMARY.md](phases/78-multiswimmer-seg-diagnostic/78-01-SUMMARY.md).
+  New owed gaps below (items 9–12).
+- **Phase 79** (redefine `dive_start_s` = foot of first ≥X surge — owed item 1) — **✅ LOOP CLOSED
+  (PLAN→APPLY→UNIFY), 2026-08-21, X=2.0.** Code committed **`e1934ba`**; docs (PIPELINE §3 / STATE /
+  ROADMAP) deferred — 78-intermingled; **USER backfill owed.**
+  ([79-01-SUMMARY.md](phases/79-dive-start-redefine/79-01-SUMMARY.md)).
+- **Working tree (uncommitted, intermingled — confirm before committing):** 75-03 (`metrics.py`
+  `detect_underwater_kicks` + `detect_swim_boundaries`, `phase_metrics.py` kick fns + `stroke_start`/
+  `finish` detected branch, `tests/test_phase_metrics.py`, `tools/plot_kicks.py`, `PIPELINE.md §3`);
+  Phase 79 docs (`PIPELINE.md §3`, STATE, ROADMAP; code already in `e1934ba`); Phase 78
+  (`tools/annotated_roster.py`, `tools/score_boundaries_by_swimmer.py`, `tools/score_segmenter.py`,
+  `PIPELINE.md §8`). ⚠ `metrics.py`/`phase_metrics.py`/`PIPELINE.md`/`tests` blend 75-03 + 79-docs
+  WITHIN files. `ESP_32_V5.ino` + `assets/icon/` + `scratch/` + `segmenter_report.json` also
+  dirty/untracked — **unrelated to this arc.**
 
 ## Segmentation status — the 4 phase boundaries
 Mechanisms in [PIPELINE.md §3](../PIPELINE.md).
 
 | Boundary | State |
 |---|---|
-| `dive_start_s` | ⚠ motion-onset (`baseline_end`) — **known defect + active fix, item 1** |
+| `dive_start_s` | ✅ `detect_dive_start` (79) — foot of first ≥2 m/s surge; median 0.15 s vs 36 marks (vs `baseline_end` 0.72 s); falls back to `baseline_end` on sub-X starts |
 | `underwater_start_s` | ✅ `detect_underwater_start`, median 0.13 s |
-| `stroke_start_s` (breakout) | ✅ free/back 0.42 s · fly 0.38 s · ⚠ **breaststroke = incumbent, untuned** |
-| `finish_s` | inherited (`detect_swim_window`) |
+| `stroke_start_s` (breakout) | ✅ free 0.42 s (Tony+Leo) · fly 0.38 s (Tony/Leo; ⚠ 0.87 s Chantee) · ⛔ **back n=0 unvalidated** · ⚠ **breaststroke = incumbent, untuned** (Phase 78). **Now `detected` via `detect_swim_boundaries` in `resolve_boundaries`** (75-03), so backfill/recompute refresh it (was stale seed, 3.56 s → 0.40 s) |
+| `finish_s` | `detect_swim_window` end — **now `detected` via `detect_swim_boundaries`** (75-03), no longer the stale last-cycle seed. Still weakest marker (item 12) |
 
 ## Owed / next actions (priority order)
 
-**1. ⭐ ACTIVE — Redefine `dive_start_s` (first velocity peak ≥ 2 m/s).**
-Current: `dive_start_s = session.baseline_end_s` ([annotations.py:119](../annotations.py)); `baseline_end`
-([metrics.py:51](../metrics.py) `detect_phases`) is the first point the rolling mean of |vel| holds above
-`_BASELINE_THRESH` (a low floor) for 0.5 s = **motion onset**. Defect: at the start the swimmer jumps and
-sinks, tugging the line below true dive speed; the low threshold trips on that artifact → `dive_start`
-fires early. Intended rule (user, 2026-08-20): **the first velocity peak ≥ 2 m/s** — the tug never
-reaches it, a real dive/push-off does. ⚠ Open caveat: a weak wall push-off may not reach 2 m/s → decide
-the fallback (null? lower floor for push-off starts?). Changing `dive_start` shifts a stored boundary →
-comparability break + backfill. Verify against the multi-swimmer data in item 2.
+**1. ✅ RESOLVED (Phase 79, eyeball approved 2026-08-21). → [79-01-SUMMARY.md](phases/79-dive-start-redefine/79-01-SUMMARY.md).**
+`dive_start_s` now = **`detect_dive_start`** ([metrics.py](../metrics.py)): the foot of the first surge
+that clears **X = 2.0 m/s** — the last prominent trough (prominence ≥ 0.15·X) left of the first upward
+crossing. Wired in `resolve_boundaries` as source `detected`; `build_seed` reads the stored boundary back
+for the annotate draft (mirrors the 75-02 underwater precedent). When no sample reaches X (weak wall
+push-off) → **falls back to `baseline_end`** (source `auto`), so never worse than the old rule. Swept
+(`tools/score_dive_start.py`, 36 hand-marked sessions): **0.15 s mean|err| vs `baseline_end` 0.72 s**;
+detector-only 0.11 s (16/16); all 36/36 within 0.5 s. X=2.0 chosen for tug-margin (accuracy statistically
+tied across X∈[1.25,2.0]). ⚠ **USER BACKFILL OWED** (Claude blocked from prod writes): run
+`python tools/backfill_phases.py --apply` to re-resolve stored `dive_start_s` across the library
+(comparability break; standing pattern 57/59-03/61-01/65/76-77). Code committed `e1934ba`; docs deferred to the 78 commit.
 
-**2. ⭐ ACTIVE — Reconcile the "one swimmer" validation claim.**
-The Phase 76/77 records call their breakout scoring corpus *"one swimmer,"* but labeled data exists for
-**Tony, Leo, Titus, and AlexGroup** (a stand-in athlete whose session-ids are individual testers' names).
-Resolve which is true: **(a)** the claim is wrong — the ~16 free / 17 fly annotated sessions already span
-multiple swimmers (then just delete the caveat); or **(b)** the detectors were fit on a one-swimmer
-subset while more labeled data went unused (then re-score against the fuller corpus and re-tune
-constants if needed). Method: point `tools/breakout_band_probe.py` / `tools/score_underwater.py` at the
-DB (read-only, service-role key) to print distinct athlete_ids per stroke. Update [PIPELINE.md §8](../PIPELINE.md)
-with the resolved count.
+**2. ✅ RESOLVED (Phase 78, eyeball checkpoint pending). → [78-01-SUMMARY.md](phases/78-multiswimmer-seg-diagnostic/78-01-SUMMARY.md).**
+Answer = fork **(b): validation is confined by ANNOTATION COVERAGE, not data.** "One swimmer" was
+false (4 annotated: Tony 18, Leo 14, Chantee 3, Dane 2) — but so is "clean multi-swimmer set."
+**92 sessions exist, only 37 (40%) annotated.** STATE's roster instinct was RIGHT: **Titus** (8) and
+**AlexGroup** (9, a stand-in whose session names are testers Henry/Ben/Desi/Spencer/Alina/Tate/
+Olivia/Anna) are real, plus Jenna (2), Michael (1) — **all unannotated**, so no scorer sees them.
+Where measured, detectors hold (underwater 0.13 s, free breakout 0.42 s across both swimmers; fly
+0.38 s but 0.87 s on Chantee). PIPELINE §8 + the `score_segmenter.py` banner corrected. The fix that
+matters is item 9. Residual gaps → items 9–12.
 
-**3. Close out 75-03.** Run the eyeball checkpoint (AC-4): `python tools/plot_kicks.py` on live DB
-sessions → confirm the marked peaks are the kicks a coach would count. Then commit + write
-`75-03-SUMMARY.md`. Registry: the 7 kick specs are already flipped to `implemented` in the working tree.
+**3. ✅ DONE (2026-08-21).** 75-03 eyeball run on ground-truth windows
+(`tools/plot_kicks.py --annotated-only`), hypothesis 1 approved, `75-03-SUMMARY.md` written. The
+review also surfaced + fixed the stale-`stroke_start` backfill defect (see item 6). Two known
+over-detection cases logged (`udk` alternating peaks; shallow-freestyle ripple) — not blockers.
 
 **4. Fix `tools/breakout_band_probe.py` (DEFER-77-A).** The probe plots the exploratory/rejected
 detector, not the shipped one — 3 defects, one root cause. Defect (a): `:270` passes `cand_idx` (the
@@ -63,10 +87,13 @@ before item 5, all three before the next breakout human-verify. Detail in
 **5. Run Phase 76's AC-4 eyeball.** Never run — both 76 corrections were found by measurement, not the
 checkpoint. Needs item 4(a) first.
 
-**6. Backfills (USER runs — Claude is blocked from prod writes).** 76/77's new `stroke_start` boundaries
-and 75-03's kick metrics create comparability breaks vs stored sessions. Re-run
-`python tools/backfill_phases.py --apply` after the eyeball approvals. Standing pattern (57 / 59-03 /
-61-01 / 65).
+**6. Backfills (USER runs — Claude is blocked from prod writes).** ⚠ CORRECTED 2026-08-21: the earlier
+claim that `backfill_phases.py --apply` refreshes 76/77's `stroke_start` was **wrong** — it only re-ran
+`compute_phases`, which read the stale stored `initial_phase_end_idx`. **Now fixed** (75-03):
+`resolve_boundaries` resolves `stroke_start`/`finish` via `metrics.detect_swim_boundaries`, so a single
+`python tools/backfill_phases.py --apply` refreshes **all four** boundaries + 75-03's kick metrics from
+live detectors (dry-run confirms sources = `detected`/`manual`, no `auto`). Run it to land the
+comparability break across the library. Standing pattern (57 / 59-03 / 61-01 / 65 / 79).
 
 **7. Remaining Step-2 metrics — one at a time, approval-gated** ([phase_metrics.REGISTRY](../phase_metrics.py)):
 Start (11 — incl. `reaction_time`, which needs the coach GO-button + phone↔encoder clock sync), Swim
@@ -75,12 +102,31 @@ Start (11 — incl. `reaction_time`, which needs the coach GO-button + phone↔e
 **8. Step-3 UI.** Phase-organized web report card (Start / Underwater / Swim, breakout marked in Swim),
 then iOS. Display doctrine = within-athlete contrast / trend, **no absolute thresholds**.
 
+**9. ⭐ Annotate the backlog — 20 real-swimmer sessions sit unscored (Phase 78, highest leverage).**
+Titus 8, AlexGroup 9 (8 named testers), Jenna 2, Michael 1 — all 0 annotations. Labeling them converts
+"generalises, probably" into a measured cross-swimmer number, and **unlocks backstroke** (annotate the 2
+existing bk sessions: Tony + AlexGroup/Tate) and far more breaststroke. Then **re-run
+`python tools/annotated_roster.py` + the 3 scorers** — the diagnostic is now a repeatable audit.
+
+**10. ⛔ Backstroke breakout unvalidated (n=0) — Phase 78.** 2 labelable bk sessions exist (Tony,
+AlexGroup/Tate). Stop claiming "back" in Phase 76's "free/**back**" until at least those are scored.
+
+**11. ⚠ Fly breakout thins outside Tony/Leo — Phase 78.** Chantee (post-tuning, 3 sessions) sits at
+0.87 s median (0/3 ≤0.5 s) vs Tony 0.26 s / Leo 0.29 s. Re-check after item 9; don't oversell fly
+breakout as "generalises."
+
+**12. ⚠ `finish_s` is the weakest phase marker (MAE 2.76 s, worst 6.43 s) — Phase 78.** Inherited from
+`detect_swim_window`; no phase has ever owned tuning it. Candidate for a dedicated pass.
+
 ## Recent arc (compressed)
 - **75-01** skeleton — `MetricSpec` registry (37 specs) + `metrics_json.phases` jsonb + `POST /sessions/{id}/recompute` backfill seam.
 - **75-02** — `detect_underwater_start` + 4 underwater window metrics; backfilled all 108 sessions.
-- **75-03** (applied) — `detect_underwater_kicks` + 7 kick metrics.
+- **75-03** (closed 2026-08-21) — `detect_underwater_kicks` + 7 kick metrics (hypothesis 1 approved);
+  also `detect_swim_boundaries` + `stroke_start`/`finish` `detected` branch so backfill refreshes all
+  four boundaries (auto `stroke_start` 3.56 s → 0.40 s).
 - **76** — free/back breakout by kick-band **disappearance**.
 - **77** — fly breakout by arm-cycle **appearance**.
+- **79** — `dive_start` redefined to foot-of-surge (`detect_dive_start`, X=2.0); MAE 0.72 s → 0.15 s.
 
 ## Pointers
 - **How it works:** [PIPELINE.md](../PIPELINE.md) — signal, phase model, detectors, metrics registry

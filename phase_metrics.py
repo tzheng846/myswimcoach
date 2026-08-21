@@ -132,10 +132,11 @@ def resolve_boundaries(ctx) -> dict:
 
     sources[key] is one of:
       "manual"   — the coach's saved annotation
-      "auto"     — annotations.build_seed's derivation (stroke_start/finish, or dive_start
-                   when no ≥X surge crosses so the baseline_end seed stands)
-      "detected" — metrics.detect_dive_start (dive_start) or detect_underwater_start
-                   (underwater_start)
+      "auto"     — annotations.build_seed's derivation, used only as the fallback when the
+                   detector below returns nothing (or, for dive_start, when no ≥X surge crosses)
+      "detected" — a live detector run on this session's trace: detect_dive_start (dive_start),
+                   detect_underwater_start (underwater_start), or detect_swim_boundaries
+                   (stroke_start + finish — the rhythm-window + Phase 76/77 breakout answer)
       "none"     — not resolvable
     """
     ann, seed = ctx.annotation_phases, ctx.seed_phases
@@ -185,6 +186,25 @@ def resolve_boundaries(ctx) -> dict:
         if idx is not None and ctx.fs and ctx.fs > 0:
             bounds["underwater_start_s"] = float(idx) / float(ctx.fs)
             sources["underwater_start_s"] = "detected"
+
+    # stroke_start_s + finish_s from the newest swim-window/breakout detectors. build_seed's
+    # stroke_start is the STALE stored initial_phase_end_idx (only the raw-CSV compute_session_
+    # metrics path rewrites it), so on the auto path — backfill / recompute / process — prefer a
+    # live run over the trace. Mirrors the dive_start (79) / underwater_start (75-02) pattern;
+    # detection failure leaves the seed's "auto" value standing, and a coach annotation (resolved
+    # above as "manual") always wins. Both boundaries come from one detect_swim_boundaries call.
+    if (sources["stroke_start_s"] != "manual" or sources["finish_s"] != "manual") \
+            and ctx.fs and ctx.fs > 0:
+        try:
+            ss_idx, fin_idx = metrics.detect_swim_boundaries(ctx.t, ctx.vel, ctx.stroke_type)
+        except Exception:
+            ss_idx = fin_idx = None
+        if sources["stroke_start_s"] != "manual" and ss_idx is not None:
+            bounds["stroke_start_s"] = float(ss_idx) / float(ctx.fs)
+            sources["stroke_start_s"] = "detected"
+        if sources["finish_s"] != "manual" and fin_idx is not None:
+            bounds["finish_s"] = float(fin_idx) / float(ctx.fs)
+            sources["finish_s"] = "detected"
 
     bounds["sources"] = sources
     return bounds
@@ -297,6 +317,125 @@ def _compute_pulldown_duration(ctx):
     return _pulldown(ctx, "pulldown_duration_s")
 
 
+# ─── Underwater kick metrics (Phase 75-03) ───────────────────────────────────
+# All seven ride on ONE detector: metrics.detect_underwater_kicks peak-counts the
+# underwater window. _kick_analysis runs it once and returns the shared peak data; each
+# metric is arithmetic on that, guarded by a per-metric count floor. Gated to the
+# dolphin-kick strokes — breaststroke's underwater is the pulldown (see _pulldown).
+
+
+def _kick_analysis(ctx):
+    """Shared per-session kick data, or None when kicks do not apply to this session.
+
+    None when: the stroke is breaststroke (its underwater is the pulldown), or the
+    underwater window is unusable (_uw_window). Otherwise returns the detected downkick
+    peaks (possibly an EMPTY array — a glide-only underwater), their velocities, the
+    inter-kick intervals, the window bounds, and the window distance. Each _compute_kick_*
+    applies its own count floor to this.
+    """
+    if ctx.stroke_type == "breaststroke":
+        return None
+    w = _uw_window(ctx)
+    if w is None:
+        return None
+    i0, i1, _dur = w
+    peaks = metrics.detect_underwater_kicks(ctx.t, ctx.vel, i0, i1)
+    if peaks is None:
+        peaks = np.array([], dtype=int)
+    peak_vels = ctx.vel[peaks] if len(peaks) else np.array([])
+    intervals = np.diff(ctx.t[peaks]) if len(peaks) >= 2 else np.array([])
+    return {
+        "peaks": peaks,
+        "peak_vels": peak_vels,
+        "intervals_s": intervals,
+        "i0": i0,
+        "i1": i1,
+        "uw_dist": _span_distance(ctx, i0, i1),
+    }
+
+
+def _compute_kick_count(ctx):
+    a = _kick_analysis(ctx)
+    return None if a is None else int(len(a["peaks"]))
+
+
+def _compute_kick_tempo(ctx):
+    """Kicks per second, from the MEDIAN inter-kick interval — glide-independent (a pre-kick
+    glide inside the window cannot dilute it the way count ÷ window-duration would)."""
+    a = _kick_analysis(ctx)
+    if a is None or len(a["intervals_s"]) < 1:
+        return None
+    med = float(np.median(a["intervals_s"]))
+    return None if med <= 0 else 1.0 / med
+
+
+def _compute_kick_consistency(ctx):
+    """CV of the inter-kick intervals (std ÷ mean); lower = more even. Needs ≥2 intervals."""
+    a = _kick_analysis(ctx)
+    if a is None or len(a["intervals_s"]) < 2:
+        return None
+    iv = a["intervals_s"]
+    mean = float(np.mean(iv))
+    return None if mean <= 0 else float(np.std(iv) / mean)
+
+
+def _compute_dist_per_kick(ctx):
+    """Total underwater distance ÷ kick count (D-dpk: the whole window, not a glide-excluded
+    sub-window — a long push-off glide inflates it; documented, not corrected)."""
+    a = _kick_analysis(ctx)
+    if a is None or len(a["peaks"]) < 1 or a["uw_dist"] is None:
+        return None
+    return float(a["uw_dist"]) / len(a["peaks"])
+
+
+def _compute_per_kick_decay(ctx):
+    """Signed % change in downkick-peak velocity, first kick → last. Negative = the kicks
+    are dying across the underwater; positive = building. Needs ≥2 kicks."""
+    a = _kick_analysis(ctx)
+    if a is None or len(a["peak_vels"]) < 2:
+        return None
+    first, last = float(a["peak_vels"][0]), float(a["peak_vels"][-1])
+    if not np.isfinite(first) or not np.isfinite(last) or first == 0:
+        return None
+    return (last - first) / first * 100.0
+
+
+def _compute_first_kick_impulse(ctx):
+    """Velocity gained across the first downkick: the first peak minus the lowest velocity
+    between the window start and that peak (the trough it accelerated from). Unit m/s — a
+    Δv, not an integral."""
+    a = _kick_analysis(ctx)
+    if a is None or len(a["peaks"]) < 1:
+        return None
+    p0 = int(a["peaks"][0])
+    pre = ctx.vel[a["i0"]: p0 + 1]
+    pre = pre[np.isfinite(pre)]
+    v_peak = float(a["peak_vels"][0])
+    if len(pre) == 0 or not np.isfinite(v_peak):
+        return None
+    return v_peak - float(np.min(pre))
+
+
+def _compute_uw_ivv(ctx):
+    """Intra-underwater velocity variation = std ÷ mean of velocity over the window
+    (D-ivv). Detector-INDEPENDENT — needs only the window, so it computes even where the
+    kick peaks are unreliable. Gated to non-breaststroke, like the rest of the kick group."""
+    if ctx.stroke_type == "breaststroke":
+        return None
+    w = _uw_window(ctx)
+    if w is None:
+        return None
+    i0, i1, _dur = w
+    seg = ctx.vel[i0:i1]
+    seg = seg[np.isfinite(seg)]
+    if len(seg) < 2:
+        return None
+    mean = float(np.mean(seg))
+    if not np.isfinite(mean) or mean == 0:
+        return None
+    return float(np.std(seg) / mean)
+
+
 # ─── Registry ────────────────────────────────────────────────────────────────
 # One MetricSpec per metric in the Phase-75 CONTEXT taxonomy. ALL status="planned",
 # compute=None — see module docstring. Tiers follow the CONTEXT feasibility tags:
@@ -327,13 +466,20 @@ REGISTRY: tuple[MetricSpec, ...] = (
                status="implemented", compute=_compute_uw_avg_speed),
     MetricSpec("uw_surface_ratio", "underwater", "Underwater ÷ surface speed ratio", "ratio", "medium",
                status="implemented", compute=_compute_uw_surface_ratio),
-    MetricSpec("kick_count", "underwater", "Kick count", "count", "high"),
-    MetricSpec("dist_per_kick", "underwater", "Distance per kick", "m", "high"),
-    MetricSpec("kick_tempo", "underwater", "Kick tempo", "kicks/s", "high"),
-    MetricSpec("kick_consistency", "underwater", "Kick consistency (CV)", "ratio", "high"),
-    MetricSpec("uw_ivv", "underwater", "Underwater intracyclic velocity variation", "ratio", "high"),
-    MetricSpec("per_kick_decay", "underwater", "Per-kick speed decay", "%", "high"),
-    MetricSpec("first_kick_impulse", "underwater", "First-kick impulse", "m/s", "high"),
+    MetricSpec("kick_count", "underwater", "Kick count", "count", "high",
+               status="implemented", compute=_compute_kick_count),
+    MetricSpec("dist_per_kick", "underwater", "Distance per kick", "m", "high",
+               status="implemented", compute=_compute_dist_per_kick),
+    MetricSpec("kick_tempo", "underwater", "Kick tempo", "kicks/s", "high",
+               status="implemented", compute=_compute_kick_tempo),
+    MetricSpec("kick_consistency", "underwater", "Kick consistency (CV)", "ratio", "high",
+               status="implemented", compute=_compute_kick_consistency),
+    MetricSpec("uw_ivv", "underwater", "Underwater intracyclic velocity variation", "ratio", "high",
+               status="implemented", compute=_compute_uw_ivv),
+    MetricSpec("per_kick_decay", "underwater", "Per-kick speed decay", "%", "high",
+               status="implemented", compute=_compute_per_kick_decay),
+    MetricSpec("first_kick_impulse", "underwater", "First-kick impulse", "m/s", "high",
+               status="implemented", compute=_compute_first_kick_impulse),
     MetricSpec("pulldown_peak_vel", "underwater", "Pulldown peak velocity", "m/s", "low",
                status="implemented", compute=_compute_pulldown_peak_vel),
     MetricSpec("pulldown_duration", "underwater", "Pulldown duration", "s", "low",
