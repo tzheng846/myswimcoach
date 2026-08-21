@@ -1,5 +1,9 @@
 # Roadmap: Swimnetics
 
+> **For current status use [STATE.md](STATE.md), not this file.** This roadmap is the historical
+> phase index (through Phase 77); per-phase detail lives in `.paul/phases/<n>-*/`. ⚠ Not yet
+> length-trimmed — a lean-index rewrite is a deferred follow-up.
+
 ## Overview
 An end-to-end pipeline with velocity tracking and analysis for stroke analysis for swimming. Answers questions like "how does my technique vary throughout my swim?"
 

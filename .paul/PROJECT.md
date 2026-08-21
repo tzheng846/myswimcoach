@@ -57,6 +57,27 @@ Swim academies and competitive programs. Coach or operator runs the device; swim
   Backend contract + web GUI + recompute committed and deployed (e7f72f4, 627419c); iOS side
   code-complete, device-verify rides the next EAS build (mobile repo local-only, user-owned git).
 
+- ✓ **External-camera video sync (Phase 67, 2026-08-17):** coaches attach GoPro / waterproof-cam
+  footage on the web annotate page and sync it to the velocity trace with a one-tap **push-off
+  align** (scrub the clip to the dive frame → one click sets `video_origin_s = diveSessionTime −
+  videoTime`; the dive is auto-detected on the encoder, so **no computer vision** and zero marks
+  required). Upload is memory-safe (413 before buffering + streamed to Storage, never `file.read()`
+  into RAM). ⚠ **Free-tier 50 MB cap:** external clips must be compressed to <50 MB (HandBrake /
+  GoPro Quik) until a Supabase Pro upgrade — a documented one-flip (raise the global limit + bump the
+  two `MAX_VIDEO_BYTES` + apply `patch_11`). V1 = one clip per session; the one-long-take → many-
+  sessions workflow is a deferred shared-asset phase. ⚠ Real-clip UAT owed.
+
+- ✓ **Multi-camera video (Phase 69, 2026-08-17):** a session can carry up to 4 synced camera angles
+  (phone + 3 external) on a dedicated `/app/sessions/[id]/videos` page — a synced player where ONE
+  master timeline drives every camera and the velocity trace together (each seeks to `sessionTime −
+  its origin`; the focused camera carries audio, the others are drift-corrected), plus per-camera
+  push-off sync, editable labels, and delete. The report card is decluttered (the inline video panel
+  became a compact "Videos" link). The data model is **additive** — externals live in a new
+  `session_videos` table while the phone/primary stays in the legacy columns, so nothing existing
+  broke and mobile is untouched. ⚠ patch_12 (the table) must be applied live, and real-video UAT is
+  owed (the 4-video synced playback was built without live data — highest-risk piece). ⚠ Free-tier
+  50 MB/clip; the long-take → many-sessions workflow is still deferred.
+
 ### Nice to Have
 - PDF report generation (server-side, emailed to coach)
 - Session compare in iOS app (✓ shipped on web portal instead — Phase 23)
@@ -101,66 +122,7 @@ known drift (Railway pre-Phase-24, committed SQL ≠ live DB, git coverage gaps)
 - First paying customer (swim academy) using the system
 
 ---
-*Updated: 2026-08-16 after Phase 66 — Acceleration Derivative (1/1 plan). Replaced the ~5 Hz
-decimate→gradient→linear-interp acceleration with a full-rate Savitzky–Golay derivative, then made
-its smoothing window stroke-dependent (free/back 0.50 s, fly/breast 0.25 s) after the user observed
-alternating-arm strokes read noisier than fly. Display-only — `metrics.py` never consumes
-acceleration; velocity and every metric are untouched. Deployed to Railway; 70 rows re-backfilled.
-⚠ The windows are hand-tuned on one swimmer's data; the principled version sets each from a measured
-velocity spectrum once a broader corpus exists.*
-*Updated: 2026-08-16 after Phase 64 — Fullscreen Video + Velocity Overlay (3/3 plans, web). A
-fullscreen video stage with a hand-rolled SVG velocity trace (rAF, zero React state) + drag-to-scrub
-(64-01, `0f63a15`+`fe3b53b`); `sessions.acceleration_profile` stored as an EXACT derivative of the
-already-stored velocity with a 70/70 backfill, no raw-CSV reprocessing (64-02, `f133c56` → Railway);
-and acceleration on BOTH the overlay (a stacked signed band sharing one window/scrub/playhead) and a
-new static `AccelerationChart`, with page-owned, persisted, cross-surface-synced toggles + colour via
-`useTracePrefs` (64-03, `fe3b53b` → Vercel). ⚠ The stored acceleration is a ~5 Hz decimate→gradient→
-linear-interp reconstruction that reads **choppy** on screen — **Phase 66 replaces the derivation with
-a Savitzky–Golay first derivative + re-backfill**, which is **display-only** (`metrics.py` consumes
-velocity, never acceleration, so no metric moves). ⚠ Known limitation: the accel toggle lives in the
-video control bar, so a no-video session can't turn acceleration on (it follows the persisted pref).*
-*Updated: 2026-08-11 after Phase 61 — Web Portal Rework (5/5 plans). Delivered all five things the
-user asked for, and one they did not. **⭐ The one they did not: `ramp_up` was never ramp-up.** The
-steady/ramp_up cycle split — which every `mean_*`, `cv_*` and `stroke_count` was computed over —
-gated on `arm_peak < 0.50 × p75`, a VELOCITY test. Measured on two corpora, it overwhelmingly marked
-**the swimmer decelerating into the wall**, not accelerating from rest: 0 of 13 affected `raw/`
-sessions had a leading run, and on the live DB the median excluded-cycle position was **0.91**, with
-59% in the final 20% of the swim. Removing it (61-01, user's call, reaffirmed three times with the
-measurements on screen) made the charts and the numbers describe the same cycles — the user's report
-that *"the numbers don't reflect what's actually shown on graph"* was literally true — at the cost of
-a **fourth comparability break** and a re-anchoring of two `ratings.py` bands, since the 0–100 score
-floored out for a third of sessions once the wall-touch counted. ⭐ **58-04 CLOSED**, owed and
-"homeless" since 2026-08-07: the web computes its own end-anchored `video_origin_s`, so the phone's
-`VideoOverlayScreen` is no longer the only writer in the system — and a SECOND instance of the same
-`?? 0` defect was found in `VideoPane.attach()`. Also shipped: the last hardcoded sample rate on the
-web is gone, and per-session generated names so three sessions from one morning are no longer
-indistinguishable. Suite 273 → 274. ⚠ CARRIED OUT: **synced playback on Compare** (recorded as a
-TODO, deliberately unplanned — needs a `VideoPane` play/pause API it does not have); the video
-chart no longer auto-follows the playhead (CONTEXT D16 withdrawn at the user's request); generated
-names are derived, not persisted; and the mobile D5c comment fix remains uncommitted.*
-*Updated: 2026-08-11 after Phase 60 — Mobile App Rework (3/3 plans). The coach's poolside device no
-longer shows less than the laptop, and no longer shows one number wrong. **A live −10% time-axis
-error** on the mobile report card was found and fixed: Phase 52 corrected it on the web, but
-`89205ca` is a `myswimcoach` commit and the separately-owned mobile repo was never in its diff, so
-four consumers stayed wrong for two months (chart axis, cycle overlay, Time-to-Distance, CSV) —
-measured against the live DB at **−10.0% → +0.0%**, 4 sessions of 4. Also shipped: four per-cycle
-charts (the "Per-cycle charts in iOS app" nice-to-have, previously substituted by the web), a
-scrubbable window bar replacing pinch-to-zoom, session video reachable from any saved session rather
-than only just after recording, and a user-dropped start marker for Time-to-Distance. Zero Python
-touched; suite held at 273 throughout. ⚠ Two things carried out: **58-04 is still owed and homeless**
-(the web annotate page still cannot compute a video origin of its own) — ✅ **CLOSED by Phase 61-03
-on 2026-08-11** — and **Phase 52-02 gained motivation** — most NULL-rate sessions are ~90 Hz, not
-~100, correcting a generalization in the Phase 59 record.*
-*Updated: 2026-08-05 after Phase 55 — athlete flow repaired end-to-end. Phase 51-02 fixed the phantom
-`athletes.coach_id` that made `POST /athletes` 500 (shipped `dedac17`); Phase 55-01 then fixed the two
-defects that failure had been hiding, both consequences of `RecordingConfig` being a tab screen that
-never remounts: a roster frozen at app launch, and a Record button whose `navigate()` silently went
-unhandled from the Root stack. Freestyle analytics reached a device build for the first time — the
-"breaststroke only" constraint is now a data-validation question, not a UI gate.*
-*Created: 2026-05-17*
-*Updated: 2026-07-20 after Phase 47 — trial annotation tool shipped end-to-end: annotation
-contract + web GUI + recompute-on-save (deployed) plus iOS background video upload + synced
-playback origin (code-complete, device-verify pending).*
-*Updated: 2026-06-23 after Phase 46 — added a public build-log blog to the marketing site (/blog index + /blog/[slug] SSG posts; web/lib/blog.js data file; Nav+Footer links; 5 founder-journal posts).*
-*Updated: 2026-06-22 after Phase 40 — marketing site redesigned to the iOS light-purple theme (shadcn/Tailwind v4); public pricing removed sitewide in favor of a Request-a-quote contact form (Web3Forms).*
-*Updated: 2026-06-12 after Phase 25 — codebase audit shipped (CODEBASE-AUDIT.md): all cross-system contracts verified, 7 findings documented incl. Railway deploy drift and version-control coverage gaps in both repos*
+*Requirements & product intent above are the durable spec. **Current status / in-flight work: see
+[STATE.md](STATE.md).** The per-phase change log was archived 2026-08-21 →
+[.paul/archive/PROJECT-changelog-2026-08-20.md](archive/PROJECT-changelog-2026-08-20.md).*
+*Created: 2026-05-17 · Docs restructured 2026-08-21.*

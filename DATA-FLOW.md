@@ -2,6 +2,12 @@
 
 Where every byte lives, who put it there, and who reads it back.
 
+> **Addendum 2026-08-21 (Phases 75–77), not yet folded into the tables below:** `metrics_json` now
+> carries a `phases` object (`phase_metrics.compute_phases` — per-phase metrics + resolved boundaries
+> + `go_signal_s`), written by `POST /process` and by the new **`POST /sessions/{id}/recompute`**
+> backfill endpoint (re-derives from the stored velocity/distance/accel profiles, no raw-CSV read).
+> Mechanism: [PIPELINE.md §6](PIPELINE.md).
+
 ---
 
 ## 1. Read this first

@@ -1,5 +1,9 @@
 # Swimnetics Codebase Audit
 
+> ⚠ **PARTIALLY SUPERSEDED (2026-08-21).** Dated 2026-06-12/06-18 — treat as the folder/deploy/
+> version-control map only. Current signal & metrics mechanism → [PIPELINE.md](PIPELINE.md); data
+> topology (stores, endpoints, jsonb) → [DATA-FLOW.md](DATA-FLOW.md); live status → [.paul/STATE.md](.paul/STATE.md).
+
 *Produced 2026-06-12 (PAUL Phase 25, plan 25-01). Every claim below was verified against
 code, test runs, or live probes on that date — file:line references are evidence, not
 decoration. Project history and decision log live in `.paul/STATE.md`; this document is
