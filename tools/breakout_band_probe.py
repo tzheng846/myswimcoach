@@ -244,6 +244,7 @@ def main():
         ship_idx = metrics.detect_breakout_kickband(t, vel, uw_idx, swim_end)
         if ship_idx is None or not metrics._breakout_leaves_swim(t, vel, ship_idx, swim_end):
             ship_refused += 1                          # falls back to the incumbent ip_end
+            ship_idx = None                            # refused/vetoed IS the shipped answer here
             ship_err = cur_ip - true_bk
         else:
             ship_err = ship_idx / fs - true_bk
@@ -267,7 +268,10 @@ def main():
               f"{ship_err:>+9.2f}")
 
         if args.plot:
-            _plot(sid, stroke, vel, fs, freqs, power, pk, uw_idx, bk_idx, cand_idx, plot_dir)
+            # ship_idx, NOT cand_idx: cand_idx is this probe's exploratory reimplementation
+            # and is NOT what production runs (0.86 s vs 0.42 s on freestyle). Plotting it
+            # made AC-4 unrunnable — the checkpoint has to eyeball the SHIPPED detector.
+            _plot(sid, stroke, vel, fs, freqs, power, pk, uw_idx, bk_idx, ship_idx, plot_dir)
 
     def _stat(name, errs, miss=0):
         if not errs:
@@ -536,7 +540,7 @@ def _fly_plot(s, out_dir):
     plt.close(fig)
 
 
-def _plot(sid, stroke, vel, fs, freqs, power, pk, uw_idx, bk_idx, cand_idx, out_dir):
+def _plot(sid, stroke, vel, fs, freqs, power, pk, uw_idx, bk_idx, ship_idx, out_dir):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -548,11 +552,12 @@ def _plot(sid, stroke, vel, fs, freqs, power, pk, uw_idx, bk_idx, cand_idx, out_
     ax[2].plot(t, pk, lw=0.8, color="tab:purple"); ax[2].set_ylabel("kick-band P"); ax[2].set_xlabel("s")
     for a in ax:
         a.axvline(uw_idx / fs, color="green", ls="--", lw=1, label="uw_start")
-        a.axvline(bk_idx / fs, color="red", lw=1.5, label="true breakout")
-        if cand_idx is not None:
-            a.axvline(cand_idx / fs, color="blue", ls=":", lw=1.5, label="candidate")
+        a.axvline(bk_idx / fs, color="red", lw=1.5, label="coach mark")
+        if ship_idx is not None:
+            a.axvline(ship_idx / fs, color="blue", ls=":", lw=1.8, label="shipped (76)")
     ax[0].legend(fontsize=7, loc="upper right")
-    fig.suptitle(f"{sid} — {stroke}")
+    state = "REFUSED" if ship_idx is None else f"err {ship_idx / fs - bk_idx / fs:+.2f}s"
+    fig.suptitle(f"{sid} — {stroke} — {state}")
     fig.tight_layout()
     fig.savefig(out_dir / f"{sid}_{stroke}.png", dpi=90)
     plt.close(fig)
