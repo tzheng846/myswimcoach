@@ -6,7 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Backend for Swimnetics — a biomechanical swim coaching tool. An AS5600 magnetic rotary encoder on a tethered wheel logs angle counts at ~270 Hz. The iOS app records via BLE, uploads a raw CSV to this FastAPI server, which runs the signal pipeline and returns metrics JSON. Results are saved to Supabase and displayed on the phone.
 
-**Full-system map (folder roles, connection matrix, known drift): see [CODEBASE-AUDIT.md](CODEBASE-AUDIT.md) (2026-06-18).**
+**Data flow — where every byte lives, who writes it, who reads it back, and why: see
+[DATA-FLOW.md](DATA-FLOW.md) (2026-08-13).** Authoritative for stores, the field dictionary
+(including inside every jsonb payload), the 24 endpoints and their callers, and the
+reads-bypass-the-API pattern.
+
+**Folder roles, build/deploy state, version-control gaps: see [CODEBASE-AUDIT.md](CODEBASE-AUDIT.md)
+(2026-06-18).** ⚠ Its §4 connection matrix is superseded by DATA-FLOW.md.
 
 ## System connections
 

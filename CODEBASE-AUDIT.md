@@ -126,6 +126,11 @@ One-glance "what works / what's deferred / what's draft." Detail + evidence in t
 
 ## 4. Connection matrix
 
+> ⚠ **SUPERSEDED FOR DATA FLOW — 2026-08-13.** [DATA-FLOW.md](DATA-FLOW.md) is now authoritative
+> for stores, fields, endpoints and callers. This section was verified 2026-06-18 and predates
+> Phases 47, 51, 52, 57, 58, 59, 60 and 61. It is kept as the record of what was true then;
+> where the two disagree, DATA-FLOW.md is current.
+
 Legend: ✅ MATCH (verified both sides) · ⚠️ GAP (works, but something is unwired or
 undocumented) · ❌ MISMATCH/DRIFT · ❔ UNVERIFIED
 

@@ -45,6 +45,8 @@
 !CLAUDE.md
 !AGENTS.md
 !CODEBASE-AUDIT.md
+!DATA-FLOW.md
+!API-AUDIT.md
 !/tests
 !/ESP_32_V5
 !/supabase
