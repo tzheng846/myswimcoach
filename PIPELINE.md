@@ -165,7 +165,7 @@ arrays, never the raw CSV).
 
 | Phase bucket | Implemented | Planned (compute=None) |
 |---|---|---|
-| **Start** (11) | — none | all 11 (peak_vel, time_to_peak, max_accel, dive_duration, glide_*, streamline_drag, break_into_kick_vel, **reaction_time**) |
+| **Start** (11) | **10** (75-04) — peak_vel, time_to_peak_vel, max_accel, dive_duration, glide_duration/distance/avg_speed/decel, break_into_kick_vel, **reaction_time** | 1 — `streamline_drag` (nonlinear drag-decay fit; tether-confounded) |
 | **Underwater** (13) | **13** — 4 window (`uw_duration/distance/avg_speed/surface_ratio`) + 2 breast pulldown + **7 kick** (`kick_count/tempo/consistency/dist_per_kick/per_kick_decay/first_kick_impulse/uw_ivv`) | — |
 | **Swim** (9) | — none | all 9 (ivv, breakout_vel, breakout_vel_loss, breakout_vs_steady, splits, sr_dps_coupling, dead_spot_timing, accel_asymmetry, breathing_dip) |
 | **Whole** (4) | — none | all 4 (phase_time_budget, phase_dist_budget, vel_envelope, jerk_smoothness) |
@@ -175,8 +175,15 @@ arrays, never the raw CSV).
 - The **7 kick metrics** ride on one detector, `metrics.detect_underwater_kicks` (prominence
   `0.15 × window-v95`, ≤4 Hz spacing). Gated to dolphin-kick strokes; breaststroke → `None` (its
   underwater is the pulldown). Display-only — dolphin kicks have **zero** annotated ground truth.
-- `reaction_time` is reserved (`start.reaction_time` + `PhaseContext.go_signal_s`), awaiting the
-  coach GO-button + phone↔encoder clock sync.
+- **Start metrics** (75-04) are reductions over the Start window `[dive_start_s, underwater_start_s]`
+  (peak/duration/max_accel) and its glide sub-slice `[velocity-peak, underwater_start_s]` (glide_*,
+  break_into_kick_vel). No new detector — they cash in the boundaries 75-02/79 already resolve. Glide
+  has **no** min-duration floor (a short glide is real). Display-only; no absolute-value ground truth.
+- `reaction_time` = first encoder **motion onset** (`detect_phases` baseline_end — the jump, not
+  `dive_start`) − `go_signal_s`, on the session clock; `None` until a GO time is set. Set/clear it via
+  **`PUT /sessions/{id}/go-signal`** (`{"go_signal_s": <seconds | null>}`, stored in `metrics_json`,
+  jsonb, no migration; recomputes on write). Real phone↔encoder clock sync + the coach GO-button UI
+  remain deferred — the coach/app supplies the time in session-clock seconds for now.
 
 ---
 

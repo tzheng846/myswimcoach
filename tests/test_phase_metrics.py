@@ -109,11 +109,11 @@ class TestComputePhases:
             assert entry["label"] == spec.label
             assert entry["tier"] == spec.tier
 
-    def test_reaction_time_entry_value_none_status_planned(self):
+    def test_reaction_time_implemented_but_none_without_go(self):
         result = compute_phases(_make_ctx())
         entry = result["start"]["reaction_time"]
-        assert entry["value"] is None
-        assert entry["status"] == "planned"
+        assert entry["value"] is None             # no GO signal supplied
+        assert entry["status"] == "implemented"   # 75-04 flipped it from planned
 
     def test_go_signal_passed_through(self):
         result = compute_phases(_make_ctx(go_signal_s=12.5))
@@ -518,6 +518,127 @@ class TestKickMetrics:
         out = compute_phases(_kick_ctx())["underwater"]
         for k in self._KEYS:
             assert out[k]["status"] == "implemented"
+
+
+# ── Phase 75-04: Start-phase metrics ──────────────────────────────────────────
+
+def _start_ctx(fs=100.0, dive=0.5, uw=3.0, **kw):
+    """Controlled Start trace: still → foot at `dive` → linear rise to a 3.0 m/s peak at the
+    window midpoint → linear glide down to 0.8 at `uw` → steady 1.0. dist is the exact integral
+    of vel, so window/glide arithmetic is checkable. Boundaries pinned via annotation (manual)
+    unless overridden, so the start window is exact."""
+    n = int(12.0 * fs)
+    t = np.arange(n) / fs
+    vel = np.full(n, 1.0)
+    vel[t < dive] = 0.0
+    peak_t = (dive + uw) / 2.0
+    rise = (t >= dive) & (t < peak_t)
+    glide = (t >= peak_t) & (t <= uw)
+    vel[rise] = 0.2 + (3.0 - 0.2) * (t[rise] - dive) / (peak_t - dive)
+    vel[glide] = 3.0 - (3.0 - 0.8) * (t[glide] - peak_t) / (uw - peak_t)
+    dist = np.concatenate([[0.0], np.cumsum(vel[:-1] / fs)])
+    defaults = dict(
+        t=t, vel=vel, dist=dist, accel=np.gradient(vel, t), fs=fs, stroke_type="freestyle",
+        annotation_phases={"dive_start_s": dive, "underwater_start_s": uw,
+                           "stroke_start_s": 8.0, "finish_s": 11.5},
+    )
+    defaults.update(kw)
+    return PhaseContext(**defaults)
+
+
+class TestStartMetrics:
+    """AC-1: the ten Start metrics are window/glide arithmetic; AC-3: degrade to None."""
+
+    def _start(self, ctx):
+        out = compute_phases(ctx)["start"]
+        return out, {k: out[k]["value"] for k in out}
+
+    def test_values_are_window_and_glide_arithmetic(self):
+        ctx = _start_ctx()
+        _out, v = self._start(ctx)
+        fs = ctx.fs
+        di, ui = int(round(0.5 * fs)), int(round(3.0 * fs))
+        pk = di + int(np.nanargmax(ctx.vel[di:ui]))
+        assert v["peak_vel"] == pytest.approx(float(ctx.vel[pk]))
+        assert v["time_to_peak_vel"] == pytest.approx(float(ctx.t[pk]) - 0.5)
+        assert v["dive_duration"] == pytest.approx(2.5)
+        assert v["glide_duration"] == pytest.approx(float(ctx.t[ui] - ctx.t[pk]))
+        assert v["glide_distance"] == pytest.approx(float(ctx.dist[ui] - ctx.dist[pk]))
+        assert v["glide_avg_speed"] == pytest.approx(
+            float(ctx.dist[ui] - ctx.dist[pk]) / float(ctx.t[ui] - ctx.t[pk]))
+        assert v["glide_decel"] == pytest.approx(
+            (float(ctx.vel[pk]) - float(ctx.vel[ui])) / float(ctx.t[ui] - ctx.t[pk]))
+        assert v["glide_decel"] >= 0                       # decelerating in streamline
+        assert v["break_into_kick_vel"] == pytest.approx(float(ctx.vel[ui]))
+        assert v["max_accel"] is not None and v["max_accel"] > 0
+
+    def test_ten_specs_report_implemented_streamline_planned(self):
+        out, _ = self._start(_start_ctx())
+        for k in ("peak_vel", "time_to_peak_vel", "max_accel", "dive_duration",
+                  "glide_duration", "glide_distance", "glide_avg_speed", "glide_decel",
+                  "break_into_kick_vel", "reaction_time"):
+            assert out[k]["status"] == "implemented", k
+        assert out["streamline_drag"]["status"] == "planned"
+        assert out["streamline_drag"]["value"] is None
+
+    def test_missing_dive_start_blanks_window_metrics(self, monkeypatch):
+        # No dive_start anywhere: annotation lacks it, no seed, detector returns None.
+        monkeypatch.setattr("phase_metrics.metrics.detect_dive_start", lambda *a, **k: None)
+        ctx = _start_ctx(annotation_phases={"underwater_start_s": 3.0})
+        _out, v = self._start(ctx)
+        for k in ("peak_vel", "time_to_peak_vel", "max_accel", "dive_duration",
+                  "glide_duration", "glide_distance", "glide_avg_speed", "glide_decel"):
+            assert v[k] is None, k
+        # break_into_kick_vel needs only underwater_start, so it still resolves
+        assert v["break_into_kick_vel"] is not None
+
+    def test_empty_accel_blanks_only_max_accel(self):
+        _out, v = self._start(_start_ctx(accel=np.array([])))
+        assert v["max_accel"] is None
+        assert v["peak_vel"] is not None
+
+    def test_window_narrower_than_floor_blanks_window_metrics(self):
+        _out, v = self._start(_start_ctx(
+            annotation_phases={"dive_start_s": 3.0, "underwater_start_s": 3.2}))
+        for k in ("peak_vel", "dive_duration", "glide_duration", "glide_avg_speed"):
+            assert v[k] is None, k
+
+    def test_boundary_past_the_trace_blanks_everything(self):
+        _out, v = self._start(_start_ctx(
+            annotation_phases={"dive_start_s": 0.5, "underwater_start_s": 999.0}))
+        for k in ("peak_vel", "dive_duration", "glide_duration", "break_into_kick_vel"):
+            assert v[k] is None, k
+
+    def test_never_raises_on_degenerate_context(self):
+        n = 5
+        ctx = PhaseContext(t=np.arange(n) / 100.0, vel=np.zeros(n), dist=np.zeros(n),
+                           accel=np.array([]), fs=100.0, stroke_type=None,
+                           annotation_phases={"dive_start_s": 0.0, "underwater_start_s": 0.02})
+        _out, v = self._start(ctx)   # must not raise
+        assert v["glide_distance"] is None
+
+
+class TestReactionTime:
+    """AC-2: reaction_time derives only from a stored GO time, on the session clock; the
+    first movement is motion onset (the jump), not dive_start."""
+
+    def _rt(self, ctx):
+        return compute_phases(ctx)["start"]["reaction_time"]["value"]
+
+    def test_none_without_go_signal(self):
+        assert self._rt(_start_ctx()) is None
+
+    def test_derived_from_go_signal(self):
+        ctx = _start_ctx()
+        onset = pm.metrics.detect_phases(ctx.t, ctx.vel)["baseline_end"]
+        ctx.go_signal_s = float(ctx.t[onset]) - 0.4
+        assert self._rt(ctx) == pytest.approx(0.4, abs=1e-6)
+
+    def test_go_after_first_movement_is_none(self):
+        ctx = _start_ctx()
+        onset = pm.metrics.detect_phases(ctx.t, ctx.vel)["baseline_end"]
+        ctx.go_signal_s = float(ctx.t[onset]) + 1.0
+        assert self._rt(ctx) is None
 
 
 # ── stroke_start / finish detector: drift guard against the real pipeline ──────

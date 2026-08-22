@@ -989,35 +989,25 @@ async def delete_annotations(
     return {"ok": True, "metrics_restored": restored}
 
 
-@app.post("/sessions/{session_id}/recompute")
-async def recompute_phases(
-    session_id: str,
-    request: Request,
-    _auth=Depends(require_auth),
-):
-    """Rebuild the session's `phases` object (Phase 75-01) from its STORED
-    velocity/distance/acceleration profiles — no raw-CSV reprocessing. This is the
-    backfill seam (CONTEXT.md D16): a metric added to phase_metrics.REGISTRY later can
-    be filled in on every existing session by re-calling this endpoint, the same pattern
-    Phase 64 used to backfill acceleration_profile. Only metrics_json.phases is touched;
-    session/cycles/initial_phase/data_quality are preserved unchanged. Idempotent —
-    calling it twice in a row yields the same shape, since it always derives fresh from
-    the stored profiles rather than accumulating state.
+# Columns _rebuild_phases needs from a session row — shared by both endpoints below.
+_PHASE_REBUILD_FIELDS = (
+    "velocity_profile, distance_profile, acceleration_profile, metrics_json, "
+    "sample_rate_hz, stroke_type"
+)
+
+
+def _rebuild_phases(sb_admin, session_id: str, row: dict) -> dict:
+    """Re-derive metrics_json.phases from a session's STORED velocity/distance/acceleration
+    profiles (no raw-CSV reprocessing) and persist it. Shared by POST /recompute and
+    PUT /go-signal. The GO time is read from the row's own metrics_json.go_signal_s (None on
+    most sessions) so reaction_time derives once a coach has set one. Only metrics_json is
+    written; the rest of the row is preserved. Idempotent — always derives fresh from the
+    stored profiles. Raises HTTPException on missing/mismatched profiles or a DB write error.
     """
-    sb_admin = _get_supabase_admin()
-    if not sb_admin:
-        raise HTTPException(status_code=503, detail="Storage not configured")
-
-    _, row = _owned_session(
-        sb_admin, request.state.user_id, session_id,
-        "velocity_profile, distance_profile, acceleration_profile, metrics_json, "
-        "sample_rate_hz, stroke_type",
-    )
-
     vel_arr = np.asarray(row.get("velocity_profile") or [], dtype=float)
     dist_arr = np.asarray(row.get("distance_profile") or [], dtype=float)
     # acceleration_profile may be absent on pre-Phase-64 sessions — an empty array is a
-    # valid PhaseContext.accel; any future compute fn that needs it handles emptiness.
+    # valid PhaseContext.accel; compute fns that need it (max_accel) handle emptiness.
     accel_arr = np.asarray(row.get("acceleration_profile") or [], dtype=float)
     if vel_arr.size < 2 or dist_arr.size != vel_arr.size:
         raise HTTPException(
@@ -1048,7 +1038,7 @@ async def recompute_phases(
     old_mj = row.get("metrics_json") or {}
     ctx = pm.PhaseContext(
         t=t_arr, vel=vel_arr, dist=dist_arr, accel=accel_arr, fs=fs,
-        stroke_type=row.get("stroke_type"), go_signal_s=None,
+        stroke_type=row.get("stroke_type"), go_signal_s=old_mj.get("go_signal_s"),
         annotation_phases=ann_phases,
         seed_phases=annot.build_seed(old_mj, fs)["phases"],
         initial_phase=old_mj.get("initial_phase"),
@@ -1061,8 +1051,80 @@ async def recompute_phases(
         ).eq("id", session_id).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    return phases
 
+
+@app.post("/sessions/{session_id}/recompute")
+async def recompute_phases(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Rebuild the session's `phases` object (Phase 75-01) from its STORED
+    velocity/distance/acceleration profiles — no raw-CSV reprocessing. This is the
+    backfill seam (CONTEXT.md D16): a metric added to phase_metrics.REGISTRY later can
+    be filled in on every existing session by re-calling this endpoint, the same pattern
+    Phase 64 used to backfill acceleration_profile. Only metrics_json.phases is touched;
+    session/cycles/initial_phase/data_quality are preserved unchanged. Idempotent —
+    calling it twice in a row yields the same shape, since it always derives fresh from
+    the stored profiles rather than accumulating state.
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    _, row = _owned_session(
+        sb_admin, request.state.user_id, session_id, _PHASE_REBUILD_FIELDS,
+    )
+    phases = _rebuild_phases(sb_admin, session_id, row)
     return {"session_id": session_id, "phases": _clean(phases), "recomputed": True}
+
+
+@app.put("/sessions/{session_id}/go-signal")
+async def set_go_signal(
+    session_id: str,
+    request: Request,
+    _auth=Depends(require_auth),
+):
+    """Set (or clear) the coach GO-signal time for a session, then recompute phase metrics so
+    reaction_time (Phase 75-04) refreshes. go_signal_s is stored in metrics_json (jsonb, no
+    migration) as **session-clock seconds** — the same axis as the velocity trace; real
+    phone↔encoder clock sync is deferred (CONTEXT D13). Body: {"go_signal_s": <number ≥ 0 | null>};
+    null clears it. reaction_time = first encoder motion onset − go_signal_s (None if unset or
+    if GO was logged after the swimmer already moved).
+    """
+    sb_admin = _get_supabase_admin()
+    if not sb_admin:
+        raise HTTPException(status_code=503, detail="Storage not configured")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="invalid JSON body")
+    if not isinstance(body, dict) or "go_signal_s" not in body:
+        raise HTTPException(status_code=422, detail="body must include go_signal_s")
+    go = body["go_signal_s"]
+    if go is not None:
+        if isinstance(go, bool) or not isinstance(go, (int, float)) \
+                or not math.isfinite(go) or go < 0:
+            raise HTTPException(
+                status_code=422, detail="go_signal_s must be a number ≥ 0 or null",
+            )
+        go = float(go)
+
+    _, row = _owned_session(
+        sb_admin, request.state.user_id, session_id, _PHASE_REBUILD_FIELDS,
+    )
+    mj = row.get("metrics_json") or {}
+    mj["go_signal_s"] = go
+    row["metrics_json"] = mj  # feed the updated GO time into the rebuild
+    phases = _rebuild_phases(sb_admin, session_id, row)
+    return {
+        "session_id": session_id,
+        "go_signal_s": go,
+        "reaction_time": phases.get("start", {}).get("reaction_time", {}).get("value"),
+        "phases": _clean(phases),
+    }
 
 
 # Max accepted video upload size. Tracks the ACTIVE Supabase global upload limit — 50 MB on the free

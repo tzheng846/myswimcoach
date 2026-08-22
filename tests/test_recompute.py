@@ -190,3 +190,94 @@ class TestRecomputeBoundaries:
         uw = resp.json()["phases"]["underwater"]
         assert uw["pulldown_peak_vel"]["value"] == pytest.approx(1.7)
         assert uw["pulldown_duration"]["value"] == pytest.approx(0.55)
+
+
+# ── Phase 75-04: PUT /sessions/{id}/go-signal ─────────────────────────────────
+# A still first second then motion, so motion onset (detect_phases baseline_end) is a real,
+# positive time — reaction_time = onset − go is then meaningfully non-zero.
+_t2 = np.arange(_N) / 100.0
+_vel2 = np.where(_t2 < 1.0, 0.0,
+                 np.maximum(0.8 + 0.4 * np.sin(2 * np.pi * 0.5 * (_t2 - 1.0)), 0.05))
+_dist2 = np.concatenate([[0.0], np.cumsum(_vel2[:-1] / 100.0)])
+_accel2 = np.gradient(_vel2, _t2)
+_GO_ONSET_S = float(_t2[pm.metrics.detect_phases(_t2, _vel2)["baseline_end"]])
+
+
+def _go_row():
+    """Fresh row each call (the endpoint mutates metrics_json in place)."""
+    return {**SESSION_ROW,
+            "velocity_profile": _vel2.tolist(),
+            "distance_profile": _dist2.tolist(),
+            "acceleration_profile": _accel2.tolist(),
+            "metrics_json": {"session": {}, "initial_phase": {}, "cycles": [],
+                             "data_quality": {}, "phases": {}}}
+
+
+class TestSetGoSignal:
+    def test_no_auth_401(self):
+        from fastapi.testclient import TestClient
+        import api
+        client = TestClient(api.app, raise_server_exceptions=True)
+        resp = client.put("/sessions/sess-1/go-signal", json={"go_signal_s": 1.0})
+        assert resp.status_code == 401
+
+    def test_foreign_session_404(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _recompute_admin(session_row=None))
+        resp = api_client.put("/sessions/other/go-signal", json={"go_signal_s": 1.0},
+                              headers=AUTH)
+        assert resp.status_code == 404
+
+    def test_set_go_time_derives_reaction_time_and_persists(self, api_client, monkeypatch):
+        import api
+        admin = _recompute_admin(session_row=_go_row())
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+
+        go = _GO_ONSET_S - 0.35
+        resp = api_client.put("/sessions/sess-1/go-signal",
+                              json={"go_signal_s": go}, headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["go_signal_s"] == pytest.approx(go)
+        assert data["reaction_time"] == pytest.approx(0.35, abs=1e-6)
+        assert data["phases"]["start"]["reaction_time"]["value"] == pytest.approx(0.35, abs=1e-6)
+
+        # persisted into metrics_json (jsonb) — NOT a new column
+        written = admin._tables["sessions"].update.call_args[0][0]["metrics_json"]
+        assert written["go_signal_s"] == pytest.approx(go)
+
+    def test_clear_go_time_blanks_reaction_time(self, api_client, monkeypatch):
+        import api
+        admin = _recompute_admin(session_row=_go_row())
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+
+        resp = api_client.put("/sessions/sess-1/go-signal",
+                              json={"go_signal_s": None}, headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["reaction_time"] is None
+        written = admin._tables["sessions"].update.call_args[0][0]["metrics_json"]
+        assert written["go_signal_s"] is None
+
+    def test_negative_go_time_422(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _recompute_admin(session_row=_go_row()))
+        resp = api_client.put("/sessions/sess-1/go-signal",
+                              json={"go_signal_s": -1.0}, headers=AUTH)
+        assert resp.status_code == 422
+
+    def test_non_numeric_go_time_422(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _recompute_admin(session_row=_go_row()))
+        resp = api_client.put("/sessions/sess-1/go-signal",
+                              json={"go_signal_s": "soon"}, headers=AUTH)
+        assert resp.status_code == 422
+
+    def test_missing_field_422(self, api_client, monkeypatch):
+        import api
+        monkeypatch.setattr(api, "_get_supabase_admin",
+                            lambda: _recompute_admin(session_row=_go_row()))
+        resp = api_client.put("/sessions/sess-1/go-signal", json={}, headers=AUTH)
+        assert resp.status_code == 422

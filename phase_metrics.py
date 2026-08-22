@@ -436,6 +436,157 @@ def _compute_uw_ivv(ctx):
     return float(np.std(seg) / mean)
 
 
+# ─── Start metrics (Phase 75-04) ──────────────────────────────────────────────
+# The Start phase runs [dive_start_s, underwater_start_s]; both boundaries resolve on
+# ctx.bounds (dive_start = Phase 79 foot-of-surge, underwater_start = 75-02 first dip).
+# Physically the window is foot → propulsive surge → PEAK → passive glide → bottom (kicking
+# begins), so every Start metric is a reduction over that window or its glide sub-slice
+# [peak, underwater_start]. Same degrade-to-None-never-raise contract as the underwater group.
+# 10 of 11 implemented here; streamline_drag (a nonlinear drag-decay fit, confounded by the
+# tether) stays planned.
+
+
+def _start_window(ctx):
+    b = _bounds(ctx)
+    return _window(ctx, b.get("dive_start_s"), b.get("underwater_start_s"))
+
+
+def _start_peak(ctx):
+    """(peak_idx, peak_vel) over the start window — the launch crest. None when the window is
+    unusable or its slice is all-NaN. nan-safe: stored profiles can carry dropout nulls."""
+    w = _start_window(ctx)
+    if w is None:
+        return None
+    i0, i1, _dur = w
+    seg = ctx.vel[i0:i1]
+    if not np.any(np.isfinite(seg)):
+        return None
+    off = int(np.nanargmax(seg))
+    return i0 + off, float(seg[off])
+
+
+def _glide_window(ctx):
+    """(peak_idx, uw_start_idx, dur) for the passive glide — velocity PEAK to underwater_start.
+    Deliberately NO _MIN_UW_DURATION_S floor (unlike _window): a short glide (the swimmer kicks
+    almost immediately) is real signal, not numerical noise. None unless underwater_start lands
+    after the peak with a positive duration."""
+    p = _start_peak(ctx)
+    if p is None:
+        return None
+    peak_idx = p[0]
+    uw_idx = _idx(ctx, _bounds(ctx).get("underwater_start_s"))
+    if uw_idx is None or uw_idx <= peak_idx:
+        return None
+    dur = float(ctx.t[uw_idx]) - float(ctx.t[peak_idx])
+    if not np.isfinite(dur) or dur <= 0:
+        return None
+    return peak_idx, uw_idx, dur
+
+
+def _compute_peak_vel(ctx):
+    p = _start_peak(ctx)
+    return None if p is None else p[1]
+
+
+def _compute_time_to_peak_vel(ctx):
+    """Time from dive_start to the velocity peak — explosiveness. None if the peak precedes
+    dive_start or the boundary is missing."""
+    p = _start_peak(ctx)
+    if p is None:
+        return None
+    ds = _bounds(ctx).get("dive_start_s")
+    if ds is None:
+        return None
+    val = float(ctx.t[p[0]]) - float(ds)
+    return val if np.isfinite(val) and val >= 0 else None
+
+
+def _compute_max_accel(ctx):
+    """Peak acceleration off block/wall over the start window. None when the window is unusable
+    OR ctx.accel is empty (pre-Phase-64 sessions carry no acceleration_profile)."""
+    if len(ctx.accel) == 0:
+        return None
+    w = _start_window(ctx)
+    if w is None:
+        return None
+    i0, i1, _dur = w
+    if len(ctx.accel) <= i0:
+        return None
+    seg = ctx.accel[i0:min(i1, len(ctx.accel))]
+    seg = seg[np.isfinite(seg)]
+    if len(seg) == 0:
+        return None
+    return float(np.max(seg))
+
+
+def _compute_dive_duration(ctx):
+    """Length of the Start phase (dive_start → underwater_start). Push-off or dive — the window
+    is the same either way; start-type classification is out of scope."""
+    w = _start_window(ctx)
+    return None if w is None else w[2]
+
+
+def _compute_glide_duration(ctx):
+    w = _glide_window(ctx)
+    return None if w is None else w[2]
+
+
+def _compute_glide_distance(ctx):
+    w = _glide_window(ctx)
+    return None if w is None else _span_distance(ctx, w[0], w[1])
+
+
+def _compute_glide_avg_speed(ctx):
+    w = _glide_window(ctx)
+    if w is None:
+        return None
+    d = _span_distance(ctx, w[0], w[1])
+    return None if d is None else d / w[2]
+
+
+def _compute_glide_decel(ctx):
+    """Speed-loss RATE across the glide: (v_peak − v_at_underwater_start) / glide_duration, m/s².
+    Positive = decelerating in streamline (the normal case). Linear — the nonlinear drag-model fit
+    is streamline_drag (deferred)."""
+    w = _glide_window(ctx)
+    if w is None:
+        return None
+    i0, i1, dur = w
+    v0, v1 = float(ctx.vel[i0]), float(ctx.vel[i1])
+    if not (np.isfinite(v0) and np.isfinite(v1)):
+        return None
+    return (v0 - v1) / dur
+
+
+def _compute_break_into_kick_vel(ctx):
+    """Velocity at the instant underwater kicking begins (= underwater_start_s, the bottom of the
+    glide). Glided too long → low; too short → high."""
+    idx = _idx(ctx, _bounds(ctx).get("underwater_start_s"))
+    if idx is None:
+        return None
+    v = float(ctx.vel[idx])
+    return v if np.isfinite(v) else None
+
+
+def _compute_reaction_time(ctx):
+    """GO signal → first encoder movement. None until a GO time is supplied (ctx.go_signal_s, set
+    via PUT /sessions/{id}/go-signal). First movement = motion onset from detect_phases (the jump
+    off the block), NOT dive_start — Phase 79 deliberately skips the jump-and-sink, which would
+    undercount reaction time. Both times are on the session clock. Negative (GO logged after the
+    swimmer moved) → None: a bad input, not a measurement."""
+    go = _num(ctx.go_signal_s)
+    if go is None:
+        return None
+    try:
+        onset = metrics.detect_phases(ctx.t, ctx.vel)["baseline_end"]
+    except Exception:
+        return None
+    if onset is None or onset < 0 or onset >= len(ctx.t):
+        return None
+    rt = float(ctx.t[onset]) - go
+    return rt if np.isfinite(rt) and rt >= 0 else None
+
+
 # ─── Registry ────────────────────────────────────────────────────────────────
 # One MetricSpec per metric in the Phase-75 CONTEXT taxonomy. ALL status="planned",
 # compute=None — see module docstring. Tiers follow the CONTEXT feasibility tags:
@@ -444,18 +595,28 @@ def _compute_uw_ivv(ctx):
 # Do not add metrics beyond the taxonomy and do not flip any status here — that is
 # Step 2's job, one metric at a time, at the user's explicit approval (D12).
 REGISTRY: tuple[MetricSpec, ...] = (
-    # Phase 1 — Start (dive | push-off)
-    MetricSpec("peak_vel", "start", "Peak velocity", "m/s", "low"),
-    MetricSpec("time_to_peak_vel", "start", "Time to peak velocity", "s", "low"),
-    MetricSpec("max_accel", "start", "Max acceleration off block/wall", "m/s^2", "low"),
-    MetricSpec("dive_duration", "start", "Dive/push-off duration", "s", "medium"),
-    MetricSpec("glide_duration", "start", "Glide duration", "s", "high"),
-    MetricSpec("glide_distance", "start", "Glide distance", "m", "high"),
-    MetricSpec("glide_avg_speed", "start", "Glide average speed", "m/s", "high"),
-    MetricSpec("glide_decel", "start", "Glide speed-loss rate", "m/s^2", "high"),
+    # Phase 1 — Start (dive | push-off) — 75-04: 10 of 11 implemented; streamline_drag deferred
+    MetricSpec("peak_vel", "start", "Peak velocity", "m/s", "low",
+               status="implemented", compute=_compute_peak_vel),
+    MetricSpec("time_to_peak_vel", "start", "Time to peak velocity", "s", "low",
+               status="implemented", compute=_compute_time_to_peak_vel),
+    MetricSpec("max_accel", "start", "Max acceleration off block/wall", "m/s^2", "low",
+               status="implemented", compute=_compute_max_accel),
+    MetricSpec("dive_duration", "start", "Dive/push-off duration", "s", "medium",
+               status="implemented", compute=_compute_dive_duration),
+    MetricSpec("glide_duration", "start", "Glide duration", "s", "high",
+               status="implemented", compute=_compute_glide_duration),
+    MetricSpec("glide_distance", "start", "Glide distance", "m", "high",
+               status="implemented", compute=_compute_glide_distance),
+    MetricSpec("glide_avg_speed", "start", "Glide average speed", "m/s", "high",
+               status="implemented", compute=_compute_glide_avg_speed),
+    MetricSpec("glide_decel", "start", "Glide speed-loss rate", "m/s^2", "high",
+               status="implemented", compute=_compute_glide_decel),
     MetricSpec("streamline_drag", "start", "Streamline drag coefficient", "", "high"),
-    MetricSpec("break_into_kick_vel", "start", "Break-into-kick velocity", "m/s", "high"),
-    MetricSpec("reaction_time", "start", "Reaction time (GO signal)", "s", "high"),
+    MetricSpec("break_into_kick_vel", "start", "Break-into-kick velocity", "m/s", "high",
+               status="implemented", compute=_compute_break_into_kick_vel),
+    MetricSpec("reaction_time", "start", "Reaction time (GO signal)", "s", "high",
+               status="implemented", compute=_compute_reaction_time),
 
     # Phase 2 — Underwater (dolphin kicks | breaststroke pulldown)
     MetricSpec("uw_duration", "underwater", "Underwater duration", "s", "low",

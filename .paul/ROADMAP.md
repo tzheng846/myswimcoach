@@ -131,7 +131,7 @@ segmentation / phase-metrics work (Phases 75–77) is the current frontier.
 | 71 | Video Surface Rework | ✅ | |
 | 73 | Group Comparison | ✅ | |
 | 74 | BLE Dump Reliability | 📋 planned (74-01 plan only) | |
-| 75 | Report Card Revamp (Race-Phase Model: Start / Underwater / Swim) | 🚧 Step-3 UI + remaining metrics owed | |
+| 75 | Report Card Revamp (Race-Phase Model: Start / Underwater / Swim) | 🚧 Start (75-04) + Underwater metrics done; Swim/Whole metrics + Step-3 UI owed | |
 | 76 | Breakout Detection (free/back — kick-band disappearance) | ✅ | 2026-08-20 |
 | 77 | Fly Breakout Detection (arm-cycle appearance) | ✅ | 2026-08-20 |
 | 78 | Multi-Swimmer Segmentation Diagnostic (pure, no fixes) | ✅ complete (4/~15 swimmers annotated — coverage gap, not "one swimmer") | 2026-08-21 |

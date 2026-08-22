@@ -18,6 +18,14 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   couldn't refresh them → new `metrics.detect_swim_boundaries` + `detected` branch in
   `resolve_boundaries` (auto `stroke_start` err **3.56 s → 0.40 s**). Suite 426 green.
   See [75-03-SUMMARY.md](phases/75-report-card-phase-model/75-03-SUMMARY.md).
+- **Phase 75-04** (Start-phase metrics batch — Step 2) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY), 2026-08-21.**
+  [75-04-SUMMARY.md](phases/75-report-card-phase-model/75-04-SUMMARY.md). 10 of 11 Start metrics implemented in
+  one pass (D12 gate **waived**); `streamline_drag` stays planned. New `PUT /sessions/{id}/go-signal` stores the
+  GO time in `metrics_json` (jsonb, no migration) → `reaction_time` derives (motion onset − GO; anchor is the
+  jump, not `dive_start`). `recompute_phases` refactored into shared `_rebuild_phases` (reads the stored GO time).
+  Suite **443 green** (+17). Committed `5d9cd67`. ⚠ **owed: user-run `python tools/backfill_phases.py --apply`**
+  to populate the 9 non-reaction Start metrics across the stored library. Key finding: registry tiers are stale —
+  75-02/79 turned the "high" glide/break-into-kick metrics cheap (PIPELINE §6 flagged).
 - **Phase 75 Step 3** (report-card UI) — not started. Nothing from Phase 75 is visible in any UI yet.
 - **Phase 78** (multi-swimmer segmentation diagnostic — owed item 2) — **✅ CLOSED + committed
   2026-08-21** (`status: complete`, AC-1/2/3 met — pure diagnostic, no detector changes). Resolved
@@ -93,9 +101,10 @@ claim that `backfill_phases.py --apply` refreshes 76/77's `stroke_start` was **w
 live detectors. **Ran 2026-08-21** — comparability break landed across the library (dive_start +
 all-four-boundary refresh in one pass). Standing pattern (57 / 59-03 / 61-01 / 65 / 79).
 
-**7. Remaining Step-2 metrics — one at a time, approval-gated** ([phase_metrics.REGISTRY](../phase_metrics.py)):
-Start (11 — incl. `reaction_time`, which needs the coach GO-button + phone↔encoder clock sync), Swim
-(9 — IVV, breakout velocity, splits, dead-spot; mostly cheap), Whole race (4).
+**7. Remaining Step-2 metrics** ([phase_metrics.REGISTRY](../phase_metrics.py)):
+Start ✅ **DONE (75-04)** — 10/11 implemented; `streamline_drag` deferred; `reaction_time` via
+`PUT /sessions/{id}/go-signal` (phone↔encoder clock sync + GO-button UI still deferred). ⚠ backfill owed.
+**Swim (9 — IVV, breakout velocity, splits, dead-spot; mostly cheap) and Whole race (4) remain — next batches.**
 
 **8. Step-3 UI.** Phase-organized web report card (Start / Underwater / Swim, breakout marked in Swim),
 then iOS. Display doctrine = within-athlete contrast / trend, **no absolute thresholds**.
@@ -125,6 +134,8 @@ breakout as "generalises."
 - **76** — free/back breakout by kick-band **disappearance**.
 - **77** — fly breakout by arm-cycle **appearance**.
 - **79** — `dive_start` redefined to foot-of-surge (`detect_dive_start`, X=2.0); MAE 0.72 s → 0.15 s.
+- **75-04** (closed 2026-08-21) — 10 Start metrics (peak/time-to-peak/max-accel, dive duration, 4 glide,
+  break-into-kick, reaction_time) + `PUT /sessions/{id}/go-signal`; `streamline_drag` deferred. Suite 443.
 
 ## Pointers
 - **How it works:** [PIPELINE.md](../PIPELINE.md) — signal, phase model, detectors, metrics registry
