@@ -79,7 +79,7 @@ finish are now detector-resolved, not seed-or-null); their None-window coverage 
 monkeypatch. Drift-guard test added.
 
 ## Owed
-- ⚠ **USER backfill** (Claude blocked from prod writes): `python tools/backfill_phases.py --apply`
-  now refreshes all four boundaries — run it to land the corrected `stroke_start`/`finish` (and the
-  75-03 kick metrics) across the stored library. Comparability break, standing pattern.
+- ✅ **Backfill applied 2026-08-21** (user-run `python tools/backfill_phases.py --apply`): all four
+  boundaries re-resolved from live detectors across the stored library — corrected `stroke_start`/
+  `finish` + the 75-03 kick metrics landed. Comparability break closed, standing pattern.
 - The two Part-A over-detection cases (`udk`, shallow-freestyle) if they ever bite a real report.

@@ -178,8 +178,6 @@ arrays, never the raw CSV).
 - `reaction_time` is reserved (`start.reaction_time` + `PhaseContext.go_signal_s`), awaiting the
   coach GO-button + phone↔encoder clock sync.
 
-> ⚠ Kick-metric commit/verify status (uncommitted, eyeball not run) is in `.paul/STATE.md`.
-
 ---
 
 ## 7. `metrics.py` session metrics (the older, per-cycle layer)

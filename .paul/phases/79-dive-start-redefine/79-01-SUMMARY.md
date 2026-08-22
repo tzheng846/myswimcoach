@@ -90,19 +90,20 @@ X sweep at prom_frac = 0.15 (production-effective: detector foot where a ≥X su
 - Boundaries unchanged besides `dive_start_s`: underwater, breakout (fly / free-back), cycle
   segmenters, finish untouched. No Hampel/gradient filter added. No DB writes.
 
-## ⚠ BACKFILL — USER-RUN, still owed
-Redefining a stored boundary is a comparability break: every session in the library still carries the
+## BACKFILL — ✅ APPLIED 2026-08-21 (user-run)
+Redefining a stored boundary is a comparability break: every session in the library carried the
 **old** `baseline_end`-derived `dive_start_s` in its stored `metrics_json.phases`. Claude is blocked
-from prod writes, so **the user runs**:
+from prod writes, so **the user ran** (done 2026-08-21, together with the 75-03 all-four-boundary
+refresh):
 
 ```bash
 python tools/backfill_phases.py --apply
 ```
 
-This re-runs `resolve_boundaries` over the stored velocity/distance/accel profiles (no raw-CSV read)
-and rewrites `dive_start_s` — and any dependent phase metrics — across all sessions. Standing pattern
-(57 / 59-03 / 61-01 / 65 / 76-77). Until it runs, new/recomputed sessions use the foot-of-surge rule
-while untouched historical rows keep the old marker (mixed library — expected, resolved by the backfill).
+This re-ran `resolve_boundaries` over the stored velocity/distance/accel profiles (no raw-CSV read)
+and rewrote `dive_start_s` — and any dependent phase metrics — across all sessions. Standing pattern
+(57 / 59-03 / 61-01 / 65 / 76-77). The library is now uniformly on the foot-of-surge rule; the mixed
+transient (new rows new-rule, historical rows old-rule) is closed.
 
 ## Reconciliation (UNIFY)
 - **Plan was pre-executed.** Tasks 1–2 code + the Task 3 tool were already in the working tree from a

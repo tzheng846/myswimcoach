@@ -30,11 +30,11 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   (PLAN→APPLY→UNIFY), 2026-08-21, X=2.0.** Code committed **`e1934ba`**; docs (PIPELINE §3 / STATE /
   ROADMAP) landed; **backfill applied 2026-08-21.**
   ([79-01-SUMMARY.md](phases/79-dive-start-redefine/79-01-SUMMARY.md)).
-- **Working tree — arc is fully committed.** 75-03 = `7035157`, Phase 79 = `e1934ba`, Phase 78 +
-  this doc reconciliation = the docs commit. Remaining dirty files are **unrelated to this arc and
-  deliberately left uncommitted:** `ESP_32_V5/ESP_32_V5.ino` (firmware), `assets/icon/`, `scratch/`,
-  `segmenter_report.json`, plus a whitespace-only formatter reflow of `DATA-FLOW.md` (accidental table
-  re-padding + one mangled addendum line — not committed; revert or re-do intentionally).
+- **Working tree — arc is fully committed + backfilled.** 75-03 = `7035157`, Phase 79 = `e1934ba`,
+  Phase 78 + doc reconciliation = `76d2a18`. Stored library **backfilled 2026-08-21** (`tools/backfill_phases.py
+  --apply`): all four boundaries re-resolved from live detectors. Remaining dirty files are **unrelated to
+  this arc and deliberately left uncommitted:** `ESP_32_V5/ESP_32_V5.ino` (firmware), `assets/icon/`,
+  `scratch/`, `segmenter_report.json`.
 
 ## Segmentation status — the 4 phase boundaries
 Mechanisms in [PIPELINE.md §3](../PIPELINE.md).
@@ -60,7 +60,7 @@ tied across X∈[1.25,2.0]). ✅ **BACKFILL APPLIED 2026-08-21** (user-run `pyth
 --apply`): stored `dive_start_s` re-resolved across the library, comparability break closed (standing
 pattern 57/59-03/61-01/65/76-77). Code committed `e1934ba`; docs landed with the Phase 78 commit.
 
-**2. ✅ RESOLVED (Phase 78, eyeball checkpoint pending). → [78-01-SUMMARY.md](phases/78-multiswimmer-seg-diagnostic/78-01-SUMMARY.md).**
+**2. ✅ RESOLVED + CLOSED (Phase 78, committed `76d2a18`; pure diagnostic, AC-1/2/3). → [78-01-SUMMARY.md](phases/78-multiswimmer-seg-diagnostic/78-01-SUMMARY.md).**
 Answer = fork **(b): validation is confined by ANNOTATION COVERAGE, not data.** "One swimmer" was
 false (4 annotated: Tony 18, Leo 14, Chantee 3, Dane 2) — but so is "clean multi-swimmer set."
 **92 sessions exist, only 37 (40%) annotated.** STATE's roster instinct was RIGHT: **Titus** (8) and
