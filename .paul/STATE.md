@@ -23,7 +23,7 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   one pass (D12 gate **waived**); `streamline_drag` stays planned. New `PUT /sessions/{id}/go-signal` stores the
   GO time in `metrics_json` (jsonb, no migration) → `reaction_time` derives (motion onset − GO; anchor is the
   jump, not `dive_start`). `recompute_phases` refactored into shared `_rebuild_phases` (reads the stored GO time).
-  Suite **443 green** (+17). Committed `5d9cd67`. ⚠ **owed: user-run `python tools/backfill_phases.py --apply`**
+  Suite **443 green** (+17). Committed `defed65`. ⚠ **owed: user-run `python tools/backfill_phases.py --apply`**
   to populate the 9 non-reaction Start metrics across the stored library. Key finding: registry tiers are stale —
   75-02/79 turned the "high" glide/break-into-kick metrics cheap (PIPELINE §6 flagged).
 - **Phase 75 Step 3** (report-card UI) — not started. Nothing from Phase 75 is visible in any UI yet.
