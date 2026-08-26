@@ -1,18 +1,22 @@
 "use client";
 
-// PhaseReportCard — assembles the race-phase report card (Phase 75-05, Step 3). Reads the stored
+// PhaseReportCard — the body of the primary session report (Phase 75-07; the phase model was built
+// beside the classic card in 75-05 and became the page itself in 75-07). Reads the stored
 // `metrics_json.phases` object (Start + Underwater implemented; Swim + Whole still planned) plus the
-// athlete's last-5 same-stroke baseline, and renders the v3 visual language: a one-line legend, a
-// deterministic valence-broken-down alert line, the phase timeline, a phase-tinted velocity line,
-// then one section per implemented phase — inset chart full-width on top, metrics in two columns,
-// each a 1D usual-range strip colored by direction-of-good. Every description + comparison lives in
-// the hover-explain overlay; nothing here asserts a verdict in prose. Ported 1:1 from
-// scratch/report-card-concept-v3.html.
+// athlete's last-5 same-stroke baseline, and renders: the deterministic valence-broken-down alert
+// line, the phase timeline, then `middleSlot` (the page's velocity / Time-to-Distance / video cards,
+// threaded in the merged order), then one section per implemented phase — inset chart on top,
+// metrics in two columns, each a 1D usual-range strip colored by direction-of-good — then Swimming
+// (per-cycle line charts) and Whole (coming soon). Every description + comparison lives in the
+// hover-explain overlay; nothing here asserts a verdict in prose. Legacy sessions with no `phases`
+// show an empty state but still render the universal middleSlot + per-cycle. The interim velocity
+// hero and the standalone legend were retired in the merge (unified trace = 75-09).
 
 import { useEffect, useMemo, useState } from "react";
 import { flagVerdict, directionOfGood } from "@/lib/phaseValence";
 import { BASELINE_LIMIT } from "@/lib/phaseBaseline";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
+import CycleCharts from "@/components/portal/CycleCharts";
 import { HoverExplainProvider } from "./HoverExplain";
 import RangeStrip from "./RangeStrip";
 import PhaseVelocity from "./PhaseVelocity";
@@ -152,7 +156,19 @@ function ComingSoon({ title, note }) {
   );
 }
 
-export default function PhaseReportCard({ phases, velocity = [], distProfile = [], fsHz = 100, baseline = {}, strokeType, sessionId }) {
+export default function PhaseReportCard({
+  phases,
+  velocity = [],
+  distProfile = [],
+  fsHz = 100,
+  baseline = {},
+  strokeType,
+  sessionId,
+  middleSlot = null, // page-owned velocity / Time-to-Distance / video cards, threaded after the timeline
+  cycles, // per-cycle rows for the Swimming section
+  session, // metrics_json.session — CycleCharts means/CVs
+  unit = "metric",
+}) {
   const storageKey = `phaseDismiss:${sessionId}`;
   const [dismissed, setDismissed] = useState(() => new Set());
 
@@ -252,45 +268,28 @@ export default function PhaseReportCard({ phases, velocity = [], distProfile = [
 
   return (
     <HoverExplainProvider>
-      {/* legend — teaches the whole visual language once, so the rows need no words */}
-      <div className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-navy/50 bg-surface px-3.5 py-2.5 text-[11.5px] text-muted">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-1.5 w-5 rounded bg-usual" /> his usual range
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-subtle ring-2 ring-usual" /> this swim
-        </span>
-        <span className="h-3.5 w-px bg-navy/60" />
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-good" /> better
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-bad" /> worse
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-neutral" /> changed — unclear if good/bad
-        </span>
-        <span className="h-3.5 w-px bg-navy/60" />
-        <span>
-          hover any <span className="border-b border-dotted border-muted">dotted</span> label for the numbers
-        </span>
-      </div>
+      {phases ? (
+        <>
+          <AlertSummary flags={activeFlags} dismissedCount={dismissed.size} onRestore={restoreAll} baselineNote={baselineNote} />
+          <PhaseTimeline boundaries={boundaries} distProfile={distProfile} velocity={velocity} fsHz={fsHz} flagsByPhase={flagsByPhase} />
+        </>
+      ) : (
+        <section className="mb-5 rounded-2xl border border-navy/50 bg-surface p-6 text-center shadow-sm">
+          <p className="font-semibold text-ink">No race-phase breakdown yet</p>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            This session predates the phase model — re-run its analysis to generate the phase report.
+            The velocity, splits, per-cycle, and video below still apply.
+          </p>
+        </section>
+      )}
 
-      <AlertSummary flags={activeFlags} dismissedCount={dismissed.size} onRestore={restoreAll} baselineNote={baselineNote} />
-
-      <PhaseTimeline boundaries={boundaries} distProfile={distProfile} velocity={velocity} fsHz={fsHz} flagsByPhase={flagsByPhase} />
-
-      {/* Velocity timeline — the hero, phase-tinted */}
-      <section className="mb-5 rounded-2xl border border-navy/50 bg-surface p-5 shadow-sm">
-        <h2 className="mb-3.5 font-semibold text-ink">
-          Velocity timeline
-          <span className="ml-2 text-[11.5px] font-normal text-muted">speed across the whole swim</span>
-        </h2>
-        <PhaseVelocity variant="hero" velocity={velocity} fsHz={fsHz} boundaries={boundaries} />
-      </section>
+      {/* Universal, non-phase cards (velocity / Time-to-Distance / video) — page-owned, threaded
+          between the timeline and the phase strip sections in the merged order. */}
+      {middleSlot}
 
       {/* one section per implemented phase: inset chart on top, then metrics in two columns */}
-      {model.map((s) => {
+      {phases &&
+        model.map((s) => {
         const i0 = idxOf(boundaries?.[s.win[0]]);
         const i1 = idxOf(boundaries?.[s.win[1]]);
         const showInset = i0 != null && i1 != null && i1 > i0;
@@ -325,8 +324,23 @@ export default function PhaseReportCard({ phases, velocity = [], distProfile = [
         );
       })}
 
-      <ComingSoon title="Swimming" note="Stroke-phase metrics — breakout speed, cruise, intracyclic variation, splits — are coming soon." />
-      <ComingSoon title="Whole race" note="Cross-phase metrics — phase time/distance budget, velocity envelope, whole-swim smoothness — are coming soon." />
+      {/* Swimming — per-cycle line charts are the phase's content today; the registry swim-metric
+          strips (breakout speed, cruise, IVV, splits) land above these next (Phase 75-06). */}
+      <section className="mb-5 rounded-2xl border border-navy/50 bg-surface p-5 shadow-sm">
+        <h2 className="mb-3.5 font-semibold text-ink">
+          Swimming
+          <span className="ml-2 text-[11.5px] font-normal text-muted">stroke-by-stroke</span>
+        </h2>
+        {cycles?.length ? (
+          <CycleCharts cycles={cycles} session={session} unit={unit} />
+        ) : (
+          <p className="text-sm leading-relaxed text-muted">No stroke cycles detected for this swim.</p>
+        )}
+      </section>
+
+      {phases && (
+        <ComingSoon title="Whole race" note="Cross-phase metrics — phase time/distance budget, velocity envelope, whole-swim smoothness — are coming soon." />
+      )}
     </HoverExplainProvider>
   );
 }

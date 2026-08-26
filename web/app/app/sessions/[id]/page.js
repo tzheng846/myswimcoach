@@ -2,17 +2,17 @@
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api";
-import MetricGrid, { SessionSummaryCard } from "@/components/portal/MetricGrid";
 import VelocityChart from "@/components/portal/VelocityChart";
 import AccelerationChart from "@/components/portal/AccelerationChart";
 import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import useTracePrefs from "@/lib/useTracePrefs";
 import TimeToX from "@/components/portal/TimeToX";
-import CycleCharts from "@/components/portal/CycleCharts";
 import CoachChat from "@/components/portal/CoachChat";
-import PillarCards from "@/components/portal/PillarCards";
+import PhaseReportCard from "@/components/portal/phases/PhaseReportCard";
+import { fetchPhaseBaseline } from "@/lib/phaseBaseline";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
 import { dropoutWarning } from "@/lib/dropoutWarning";
 import { displayName } from "@/lib/sessionName";
@@ -41,23 +41,31 @@ function SiblingLink({ id, label, title }) {
   );
 }
 
+// Phase 75-07: the session report card is now the race-phase view. The classic analytics body
+// (SessionSummaryCard / PillarCards / MetricGrid + the Simple/Advanced toggle) was removed; the
+// phase surface (PhaseReportCard) is the body, with the still-essential cards — velocity,
+// Time-to-Distance, video — threaded through it via `middleSlot`. The pillars relocate to a future
+// roster surface; their component files remain, just no longer rendered here.
 export default function ReportCardPage({ params }) {
   const { id: sessionId } = use(params);
+  const router = useRouter();
 
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [athlete, setAthlete] = useState(null);
   // The athlete's other sessions, newest first — drives prev/next (D12).
   const [siblings, setSiblings] = useState([]);
+  // The athlete's last-5 same-stroke swims, reduced to per-metric usual-range bands (Phase 75-05).
+  const [baseline, setBaseline] = useState({});
 
   const [sessionName, setSessionName] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [isStarred, setIsStarred] = useState(false);
   const [notes, setNotes] = useState("");
   const [unit, setUnit] = useState("metric");
-  const [view, setView] = useState("simple");
   const [markerTimeS, setMarkerTimeS] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
   // Phase 71: the inline watch player + the Add/Manage cues are sourced from the unified camera
   // list (GET /videos: phone primary from the legacy columns + externals from session_videos). This
   // is what makes a web-uploaded external — previously invisible here — play inline like a phone one.
@@ -68,17 +76,15 @@ export default function ReportCardPage({ params }) {
   // persisted. Owned here so the video overlay's toggles and the static charts below stay in sync.
   const tracePrefs = useTracePrefs();
 
-  // 61-03: these used to reset on every prev/next hop. The route remounts per session id, so
-  // component state cannot survive it — the coach had to re-pick Advanced and yards on each
-  // session while comparing a series, which is exactly when they are comparing them.
-  // Persisted rather than URL-encoded because they are a standing preference, not a property of
-  // the session being viewed. Read in an effect, not a lazy initializer: localStorage does not
-  // exist during SSR and reading it during render would desync hydration.
+  // 61-03: unit used to reset on every prev/next hop. The route remounts per session id, so
+  // component state cannot survive it — the coach had to re-pick yards on each session while
+  // comparing a series, which is exactly when they are comparing them. Persisted rather than
+  // URL-encoded because it is a standing preference, not a property of the session being viewed.
+  // Read in an effect, not a lazy initializer: localStorage does not exist during SSR and reading
+  // it during render would desync hydration.
   useEffect(() => {
     try {
-      const v = window.localStorage.getItem("swimnetics.view");
       const u = window.localStorage.getItem("swimnetics.unit");
-      if (v === "simple" || v === "advanced") setView(v);
       if (u === "metric" || u === "imperial") setUnit(u);
     } catch {
       // Private mode / storage disabled — defaults are fine.
@@ -92,14 +98,6 @@ export default function ReportCardPage({ params }) {
       // Non-fatal: the toggle still works for this page view.
     }
   }, []);
-
-  const chooseView = useCallback(
-    (v) => {
-      setView(v);
-      persist("swimnetics.view", v);
-    },
-    [persist]
-  );
 
   const chooseUnit = useCallback(
     (u) => {
@@ -138,11 +136,12 @@ export default function ReportCardPage({ params }) {
         setNotes(row.notes ?? "");
       }
       if (row.athlete_id) {
-        // Athlete + sibling session list, fetched together so they cannot disagree about which
-        // athlete this session belongs to. Both live inside `load()` deliberately: it already
-        // holds the `reqRef` sequence guard, and a separate effect would reintroduce exactly the
-        // out-of-order race that guard exists to prevent (61-02 D12).
-        const [{ data: ath }, { data: sibs }] = await Promise.all([
+        // Athlete + sibling session list + phase baseline, fetched together so they cannot disagree
+        // about which athlete this session belongs to. All live inside `load()` deliberately: it
+        // already holds the `reqRef` sequence guard, and a separate effect would reintroduce exactly
+        // the out-of-order race that guard exists to prevent (61-02 D12). The baseline is the
+        // athlete's prior same-stroke swims, so it hangs off this same row (mirrors phases/page.js).
+        const [{ data: ath }, { data: sibs }, base] = await Promise.all([
           supabase
             .from("athletes")
             .select("name, head_waist_m")
@@ -153,12 +152,19 @@ export default function ReportCardPage({ params }) {
             .select("id, created_at, name")
             .eq("athlete_id", row.athlete_id)
             .order("created_at", { ascending: false }),
+          fetchPhaseBaseline({
+            athleteId: row.athlete_id,
+            strokeType: row.stroke_type,
+            beforeCreatedAt: row.created_at,
+          }),
         ]);
         if (seq !== reqRef.current) return;
         setAthlete(ath);
         setSiblings(sibs ?? []);
+        setBaseline(base ?? {});
       } else {
         setSiblings([]);
+        setBaseline({});
       }
     },
     [sessionId]
@@ -202,6 +208,17 @@ export default function ReportCardPage({ params }) {
     };
   }, [load]);
 
+  // Close the ⋯ overflow menu on any click outside its group.
+  const menuRef = useRef(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [menuOpen]);
+
   const patchSession = useCallback(
     async (updates) => {
       try {
@@ -215,6 +232,21 @@ export default function ReportCardPage({ params }) {
     },
     [sessionId]
   );
+
+  // Delete lives in the header ⋯ overflow (Phase 75-07) — the list page's handleDelete, plus a
+  // redirect back to the athlete's session list on success.
+  const handleDelete = useCallback(async () => {
+    const label = sessionName ? ` "${sessionName}"` : "";
+    if (!window.confirm(`Delete this session${label}? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/sessions/${sessionId}`, { method: "DELETE" });
+      router.push(
+        data?.athlete_id ? `/app/sessions?athlete=${data.athlete_id}` : "/app/sessions"
+      );
+    } catch {
+      // Deletion failed server-side; stay on the page rather than pretend it worked.
+    }
+  }, [sessionId, sessionName, data, router]);
 
   const onMarkerChange = useCallback((tS, lbl) => {
     setMarkerTimeS(tS);
@@ -245,29 +277,17 @@ export default function ReportCardPage({ params }) {
     };
   }, [siblings, sessionId]);
 
-  if (error)
-    return (
-      <p className="mt-10 text-center text-danger">{error}</p>
-    );
+  if (error) return <p className="mt-10 text-center text-danger">{error}</p>;
   if (!data) return <p className="text-muted">Loading…</p>;
 
   const metrics = data.metrics_json ?? {};
+  const phases = metrics.phases ?? null;
   // Phase 71: one angle shows inline (phone if present, else the first uploaded external).
   const primaryCam =
     (videos ?? []).find((v) => v.role === "phone") ?? (videos ?? [])[0] ?? null;
   const strokeType = data.stroke_type;
-  // Phase 58-03: every stroke gets full analytics on the web. This was
-  //     const isAnalyticsReady = !strokeType || strokeType === "breaststroke";
-  // — the web twin of the mobile gate 54-01 removed. Phase 54's audit recorded that the web had
-  // no stroke gate, so this copy was missed and the web stayed breaststroke-only for two days
-  // after the iOS unlock shipped. Restore by putting that line back; every usage site and the
-  // "coming soon" branch below are deliberately kept so it stays a one-line change.
-  //
-  // ⚠ The bands shown for non-breaststroke are BREASTSTROKE-DERIVED and unvalidated (ratings.py
-  // falls back to that table for every stroke). `provisional` is False for all four strokes, so
-  // PillarCards' "Provisional" banner does NOT fire — nothing on screen says the bands are
-  // borrowed. Whether that caveat should exist is Phase 53's question, not this plan's.
-  const isAnalyticsReady = true;
+  const strokeLabel = STROKE_LABELS[strokeType] ?? strokeType;
+  const durationS = time.length ? time[time.length - 1] : null;
   const unitFactor = unit === "imperial" ? 1.09361 : 1;
   const velUnit = unit === "imperial" ? "yd/s" : "m/s";
   const accelUnit = unit === "imperial" ? "yd/s²" : "m/s²";
@@ -276,6 +296,138 @@ export default function ReportCardPage({ params }) {
     day: "numeric",
     year: "numeric",
   });
+
+  // Velocity / Time-to-Distance / video — the still-essential non-phase cards, threaded between the
+  // phase timeline and the phase strip sections (mockup order). Kept as the interim classic charts
+  // (VelocityChart + AccelerationChart); the unified phase-tinted interactive trace is Phase 75-09.
+  const middleSlot = (
+    <>
+      {/* Velocity + acceleration (Phase 64-03) + unit toggle. Which traces show is controlled from
+          the video panel's toggles below (page-level, so the two surfaces stay in sync). */}
+      <section className="mb-5 rounded-2xl border border-navy/50 bg-surface p-5 shadow-sm">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted">
+            {tracePrefs.showVelocity ? "Velocity" : "Acceleration"}
+          </p>
+          <div className="flex gap-1.5">
+            {["metric", "imperial"].map((u) => (
+              <button
+                key={u}
+                onClick={() => chooseUnit(u)}
+                className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${
+                  unit === u
+                    ? "border-accent bg-accent text-white"
+                    : "border-surface-3 bg-surface-2 text-subtle"
+                }`}
+              >
+                {u === "metric" ? "m" : "yd"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {tracePrefs.showVelocity && (
+          <VelocityChart
+            time={time}
+            velocity={vel}
+            unitFactor={unitFactor}
+            unitLabel={velUnit}
+            markerTimeS={markerTimeS}
+            markerLabel={markerLabel}
+            cycles={metrics.cycles}
+            fsHz={fsHz}
+          />
+        )}
+        {tracePrefs.showAcceleration && (
+          <div className={tracePrefs.showVelocity ? "mt-3" : ""}>
+            <AccelerationChart
+              time={time}
+              acceleration={accel}
+              unitFactor={unitFactor}
+              unitLabel={accelUnit}
+              markerTimeS={markerTimeS}
+              markerLabel={markerLabel}
+              cycles={metrics.cycles}
+              fsHz={fsHz}
+              color={tracePrefs.accelColor}
+            />
+          </div>
+        )}
+      </section>
+
+      {/* Time to Distance */}
+      <section className="mb-5 rounded-2xl border border-navy/50 bg-surface p-5 shadow-sm">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted">
+          Time to Distance
+        </p>
+        <TimeToX
+          timeArr={time}
+          distArr={dist}
+          baselineEndS={metrics.session?.baseline_end_s}
+          headWaistM={athlete?.head_waist_m ?? 0}
+          onMarkerChange={onMarkerChange}
+          unit={unit}
+        />
+        {/* 61-02 D7: every split here is measured FROM this instant, and until now nothing said
+            where it came from. The chain is dive_start_s → manual.baseline_end_idx →
+            session.baseline_end_s (annotations.py → metrics.py), so an annotated session's start
+            IS the coach's own mark. When it is not, the caveat doubles as the fix. */}
+        {metrics.session?.baseline_end_s != null && (
+          <p className="mt-3 border-t border-navy/30 pt-2.5 text-center text-[11px] leading-relaxed text-muted">
+            Start: {metrics.session.baseline_end_s.toFixed(2)} s —{" "}
+            {metrics.data_quality?.recomputed_from_annotation ? (
+              "from your annotation"
+            ) : (
+              <>
+                auto-detected.{" "}
+                <Link
+                  href={`/app/annotate/${sessionId}`}
+                  className="font-semibold text-primary"
+                >
+                  Set it yourself ›
+                </Link>
+              </>
+            )}
+          </p>
+        )}
+      </section>
+
+      {/* Video overlay (Phase 71) — sourced from the unified camera list, watch-only (video + trace,
+          no attach card, no manual sync). "Add video" is a modal. VideoTracePanel is reused as-is. */}
+      <section className="mb-5 rounded-2xl border border-navy/50 bg-surface p-5 shadow-sm">
+        <div className="mb-3.5 flex items-center justify-between">
+          <h2 className="font-semibold text-ink">Videos</h2>
+          <button
+            onClick={() => setShowAddVideo(true)}
+            className="text-xs font-semibold text-primary"
+          >
+            + Add video
+          </button>
+        </div>
+        {primaryCam ? (
+          <VideoTracePanel
+            readOnly
+            sessionId={sessionId}
+            velocity={vel}
+            acceleration={accel}
+            fsHz={fsHz}
+            cycles={metrics.cycles ?? []}
+            sessionDurationS={durationS}
+            video={primaryCam}
+            showVelocity={tracePrefs.showVelocity}
+            showAcceleration={tracePrefs.showAcceleration}
+            velColor={tracePrefs.velColor}
+            accelColor={tracePrefs.accelColor}
+            onToggleVelocity={tracePrefs.setShowVelocity}
+            onToggleAcceleration={tracePrefs.setShowAcceleration}
+            onVelColor={tracePrefs.setVelColor}
+            onAccelColor={tracePrefs.setAccelColor}
+          />
+        ) : (
+          <p className="text-sm text-muted">No video attached yet.</p>
+        )}
+      </section>
+    </>
+  );
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -301,17 +453,46 @@ export default function ReportCardPage({ params }) {
           </div>
           <SiblingLink id={newerId} label="›" title="Newer session" />
         </div>
-        <button
-          onClick={() => {
-            const next = !isStarred;
-            setIsStarred(next);
-            patchSession({ is_starred: next });
-          }}
-          className={`px-2 text-2xl ${isStarred ? "text-warning" : "text-muted"}`}
-          title={isStarred ? "Unstar" : "Star"}
-        >
-          {isStarred ? "★" : "☆"}
-        </button>
+        {/* star + ⋯ overflow (Delete) */}
+        <div ref={menuRef} className="relative flex items-center gap-0.5">
+          <button
+            onClick={() => {
+              const next = !isStarred;
+              setIsStarred(next);
+              patchSession({ is_starred: next });
+            }}
+            className={`px-2 text-2xl ${isStarred ? "text-warning" : "text-muted"}`}
+            title={isStarred ? "Unstar" : "Star"}
+          >
+            {isStarred ? "★" : "☆"}
+          </button>
+          <button
+            onClick={() => setMenuOpen((o) => !o)}
+            aria-haspopup="true"
+            aria-expanded={menuOpen}
+            title="More"
+            className="rounded-md px-2 py-1 text-xl leading-none text-muted hover:bg-surface-2 hover:text-ink"
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-9 z-[90] min-w-[186px] rounded-xl border border-navy/50 bg-surface p-1.5 shadow-2xl"
+            >
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  handleDelete();
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-danger hover:bg-surface-2"
+              >
+                🗑 Delete session
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Editable session name */}
@@ -348,242 +529,67 @@ export default function ReportCardPage({ params }) {
         </button>
       )}
 
-      {/* Simple / Advanced view toggle + annotation entry */}
-      <div className="mt-3 flex items-center justify-between">
-        {isAnalyticsReady ? (
-          <div className="inline-flex rounded-lg border border-surface-3 bg-surface-2 p-0.5">
-            {["simple", "advanced"].map((v) => (
-              <button
-                key={v}
-                onClick={() => chooseView(v)}
-                className={`rounded-md px-3.5 py-1.5 text-xs font-semibold capitalize transition-colors ${
-                  view === v ? "bg-accent text-white" : "text-subtle hover:text-ink"
-                }`}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <span />
-        )}
-        <div className="flex items-center gap-4">
-          <Link
-            href={`/app/sessions/${sessionId}/phases`}
-            className="text-xs font-semibold text-primary"
-          >
-            Race phases ›
-          </Link>
-          <Link
-            href={`/app/annotate/${sessionId}`}
-            className="text-xs font-semibold text-primary"
-          >
-            Annotate ›
-          </Link>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
-        <SessionSummaryCard session={metrics.session} unit={unit} />
-
-        {/* Provenance. api.py:899 has always set this flag on a successful recompute and
-            nothing has ever rendered it — so a coach could not tell "my annotation had no
-            effect" from "it worked and the numbers barely moved". */}
-        {metrics.data_quality?.recomputed_from_annotation && (
-          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs leading-relaxed text-subtle">
-            <span aria-hidden="true">✎</span>
-            These metrics were recomputed from a hand annotation — not auto-segmentation.
-            <Link
-              href={`/app/annotate/${sessionId}`}
-              className="font-semibold text-primary"
-            >
-              Review marks ›
-            </Link>
-          </p>
-        )}
-
-        {isAnalyticsReady ? (
-          view === "advanced" ? (
-            <MetricGrid metrics={metrics} unit={unit} />
-          ) : (
-            <PillarCards sessionId={sessionId} />
-          )
-        ) : (
-          <div className="rounded-xl border border-navy/50 bg-surface p-6 text-center">
-            <p className="font-bold">
-              {STROKE_LABELS[strokeType] ?? strokeType} Analytics
-            </p>
-            <p className="mt-2 text-sm leading-relaxed text-muted">
-              Detailed stroke metrics coming soon. Velocity data is still
-              recorded and shown below.
-            </p>
-          </div>
-        )}
-
-        {/* Phase 71: the video is sourced from the unified camera list (GET /videos), so a
-            web-uploaded external plays inline here just like a phone video. Watch-only (video +
-            trace, no attach card, no manual sync). "Add video" is a modal; multi-angle alignment
-            lives on the annotate page (via the Manage link → dedicated Videos page until 71-02). */}
-        {primaryCam ? (
-          <div>
-            <VideoTracePanel
-              readOnly
-              sessionId={sessionId}
-              velocity={vel}
-              acceleration={accel}
-              fsHz={fsHz}
-              cycles={metrics.cycles ?? []}
-              sessionDurationS={time.length ? time[time.length - 1] : null}
-              video={primaryCam}
-              showVelocity={tracePrefs.showVelocity}
-              showAcceleration={tracePrefs.showAcceleration}
-              velColor={tracePrefs.velColor}
-              accelColor={tracePrefs.accelColor}
-              onToggleVelocity={tracePrefs.setShowVelocity}
-              onToggleAcceleration={tracePrefs.setShowAcceleration}
-              onVelColor={tracePrefs.setVelColor}
-              onAccelColor={tracePrefs.setAccelColor}
-            />
-            <div className="mt-1 flex items-center justify-end">
-              <button
-                onClick={() => setShowAddVideo(true)}
-                className="text-xs font-semibold text-primary"
-              >
-                + Add video
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setShowAddVideo(true)}
-            className="flex w-full items-center justify-between rounded-xl border border-navy/50 bg-surface px-4 py-3 text-left hover:border-accent"
-          >
-            <span className="text-sm font-semibold text-ink">Videos</span>
-            <span className="text-xs text-muted">+ Add video</span>
-          </button>
-        )}
-
-        {/* Velocity + acceleration charts (Phase 64-03) + unit toggle. Which traces show is
-            controlled from the video panel's toggles above (page-level, so the two surfaces stay
-            in sync). Acceleration stacks directly beneath velocity on the same time basis. */}
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted">
-              {tracePrefs.showVelocity ? "Velocity" : "Acceleration"}
-            </p>
-            <div className="flex gap-1.5">
-              {["metric", "imperial"].map((u) => (
-                <button
-                  key={u}
-                  onClick={() => chooseUnit(u)}
-                  className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${
-                    unit === u
-                      ? "border-accent bg-accent text-white"
-                      : "border-surface-3 bg-surface-2 text-subtle"
-                  }`}
-                >
-                  {u === "metric" ? "m" : "yd"}
-                </button>
-              ))}
-            </div>
-          </div>
-          {tracePrefs.showVelocity && (
-            <VelocityChart
-              time={time}
-              velocity={vel}
-              unitFactor={unitFactor}
-              unitLabel={velUnit}
-              markerTimeS={markerTimeS}
-              markerLabel={markerLabel}
-              cycles={metrics.cycles}
-              fsHz={fsHz}
-            />
-          )}
-          {tracePrefs.showAcceleration && (
-            <div className={tracePrefs.showVelocity ? "mt-3" : ""}>
-              <AccelerationChart
-                time={time}
-                acceleration={accel}
-                unitFactor={unitFactor}
-                unitLabel={accelUnit}
-                markerTimeS={markerTimeS}
-                markerLabel={markerLabel}
-                cycles={metrics.cycles}
-                fsHz={fsHz}
-                color={tracePrefs.accelColor}
-              />
-            </div>
-          )}
-        </div>
-
-        {isAnalyticsReady && (
-          <div className="rounded-xl border border-navy/50 bg-surface p-4">
-            <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted">
-              Time to Distance
-            </p>
-            <TimeToX
-              timeArr={time}
-              distArr={dist}
-              baselineEndS={metrics.session?.baseline_end_s}
-              headWaistM={athlete?.head_waist_m ?? 0}
-              onMarkerChange={onMarkerChange}
-              unit={unit}
-            />
-            {/* 61-02 D7: every split here is measured FROM this instant, and until now nothing
-                said where it came from. The chain is dive_start_s → manual.baseline_end_idx →
-                session.baseline_end_s (annotations.py → metrics.py), so an annotated session's
-                start IS the coach's own mark. When it is not, the caveat doubles as the fix. */}
-            {metrics.session?.baseline_end_s != null && (
-              <p className="mt-3 border-t border-navy/30 pt-2.5 text-center text-[11px] leading-relaxed text-muted">
-                Start: {metrics.session.baseline_end_s.toFixed(2)} s —{" "}
-                {metrics.data_quality?.recomputed_from_annotation ? (
-                  "from your annotation"
-                ) : (
-                  <>
-                    auto-detected.{" "}
-                    <Link
-                      href={`/app/annotate/${sessionId}`}
-                      className="font-semibold text-primary"
-                    >
-                      Set it yourself ›
-                    </Link>
-                  </>
-                )}
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* The Data Quality card was retired here (61-02 D4). Dropout is the one stat on it that
-            never touched the segmenter — see lib/dropoutWarning.js for why the other three went,
-            and why this must never be gated on `warnings.length`. */}
-        {dropoutWarning(metrics.data_quality) && (
-          <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning-2">
-            ⚠ {dropoutWarning(metrics.data_quality)}
-          </p>
-        )}
-
-        {/* Advanced: per-cycle breakdown (Streamlit-demo depth) */}
-        {isAnalyticsReady && view === "advanced" && (
+      {/* Identity meta — stroke · duration (no standalone distance, no "vs last N") + Annotate */}
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
+        {strokeLabel && <span className="font-medium text-ink">{strokeLabel}</span>}
+        {durationS != null && (
           <>
-            <p className="pt-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
-              Per-Cycle Breakdown
-            </p>
-            <CycleCharts
-              cycles={metrics.cycles}
-              session={metrics.session}
-              unit={unit}
-            />
+            <span className="h-1 w-1 rounded-full bg-muted/60" aria-hidden="true" />
+            <span>{durationS.toFixed(1)}s</span>
           </>
         )}
+        <Link
+          href={`/app/annotate/${sessionId}`}
+          className="ml-auto text-xs font-semibold text-primary"
+        >
+          Annotate ›
+        </Link>
+      </div>
 
-        {/* AI Coach Chat — grounded in this session's metrics (backend rebuilds the prompt) */}
-        {isAnalyticsReady && (
-          <CoachChat sessionId={sessionId} simple={view === "simple"} />
-        )}
+      {/* Provenance. api.py:899 sets this on a successful recompute; without it a coach could not
+          tell "my annotation had no effect" from "it worked and the numbers barely moved". */}
+      {metrics.data_quality?.recomputed_from_annotation && (
+        <p className="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs leading-relaxed text-subtle">
+          <span aria-hidden="true">✎</span>
+          These metrics were recomputed from a hand annotation — not auto-segmentation.
+          <Link
+            href={`/app/annotate/${sessionId}`}
+            className="font-semibold text-primary"
+          >
+            Review marks ›
+          </Link>
+        </p>
+      )}
+
+      {/* The Data Quality card was retired here (61-02 D4). Dropout is the one stat on it that
+          never touched the segmenter — see lib/dropoutWarning.js for why the other three went,
+          and why this must never be gated on `warnings.length`. */}
+      {dropoutWarning(metrics.data_quality) && (
+        <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning-2">
+          ⚠ {dropoutWarning(metrics.data_quality)}
+        </p>
+      )}
+
+      {/* The phase surface is the report body. It renders the alert + timeline (or an empty state
+          for legacy sessions), then middleSlot (velocity / Time-to-Distance / video), then the
+          phase strip sections + Swimming per-cycle. */}
+      <div className="mt-5">
+        <PhaseReportCard
+          phases={phases}
+          velocity={vel}
+          distProfile={dist}
+          fsHz={fsHz}
+          baseline={baseline}
+          strokeType={strokeType}
+          sessionId={sessionId}
+          cycles={metrics.cycles}
+          session={metrics.session}
+          unit={unit}
+          middleSlot={middleSlot}
+        />
 
         {/* Notes */}
-        <div className="rounded-xl border border-navy/50 bg-surface p-4">
+        <section className="mb-5 rounded-2xl border border-navy/50 bg-surface p-5 shadow-sm">
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted">
             Notes
           </p>
@@ -595,8 +601,12 @@ export default function ReportCardPage({ params }) {
             rows={4}
             className="w-full resize-y bg-transparent text-sm leading-relaxed text-ink placeholder-muted outline-none"
           />
-        </div>
+        </section>
       </div>
+
+      {/* AI Coach Chat — floating blob, grounded in this session's metrics (backend rebuilds the
+          prompt). Mounted once; fixed-position, so its place in the tree does not matter. */}
+      <CoachChat sessionId={sessionId} />
 
       {showAddVideo && (
         <AddVideoModal
