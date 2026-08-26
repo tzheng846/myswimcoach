@@ -52,7 +52,7 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   recompute-gap → **81-02**). `autonomous:false` (human-verify). Enables STATE item 9 (annotate the
   backlog). Next: review + approve → `/paul:apply .paul/phases/81-annotation-video-marking/81-01-PLAN.md`.
 - **Working tree — segmentation arc + 75-05 UI committed.** 75-03 = `7035157`, Phase 79 = `e1934ba`,
-  Phase 78 + doc reconciliation = `76d2a18`, **75-05 report-card UI = `PENDING-HASH`** (frontend only;
+  Phase 78 + doc reconciliation = `76d2a18`, **75-05 report-card UI = `9dd5f7a`** (frontend only;
   `.claude/launch.json` is gitignored, stays local). Stored library **backfilled 2026-08-21**
   (`tools/backfill_phases.py --apply`): all four boundaries re-resolved from live detectors. Dirty files
   left uncommitted belong to **other streams:** `.paul/ROADMAP.md` + `web/app/app/annotate/[id]/page.js`
@@ -148,7 +148,7 @@ line, phase timeline, phase-tinted velocity line, and a page-dimming hover-expla
 "coming soon". New pure libs `web/lib/phaseBaseline.js` + `web/lib/phaseValence.js`; components under
 `web/components/portal/phases/`. Build clean; engine scratch checks 18/18. Deferred (documented in
 SUMMARY): server-side dismiss persistence (client localStorage now), LLM headline, imperial/iOS, richer
-signal insets. **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-25, committed `PENDING-HASH`.** Next
+signal insets. **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-25, committed `9dd5f7a`.** Next
 Phase-75 work = Swim/Whole metric batches (item 7) + their strips, as new plans 75-06+.
 
 **9. ⭐ Annotate the backlog — 20 real-swimmer sessions sit unscored (Phase 78, highest leverage).**
