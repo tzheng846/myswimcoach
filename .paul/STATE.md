@@ -26,7 +26,12 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   Suite **443 green** (+17). Committed `defed65`. ⚠ **owed: user-run `python tools/backfill_phases.py --apply`**
   to populate the 9 non-reaction Start metrics across the stored library. Key finding: registry tiers are stale —
   75-02/79 turned the "high" glide/break-into-kick metrics cheap (PIPELINE §6 flagged).
-- **Phase 75 Step 3** (report-card UI) — not started. Nothing from Phase 75 is visible in any UI yet.
+- **Phase 75 Step 3** (report-card UI, Plan 75-05) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-25**
+  (loop: PLAN ✓ → APPLY ✓ → UNIFY ✓). New `/app/sessions/[id]/phases` route renders Start + Underwater
+  in the v3 visual language (1D usual-range strips, valence coloring, hover-explain, dismissable alert
+  line, phase timeline); Swim/Whole = "coming soon". First Phase-75 surface visible in any UI.
+  See [75-05-SUMMARY.md](phases/75-report-card-phase-model/75-05-SUMMARY.md). **Phase 75 stays 🚧 —
+  Swim (9) + Whole (4) metrics + their UI still owed (item 7); those become new plans (75-06+).**
 - **Phase 78** (multi-swimmer segmentation diagnostic — owed item 2) — **✅ CLOSED + committed
   2026-08-21** (`status: complete`, AC-1/2/3 met — pure diagnostic, no detector changes). Resolved
   (fork **b**): *scored* corpus = **4 swimmers** (Tony/Leo/Chantee/Dane),
@@ -38,11 +43,21 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   (PLAN→APPLY→UNIFY), 2026-08-21, X=2.0.** Code committed **`e1934ba`**; docs (PIPELINE §3 / STATE /
   ROADMAP) landed; **backfill applied 2026-08-21.**
   ([79-01-SUMMARY.md](phases/79-dive-start-redefine/79-01-SUMMARY.md)).
-- **Working tree — arc is fully committed + backfilled.** 75-03 = `7035157`, Phase 79 = `e1934ba`,
-  Phase 78 + doc reconciliation = `76d2a18`. Stored library **backfilled 2026-08-21** (`tools/backfill_phases.py
-  --apply`): all four boundaries re-resolved from live detectors. Remaining dirty files are **unrelated to
-  this arc and deliberately left uncommitted:** `ESP_32_V5/ESP_32_V5.ino` (firmware), `assets/icon/`,
-  `scratch/`, `segmenter_report.json`.
+- **Phase 81** (annotation video marking — play-and-tap) — **PLAN 81-01 created 2026-08-24, awaiting
+  approval** (loop: PLAN ✓ → APPLY ○ → UNIFY ○). Web-only throughput slice: number keys **1/2/4/5**
+  drop the four existing markers at the active-camera playhead + a reused-as-is `TraceOverlay` velocity
+  **context strip** on the active tile; `AnnotationChart` stays for click-to-correct. Decisions locked
+  (AskUserQuestion 2026-08-24): overlay = **context strip** (`TraceOverlay` untouched → no report-card
+  regression), split = **two plans** (key 3 kick marks + ALL backend = annotations/phase_metrics/api
+  recompute-gap → **81-02**). `autonomous:false` (human-verify). Enables STATE item 9 (annotate the
+  backlog). Next: review + approve → `/paul:apply .paul/phases/81-annotation-video-marking/81-01-PLAN.md`.
+- **Working tree — segmentation arc + 75-05 UI committed.** 75-03 = `7035157`, Phase 79 = `e1934ba`,
+  Phase 78 + doc reconciliation = `76d2a18`, **75-05 report-card UI = `PENDING-HASH`** (frontend only;
+  `.claude/launch.json` is gitignored, stays local). Stored library **backfilled 2026-08-21**
+  (`tools/backfill_phases.py --apply`): all four boundaries re-resolved from live detectors. Dirty files
+  left uncommitted belong to **other streams:** `.paul/ROADMAP.md` + `web/app/app/annotate/[id]/page.js`
+  + `web/components/portal/{AnnotationEditor,CameraTile}.js` (Phase 80/81 annotation work), plus
+  `ESP_32_V5/ESP_32_V5.ino` (firmware), `.gitignore`, `assets/icon/`, `scratch/`, `segmenter_report.json`.
 
 ## Segmentation status — the 4 phase boundaries
 Mechanisms in [PIPELINE.md §3](../PIPELINE.md).
@@ -106,8 +121,35 @@ Start ✅ **DONE (75-04)** — 10/11 implemented; `streamline_drag` deferred; `r
 `PUT /sessions/{id}/go-signal` (phone↔encoder clock sync + GO-button UI still deferred). ⚠ backfill owed.
 **Swim (9 — IVV, breakout velocity, splits, dead-spot; mostly cheap) and Whole race (4) remain — next batches.**
 
-**8. Step-3 UI.** Phase-organized web report card (Start / Underwater / Swim, breakout marked in Swim),
-then iOS. Display doctrine = within-athlete contrast / trend, **no absolute thresholds**.
+**8. Step-3 UI.** Phase-organized web report card (Dive/Push-off / Underwater / Swim), then iOS.
+Display doctrine = within-athlete contrast, **no absolute thresholds**. Design docs:
+[CONTEXT-ui-consolidation.md](phases/75-report-card-phase-model/CONTEXT-ui-consolidation.md) (spine =
+race-phase timeline; pillars → roster surface) +
+[75-05-DISCOVERY-ui-visual-language.md](phases/75-report-card-phase-model/75-05-DISCOVERY-ui-visual-language.md)
+(2026-08-22). **Visual language re-settled 2026-08-25 in the rendered mockup `scratch/report-card-concept-v3.html`
+(the source of truth; v1/v2 are earlier drafts):** (1) each metric = a **1D usual-range strip**
+(shaded median±1.5·MAD band + median tick + today dot on a 0-based scale) — the Today-vs-Usual paired
+bars are **out** (two equal bars carried no info); (2) color = **direction-of-good valence** — green
+better / red worse / **grey "changed, unclear"** where "better" is a coaching call — via a new
+reviewable `DIRECTION_OF_GOOD` map (⚠ a deliberate, user-approved evolution of the old no-valence rule;
+still no absolute thresholds); (3) **almost no always-on prose** — descriptions + comparisons live in a
+page-dimming **hover overlay**; (4) per-phase layout = **inset chart on top, metrics in 2 columns**;
+(5) terse titles ("Dive / Push-off" — dive & wall-push are the *same* Start window per registry, so no
+metric split). Top = the deterministic **alert line** (count + "N worse / N changed / N better" chips,
+**coach-dismissable**). Baseline = **last 5 same-stroke swims**, band = **median ± 1.5·MAD** (robust for
+n=5; was mean±SD). Placement = **new `/app/sessions/[id]/phases` route** (isolated, additive).
+**→ PLAN [75-05-PLAN.md](phases/75-report-card-phase-model/75-05-PLAN.md) (created 2026-08-22, REVISED to
+the v3 language 2026-08-25) — ✅ APPLIED + human-verify approved 2026-08-25 (loop: PLAN ✓ → APPLY ✓ →
+UNIFY ○). → [75-05-SUMMARY.md](phases/75-report-card-phase-model/75-05-SUMMARY.md).** Shipped: new
+`/app/sessions/[id]/phases` route rendering Start + Underwater as 1D usual-range strips (median±1.5·sMAD
+of last 5 same-stroke), valence-colored via a new reviewable `DIRECTION_OF_GOOD` map (a user-approved
+evolution of the no-valence rule — **still no absolute thresholds**), a deterministic dismissable alert
+line, phase timeline, phase-tinted velocity line, and a page-dimming hover-explain overlay; Swim/Whole =
+"coming soon". New pure libs `web/lib/phaseBaseline.js` + `web/lib/phaseValence.js`; components under
+`web/components/portal/phases/`. Build clean; engine scratch checks 18/18. Deferred (documented in
+SUMMARY): server-side dismiss persistence (client localStorage now), LLM headline, imperial/iOS, richer
+signal insets. **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-25, committed `PENDING-HASH`.** Next
+Phase-75 work = Swim/Whole metric batches (item 7) + their strips, as new plans 75-06+.
 
 **9. ⭐ Annotate the backlog — 20 real-swimmer sessions sit unscored (Phase 78, highest leverage).**
 Titus 8, AlexGroup 9 (8 named testers), Jenna 2, Michael 1 — all 0 annotations. Labeling them converts

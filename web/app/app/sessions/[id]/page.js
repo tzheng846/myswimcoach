@@ -367,12 +367,20 @@ export default function ReportCardPage({ params }) {
         ) : (
           <span />
         )}
-        <Link
-          href={`/app/annotate/${sessionId}`}
-          className="text-xs font-semibold text-primary"
-        >
-          Annotate ›
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link
+            href={`/app/sessions/${sessionId}/phases`}
+            className="text-xs font-semibold text-primary"
+          >
+            Race phases ›
+          </Link>
+          <Link
+            href={`/app/annotate/${sessionId}`}
+            className="text-xs font-semibold text-primary"
+          >
+            Annotate ›
+          </Link>
+        </div>
       </div>
 
       <div className="mt-4 space-y-3">

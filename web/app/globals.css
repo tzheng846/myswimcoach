@@ -20,6 +20,14 @@
   --color-warning-2: #e67e22;
   --color-danger: #c0392b;
 
+  /* Race-phase report card (Phase 75-05) — direction-of-good valence + the usual-range band.
+     Portal is dark-only, so these are the mockup's dark values (report-card-concept-v3.html).
+     Additive; they never collide with the portal tokens above. */
+  --color-good: #45c67e;
+  --color-bad: #e4675f;
+  --color-neutral: #8aa2ae;
+  --color-usual: #4a616c;
+
   /* Marketing redesign (Phase 40) — iOS light-purple palette, additive.
      The dark tokens above belong to the coach portal; do NOT change them.
      These new names never collide with the portal's --color-primary/accent/muted. */
