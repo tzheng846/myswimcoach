@@ -32,6 +32,24 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   line, phase timeline); Swim/Whole = "coming soon". First Phase-75 surface visible in any UI.
   See [75-05-SUMMARY.md](phases/75-report-card-phase-model/75-05-SUMMARY.md). **Phase 75 stays 🚧 —
   Swim (9) + Whole (4) metrics + their UI still owed (item 7); those become new plans (75-06+).**
+- **Phase 75-07** (report-card CONSOLIDATION — the race-phase view is now the PRIMARY `/app/sessions/[id]`) —
+  **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-26** (loop: PLAN ✓ → APPLY ✓ → UNIFY ✓). Code committed
+  **`040ce0d`** (frontend only) + docs. Classic analytics (SessionSummaryCard / PillarCards / MetricGrid /
+  Simple-Advanced) removed; **`PhaseReportCard` is the body** with velocity / Time-to-Distance / video threaded
+  via a new **`middleSlot`** seam; Swimming section = the existing per-cycle line charts (`CycleCharts`);
+  standalone legend gone; delete → header **⋯ overflow**; **coach chat = floating bottom-right blob** (z above
+  the hover scrim); `/app/sessions/[id]/phases` → **server-component redirect** to the primary page. Kept the
+  **interim** classic VelocityChart+AccelerationChart (un-regressed). Build clean (19 pages); redirect
+  (`NEXT_REDIRECT …;307`) + SSR verified; **AC-6 human-verify approved**. Decisions: coach-chat `simple`
+  dropped (full depth, coach audience); ⋯ = Delete only (Export/Manage-videos not trivial). Pillars **not
+  deleted**, just unrendered (relocate to a roster surface later).
+  See [75-07-SUMMARY.md](phases/75-report-card-phase-model/75-07-SUMMARY.md).
+  **Next in the merge:** **75-08** (compare-vs-last-X slider + alert "N Changes" rebuild + `phaseBaseline` as a
+  persisted pref + timeline hover dot+range strips) → **75-09** (unified interactive phase-tinted trace, gated
+  on the "new functionality" decision). ⚠ **75-06** (Swim/Whole *metrics*,
+  [75-06-DISCOVERY.md](phases/75-report-card-phase-model/75-06-DISCOVERY.md)) composes independently at
+  Swimming/Whole. CONTEXT + PLAN: [75-07-CONTEXT.md](phases/75-report-card-phase-model/75-07-CONTEXT.md) ·
+  [75-07-PLAN.md](phases/75-report-card-phase-model/75-07-PLAN.md).
 - **Phase 78** (multi-swimmer segmentation diagnostic — owed item 2) — **✅ CLOSED + committed
   2026-08-21** (`status: complete`, AC-1/2/3 met — pure diagnostic, no detector changes). Resolved
   (fork **b**): *scored* corpus = **4 swimmers** (Tony/Leo/Chantee/Dane),
@@ -51,13 +69,14 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   regression), split = **two plans** (key 3 kick marks + ALL backend = annotations/phase_metrics/api
   recompute-gap → **81-02**). `autonomous:false` (human-verify). Enables STATE item 9 (annotate the
   backlog). Next: review + approve → `/paul:apply .paul/phases/81-annotation-video-marking/81-01-PLAN.md`.
-- **Working tree — segmentation arc + 75-05 UI committed.** 75-03 = `7035157`, Phase 79 = `e1934ba`,
-  Phase 78 + doc reconciliation = `76d2a18`, **75-05 report-card UI = `9dd5f7a`** (frontend only;
-  `.claude/launch.json` is gitignored, stays local). Stored library **backfilled 2026-08-21**
-  (`tools/backfill_phases.py --apply`): all four boundaries re-resolved from live detectors. Dirty files
-  left uncommitted belong to **other streams:** `.paul/ROADMAP.md` + `web/app/app/annotate/[id]/page.js`
-  + `web/components/portal/{AnnotationEditor,CameraTile}.js` (Phase 80/81 annotation work), plus
-  `ESP_32_V5/ESP_32_V5.ino` (firmware), `.gitignore`, `assets/icon/`, `scratch/`, `segmenter_report.json`.
+- **Working tree — segmentation arc + 75-05/75-07 UI committed.** 75-03 = `7035157`, Phase 79 = `e1934ba`,
+  Phase 78 + doc reconciliation = `76d2a18`, **75-05 report-card UI = `9dd5f7a`**, **75-07 report-card merge =
+  `040ce0d`** (frontend only; `.claude/launch.json` is gitignored, stays local). Stored library **backfilled
+  2026-08-21** (`tools/backfill_phases.py --apply`): all four boundaries re-resolved from live detectors. Dirty
+  files left uncommitted belong to **other streams:** `web/app/app/annotate/[id]/page.js` +
+  `web/components/portal/{AnnotationEditor,CameraTile}.js` (Phase 80/81 annotation work), plus
+  `ESP_32_V5/ESP_32_V5.ino` (firmware), `.gitignore`, `assets/icon/`, `scratch/`, `segmenter_report.json`,
+  and the untracked 75-04/75-06 discovery docs.
 
 ## Segmentation status — the 4 phase boundaries
 Mechanisms in [PIPELINE.md §3](../PIPELINE.md).

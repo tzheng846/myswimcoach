@@ -131,10 +131,12 @@ segmentation / phase-metrics work (Phases 75–77) is the current frontier.
 | 71 | Video Surface Rework | ✅ | |
 | 73 | Group Comparison | ✅ | |
 | 74 | BLE Dump Reliability | 📋 planned (74-01 plan only) | |
-| 75 | Report Card Revamp (Race-Phase Model: Start / Underwater / Swim) | 🚧 Start (75-04) + Underwater metrics done; Swim/Whole metrics + Step-3 UI owed | |
+| 75 | Report Card Revamp (Race-Phase Model: Start / Underwater / Swim) | 🚧 Start (75-04) + UW metrics + Step-3 UI (75-05 /phases) done; report-card CONSOLIDATION cutover shipped (75-07 `040ce0d`) → 75-08 compare-window → 75-09 unified trace next; Swim/Whole metrics owed (75-06) | |
 | 76 | Breakout Detection (free/back — kick-band disappearance) | ✅ | 2026-08-20 |
 | 77 | Fly Breakout Detection (arm-cycle appearance) | ✅ | 2026-08-20 |
 | 78 | Multi-Swimmer Segmentation Diagnostic (pure, no fixes) | ✅ complete (4/~15 swimmers annotated — coverage gap, not "one swimmer") | 2026-08-21 |
 | 79 | Redefine dive_start_s (foot of first ≥X m/s surge) | ✅ complete (`e1934ba`; X=2.0, MAE 0.72→0.15 s; backfill applied) | 2026-08-21 |
+| 80 | Stroke-Cycle Segmentation (count-centric re-measurement + tuning) | 🚧 CONTEXT done (freestyle-only; measure→re-tune wavelet) | |
+| 81 | Annotation Video Marking (play-and-tap + on-video overlay + UW-kick marker) | 🚧 81-01 planned (web play-and-tap keys 1/2/4/5 + on-video context strip; awaiting approval); 81-02 (key-3 kick marks + recompute) owed | |
 
 _Phase 72 was never used. 56 / 62 / 68 are unscheduled TODOs with no phase directory — live tracking is in [STATE.md](STATE.md)._
