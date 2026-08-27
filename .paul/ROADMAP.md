@@ -137,6 +137,6 @@ segmentation / phase-metrics work (Phases 75–77) is the current frontier.
 | 78 | Multi-Swimmer Segmentation Diagnostic (pure, no fixes) | ✅ complete (4/~15 swimmers annotated — coverage gap, not "one swimmer") | 2026-08-21 |
 | 79 | Redefine dive_start_s (foot of first ≥X m/s surge) | ✅ complete (`e1934ba`; X=2.0, MAE 0.72→0.15 s; backfill applied) | 2026-08-21 |
 | 80 | Stroke-Cycle Segmentation (count-centric re-measurement + tuning) | 🚧 CONTEXT done (freestyle-only; measure→re-tune wavelet) | |
-| 81 | Annotation Video Marking (play-and-tap + on-video overlay + UW-kick marker) | 🚧 81-01 planned (web play-and-tap keys 1/2/4/5 + on-video context strip; awaiting approval); 81-02 (key-3 kick marks + recompute) owed | |
+| 81 | Annotation Video Marking (play-and-tap + on-video overlay + UW-kick marker) | 🚧 81-01 shipped (`a73db03`) — active camera = stage-fullscreen overlay w/ marker buttons (Dive/UW/Stroke/Finish + stroke-mark) + 4/8/All window presets in the bar; mark in fullscreen without exiting; keys 1/2/4/5+M retained; shared report components untouched. ⚠ human-verify owed. 81-02 (key-3 kick marks + backend recompute) owed | |
 
 _Phase 72 was never used. 56 / 62 / 68 are unscheduled TODOs with no phase directory — live tracking is in [STATE.md](STATE.md)._

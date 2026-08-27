@@ -61,22 +61,27 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   (PLAN→APPLY→UNIFY), 2026-08-21, X=2.0.** Code committed **`e1934ba`**; docs (PIPELINE §3 / STATE /
   ROADMAP) landed; **backfill applied 2026-08-21.**
   ([79-01-SUMMARY.md](phases/79-dive-start-redefine/79-01-SUMMARY.md)).
-- **Phase 81** (annotation video marking — play-and-tap) — **PLAN 81-01 created 2026-08-24, awaiting
-  approval** (loop: PLAN ✓ → APPLY ○ → UNIFY ○). Web-only throughput slice: number keys **1/2/4/5**
-  drop the four existing markers at the active-camera playhead + a reused-as-is `TraceOverlay` velocity
-  **context strip** on the active tile; `AnnotationChart` stays for click-to-correct. Decisions locked
-  (AskUserQuestion 2026-08-24): overlay = **context strip** (`TraceOverlay` untouched → no report-card
-  regression), split = **two plans** (key 3 kick marks + ALL backend = annotations/phase_metrics/api
-  recompute-gap → **81-02**). `autonomous:false` (human-verify). Enables STATE item 9 (annotate the
-  backlog). Next: review + approve → `/paul:apply .paul/phases/81-annotation-video-marking/81-01-PLAN.md`.
-- **Working tree — segmentation arc + 75-05/75-07 UI committed.** 75-03 = `7035157`, Phase 79 = `e1934ba`,
-  Phase 78 + doc reconciliation = `76d2a18`, **75-05 report-card UI = `9dd5f7a`**, **75-07 report-card merge =
-  `040ce0d`** (frontend only; `.claude/launch.json` is gitignored, stays local). Stored library **backfilled
-  2026-08-21** (`tools/backfill_phases.py --apply`): all four boundaries re-resolved from live detectors. Dirty
-  files left uncommitted belong to **other streams:** `web/app/app/annotate/[id]/page.js` +
-  `web/components/portal/{AnnotationEditor,CameraTile}.js` (Phase 80/81 annotation work), plus
-  `ESP_32_V5/ESP_32_V5.ino` (firmware), `.gitignore`, `assets/icon/`, `scratch/`, `segmenter_report.json`,
-  and the untracked 75-04/75-06 discovery docs.
+- **Phase 81** (annotation video marking) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-26**, committed
+  **`a73db03`** (frontend only). Shipped **well beyond** the plan's keyboard slice via three live redirections:
+  the **active annotate camera is now a stage-fullscreen video overlay** whose control bar carries the
+  **marker buttons** (Dive/UW/Stroke/Finish + stroke-mark, at the current frame) + **4/8/All window presets**
+  — so a coach marks in **fullscreen without exiting** (the actual ask). Placed marks render as strip ticks
+  (in-fullscreen confirmation, `TraceOverlay` used as-is). `overlayMode = active && synced` gate: native
+  controls until synced (scrub to Set-sync landmark), custom marking stage once synced. Keys **1/2/4/5+M**
+  retained as an alias. **Shared report-card components (VideoTracePanel/VideoPane/PlaybackControls/
+  TraceOverlay) UNTOUCHED → zero report regression.** New shared `placeBoundary()` (chart-tool/keys/buttons
+  DRY). ESLint + compile clean. ⚠ **Blocking human-verify NOT run** (annotate page is Supabase-auth-gated;
+  shipped on user instruction + lint/compile + mockup approval) — owed against a live synced-video session.
+  See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
+  (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
+  item 9 (annotate the backlog fast).
+- **Working tree — segmentation arc + 75-05/75-07 UI + 81-01 committed.** 75-03 = `7035157`, Phase 79 =
+  `e1934ba`, Phase 78 + doc reconciliation = `76d2a18`, **75-05 report-card UI = `9dd5f7a`**, **75-07
+  report-card merge = `040ce0d`**, **81-01 annotate marking = `a73db03`** (frontend only; `.claude/launch.json`
+  is gitignored, stays local). Stored library **backfilled 2026-08-21** (`tools/backfill_phases.py --apply`):
+  all four boundaries re-resolved from live detectors. Dirty files left uncommitted belong to **other
+  streams:** `ESP_32_V5/ESP_32_V5.ino` (firmware), `.gitignore`, `assets/icon/`, `scratch/`,
+  `segmenter_report.json`, the untracked Phase-80 dir, and the 75-04/75-06 discovery docs.
 
 ## Segmentation status — the 4 phase boundaries
 Mechanisms in [PIPELINE.md §3](../PIPELINE.md).
