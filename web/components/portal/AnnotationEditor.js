@@ -71,13 +71,23 @@ export default function AnnotationEditor({
 }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
+  // Number-key each play-and-tap boundary drops (81-01), keyed by phase key — NOT position — so
+  // finish_s (no key) and the future key-3 kick marker never shift the 4/5 assignment.
+  const DIGIT_BY_KEY = {
+    dive_start_s: "1",
+    underwater_start_s: "2",
+    stroke_start_s: "4",
+  };
+
   const tools = [
     ...PHASE_META.map((m) => ({
       key: m.key,
-      label: phaseLabel(m, strokeType),
+      label: DIGIT_BY_KEY[m.key]
+        ? `${DIGIT_BY_KEY[m.key]} ${phaseLabel(m, strokeType)}`
+        : phaseLabel(m, strokeType),
       color: m.color,
     })),
-    { key: "stroke", label: "+ Stroke mark", color: "#94a3b8" },
+    { key: "stroke", label: "5 Stroke mark", color: "#94a3b8" },
     { key: "seek", label: "Seek video", color: "#f59e0b", disabled: !seekEnabled },
   ];
 
@@ -142,8 +152,10 @@ export default function AnnotationEditor({
           <span className="text-subtle">Keys:</span> with nothing selected ←/→ step the
           video one frame (shift = ×10); with a mark selected they nudge it instead, and{" "}
           <span className="text-subtle">Esc</span> deselects.{" "}
-          <span className="text-subtle">M</span> drops a stroke mark at the video
-          playhead. <span className="text-subtle">Ctrl+Z</span> undoes.
+          <span className="text-subtle">1 / 2 / 4</span> place or move Dive / UW / Stroke at
+          the video playhead; <span className="text-subtle">5</span> (or{" "}
+          <span className="text-subtle">M</span>) drops a stroke mark.{" "}
+          <span className="text-subtle">Ctrl+Z</span> undoes.
         </p>
         <div className="flex flex-wrap gap-1.5">
           {tools.map((t) => (

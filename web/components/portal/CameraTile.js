@@ -1,10 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiUpload } from "@/lib/api";
+import TraceOverlay from "./TraceOverlay";
 
 const FRAME_S = 1 / 30;
 const RATES = [0.25, 0.5, 1];
+
+// In-stage control-bar buttons (light on the video's bottom gradient, so they read in fullscreen).
+const BAR_BTN =
+  "rounded-md border border-white/30 bg-black/40 px-2 py-1 font-semibold text-white/80 hover:text-white";
+const BAR_BTN_ON = "rounded-md border border-accent bg-accent px-2 py-1 font-semibold text-white";
+
+// Rolling-window presets for the on-tile strip (mirrors the report overlay). null = whole swim.
+const STRIP_WINDOWS = [
+  { label: "4s", v: 4 },
+  { label: "8s", v: 8 },
+  { label: "All", v: null },
+];
 
 // One camera on the annotate multi-cam hub (Phase 71). A single <video> with frame-step, speed,
 // MANUAL two-point align ("Set sync" → click the trace at the same moment), ±0.1 s nudge, and an
@@ -26,6 +39,12 @@ export default function CameraTile({
   seekRef, // ref; assigned only while active
   frameStepRef, // ref; assigned only while active
   onChanged, // () => void — refetch the list after delete (NOT after save/label — avoids url churn)
+  velocity = [], // session velocity_profile — feeds the active tile's context strip (81-01)
+  fsHz = 100, // sample rate for that strip's x-axis
+  phaseTools = [], // [{key,label,color}] — boundary marker buttons on the active tile (81-01)
+  marks = [], // placed mark times (s) — drawn as ticks on the strip for in-fullscreen confirmation
+  onPlaceBoundary, // (phaseKey, sessionT) => void — place/move a boundary at the current frame
+  onPlaceStrokeMark, // (sessionT) => void — append a stroke mark at the current frame
 }) {
   const videoRef = useRef(null);
   const [label, setLabel] = useState(video.label ?? "");
@@ -34,10 +53,21 @@ export default function CameraTile({
   const [rate, setRate] = useState(1);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  // Stage-fullscreen (active tile only): fullscreen the STAGE div, not the <video>, so the marker
+  // bar + trace stay on screen and the coach marks without exiting (Phase 81 fullscreen-marking).
+  const stageRef = useRef(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [canFullscreen, setCanFullscreen] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [windowS, setWindowS] = useState(4); // strip rolling window (s); null = whole swim (All)
 
   const isPrimary = video.role === "phone";
   const dirty = origin != null && origin !== savedOrigin;
   const effectiveOrigin = origin ?? savedOrigin;
+  // Overlay/marking mode: the active camera turns into the fullscreen marking stage only once it's
+  // SYNCED (an origin is needed to map video time ↔ session time, and to draw the strip). Until then
+  // it keeps native controls so the coach can scrub freely to the landmark frame for "Set sync".
+  const overlayMode = active && effectiveOrigin != null;
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.playbackRate = rate;
@@ -62,19 +92,66 @@ export default function CameraTile({
     [reportPlayhead]
   );
 
-  // Marking wiring: while active, this camera answers the chart's Seek tool and keyboard frame-step.
-  // No cleanup-null: only the active tile assigns, so the shared ref holds the newest active fn —
-  // nulling in cleanup would race across tiles when the active camera switches.
-  useEffect(() => {
-    if (!active || !seekRef) return;
-    seekRef.current = (sessionT) => {
+  // Seek this camera to a SESSION time (inverse of origin + videoTime), clamped to the clip. Shared
+  // by the chart's Seek tool / keyboard (via seekRef) and the on-tile trace strip's drag-scrub
+  // (TraceOverlay onSeek) so the clamp lives in exactly one place.
+  const seekTo = useCallback(
+    (sessionT) => {
       const v = videoRef.current;
       if (!v || effectiveOrigin == null) return;
       const d = Number.isFinite(v.duration) ? v.duration : 0;
       v.currentTime = Math.min(Math.max(sessionT - effectiveOrigin, 0), d);
       reportPlayhead();
-    };
-  }, [active, seekRef, effectiveOrigin, reportPlayhead]);
+    },
+    [effectiveOrigin, reportPlayhead]
+  );
+
+  // This tile's CURRENT session time (origin + video time), read off the element at click — fresher
+  // than the page's onTimeUpdate playhead, so a marker button always lands on the frame on screen.
+  const currentSessionT = useCallback(() => {
+    const v = videoRef.current;
+    if (!v || effectiveOrigin == null) return null;
+    return effectiveOrigin + v.currentTime;
+  }, [effectiveOrigin]);
+
+  // Placed marks as pseudo-cycles so the strip shows a tick where each landed — the in-fullscreen
+  // confirmation a tap registered (the AnnotationChart is off-screen there). Uses TraceOverlay as-is.
+  const markCycles = useMemo(
+    () => marks.map((t) => ({ start_idx: Math.round(t * fsHz) })),
+    [marks, fsHz]
+  );
+
+  // Track fullscreen from the EVENT (Esc + browser chrome change it too), not the click handler.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === stageRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  // Some engines (iOS Safari) can't fullscreen an arbitrary element — hide the button rather than
+  // ship a dead one. The stage only exists once the video is present.
+  useEffect(() => {
+    setCanFullscreen(
+      typeof stageRef.current?.requestFullscreen === "function" && !!document.fullscreenEnabled
+    );
+  }, [active, video.url]);
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    else stageRef.current?.requestFullscreen?.().catch(() => {});
+  }, []);
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
+  }, []);
+
+  // Marking wiring: while active, this camera answers the chart's Seek tool and keyboard frame-step.
+  // No cleanup-null: only the active tile assigns, so the shared ref holds the newest active fn —
+  // nulling in cleanup would race across tiles when the active camera switches.
+  useEffect(() => {
+    if (!active || !seekRef) return;
+    seekRef.current = seekTo;
+  }, [active, seekRef, seekTo]);
 
   useEffect(() => {
     if (!active || !frameStepRef) return;
@@ -181,39 +258,146 @@ export default function CameraTile({
       </div>
 
       {video.url ? (
-        <video
-          ref={videoRef}
-          src={video.url}
-          controls
-          playsInline
-          preload="metadata"
-          onTimeUpdate={reportPlayhead}
-          className="w-full max-h-[clamp(140px,26vh,360px)] rounded-lg bg-black object-contain"
-        />
+        <div
+          ref={stageRef}
+          className={
+            isFullscreen
+              ? "relative flex h-full w-full flex-col bg-black"
+              : overlayMode
+              ? "relative h-[clamp(180px,34vh,440px)] w-full overflow-hidden rounded-lg bg-black"
+              : "relative w-full overflow-hidden rounded-lg bg-black"
+          }
+        >
+          <video
+            ref={videoRef}
+            src={video.url}
+            controls={!overlayMode}
+            playsInline
+            preload="metadata"
+            onTimeUpdate={reportPlayhead}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            className={
+              overlayMode
+                ? "absolute inset-0 h-full w-full bg-black object-contain"
+                : "block max-h-[clamp(140px,26vh,360px)] w-full bg-black object-contain"
+            }
+          />
+
+          {/* Active = the marking camera. The velocity strip + a control bar live INSIDE the stage,
+              so both stay on screen in fullscreen and the coach marks the frame they see without
+              exiting (Phase 81 — the fullscreen-marking ask). The bottom gradient keeps them legible
+              over the water; the <video> never leaves this div, so playback + the signed URL survive.
+              cycles={[]} — placed marks stay on the AnnotationChart below. */}
+          {overlayMode && (
+            <div className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-gradient-to-t from-black/85 via-black/45 to-transparent pt-4">
+              <TraceOverlay
+                velocity={velocity}
+                fsHz={fsHz}
+                cycles={markCycles}
+                videoElRef={videoRef}
+                originS={effectiveOrigin}
+                onSeek={seekTo}
+                windowS={windowS}
+              />
+              <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2 pt-1 text-xs">
+                <button onClick={togglePlay} className={BAR_BTN} title="Play / pause">
+                  {isPlaying ? "❚❚" : "▶"}
+                </button>
+                <button onClick={() => step(-1)} className={BAR_BTN} title="Back one frame">
+                  −1
+                </button>
+                <button onClick={() => step(1)} className={BAR_BTN} title="Forward one frame">
+                  +1
+                </button>
+                {RATES.map((r) => (
+                  <button key={r} onClick={() => setRate(r)} className={rate === r ? BAR_BTN_ON : BAR_BTN}>
+                    {r}×
+                  </button>
+                ))}
+
+                <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-white/55">
+                  Window
+                </span>
+                {STRIP_WINDOWS.map((w) => (
+                  <button
+                    key={w.label}
+                    onClick={() => setWindowS(w.v)}
+                    className={windowS === w.v ? BAR_BTN_ON : BAR_BTN}
+                  >
+                    {w.label}
+                  </button>
+                ))}
+
+                <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-white/55">
+                  Mark
+                </span>
+                {phaseTools.map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => {
+                      const st = currentSessionT();
+                      if (st != null) onPlaceBoundary?.(t.key, st);
+                    }}
+                    className="rounded-md border bg-black/40 px-2 py-1 font-semibold hover:brightness-110"
+                    style={{ borderColor: t.color, color: t.color }}
+                    title={`Mark ${t.label} at the current frame`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+                <button
+                  onClick={() => {
+                    const st = currentSessionT();
+                    if (st != null) onPlaceStrokeMark?.(st);
+                  }}
+                  className="rounded-md border border-white/30 bg-black/40 px-2 py-1 font-semibold text-white/80 hover:text-white"
+                  title="Append a stroke mark at the current frame"
+                >
+                  + mark
+                </button>
+
+                {canFullscreen && (
+                  <button
+                    onClick={toggleFullscreen}
+                    className="ml-auto rounded-md border border-white/30 bg-black/40 px-2 py-1 font-semibold text-white/80 hover:text-white"
+                    title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                  >
+                    {isFullscreen ? "Exit ⛶" : "⛶"}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
         <p className="py-6 text-center text-xs text-muted">Video unavailable.</p>
       )}
 
-      {/* Frame step + speed + sync status */}
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-        <button onClick={() => step(-1)} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">−1 frame</button>
-        <button onClick={() => step(1)} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">+1 frame</button>
-        <span className="ml-1 text-muted">Speed</span>
-        {RATES.map((r) => (
-          <button
-            key={r}
-            onClick={() => setRate(r)}
-            className={`rounded-md border px-2 py-1 font-semibold ${
-              rate === r ? "border-accent bg-accent text-white" : "border-surface-3 bg-surface-2 text-subtle hover:text-ink"
-            }`}
-          >
-            {r}×
-          </button>
-        ))}
-        <span className={`ml-auto text-[11px] ${savedOrigin != null ? "text-success" : "text-warning"}`}>
-          {savedOrigin != null ? "synced" : "needs sync"}
-        </span>
-      </div>
+      {/* Frame step + speed + sync status — shown unless the tile is in marking mode (active AND
+          synced), which carries these in its in-stage bar so they survive fullscreen. An unsynced
+          active tile keeps this row for scrubbing to the landmark frame during Set sync. */}
+      {!overlayMode && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <button onClick={() => step(-1)} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">−1 frame</button>
+          <button onClick={() => step(1)} className="rounded-md border border-surface-3 bg-surface-2 px-2 py-1 font-semibold text-subtle hover:text-ink">+1 frame</button>
+          <span className="ml-1 text-muted">Speed</span>
+          {RATES.map((r) => (
+            <button
+              key={r}
+              onClick={() => setRate(r)}
+              className={`rounded-md border px-2 py-1 font-semibold ${
+                rate === r ? "border-accent bg-accent text-white" : "border-surface-3 bg-surface-2 text-subtle hover:text-ink"
+              }`}
+            >
+              {r}×
+            </button>
+          ))}
+          <span className={`ml-auto text-[11px] ${savedOrigin != null ? "text-success" : "text-warning"}`}>
+            {savedOrigin != null ? "synced" : "needs sync"}
+          </span>
+        </div>
+      )}
 
       {/* Manual two-point align + nudge + save (no push-off, no dive detection — D10/D11) */}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">

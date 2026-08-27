@@ -4,12 +4,17 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { apiFetch, apiUpload } from "@/lib/api";
-import AnnotationChart, { PHASE_META } from "@/components/portal/AnnotationChart";
+import AnnotationChart, { PHASE_META, phaseLabel } from "@/components/portal/AnnotationChart";
 import AnnotationEditor from "@/components/portal/AnnotationEditor";
 import CameraTile from "@/components/portal/CameraTile";
 
 const PHASE_KEYS = PHASE_META.map((m) => m.key);
 const UNDO_DEPTH = 50;
+
+// Play-and-tap (81-01): number keys drop markers at the video playhead. 1/2/4 place-or-move a
+// single phase boundary (overwrite); 5 appends a stroke mark (alias of M). Key 3 (underwater kick)
+// is 81-02 and intentionally has no entry — it stays a no-op.
+const DIGIT_TO_PHASE = { "1": "dive_start_s", "2": "underwater_start_s", "4": "stroke_start_s" };
 
 function normalizePhases(p) {
   const out = {};
@@ -148,6 +153,26 @@ export default function AnnotatePage({ params }) {
     [vel.length, fsHz]
   );
 
+  // Boundary marker buttons for the active camera tile: the four phase boundaries with labels
+  // resolved for the stroke (breaststroke renames UW → Pulldown) + their colours. The tile appends
+  // its own "+ Stroke mark" button.
+  const phaseTools = useMemo(
+    () =>
+      PHASE_META.map((m) => ({
+        key: m.key,
+        label: phaseLabel(m, row?.stroke_type),
+        color: m.color,
+      })),
+    [row?.stroke_type]
+  );
+
+  // Placed marks (boundaries + stroke marks) as session times — drawn as ticks on the active tile's
+  // strip so a fullscreen tap gives immediate confirmation while the AnnotationChart is off-screen.
+  const markTimes = useMemo(
+    () => [...PHASE_KEYS.map((k) => phases[k]).filter((v) => v != null), ...strokeMarks],
+    [phases, strokeMarks]
+  );
+
   // Snapshot before every mutation so undo can restore it.
   const pushUndo = useCallback(() => {
     undoRef.current.push({ phases, strokeMarks });
@@ -192,6 +217,20 @@ export default function AnnotatePage({ params }) {
     [phases, pushUndo]
   );
 
+  // Place / move a single phase boundary at a session time (2 dp). ONE definition shared by the
+  // chart-tool click, the number keys, and the on-tile "Mark at current frame" buttons, so all
+  // three round + snapshot identically. Deliberately does NOT select the boundary (same reason the
+  // keys don't) so the arrows stay in frame-step mode.
+  const placeBoundary = useCallback(
+    (key, t) => {
+      pushUndo();
+      setHint(null);
+      setPhases((prev) => ({ ...prev, [key]: Math.round(t * 100) / 100 }));
+      setDirty(true);
+    },
+    [pushUndo]
+  );
+
   const handleChartClick = useCallback(
     (t) => {
       const tt = Math.round(t * 100) / 100;
@@ -210,12 +249,9 @@ export default function AnnotatePage({ params }) {
         return;
       }
       // Phase tool: place / move that boundary
-      pushUndo();
-      setHint(null);
-      setPhases((prev) => ({ ...prev, [activeTool]: tt }));
-      setDirty(true);
+      placeBoundary(activeTool, tt);
     },
-    [activeTool, placeStrokeMark, pushUndo, aligningCameraId]
+    [activeTool, placeStrokeMark, placeBoundary, aligningCameraId]
   );
 
   // Drag from the chart. Snapshot only on the FIRST move of a gesture, otherwise a
@@ -305,6 +341,30 @@ export default function AnnotatePage({ params }) {
         return;
       }
 
+      // Number-key marking at the video playhead (81-01). 1/2/4 place-or-move a phase boundary
+      // (overwrite by construction — re-pressing just re-sets the same key); 5 appends a stroke
+      // mark (identical to M). Like M, deliberately does NOT select the placed mark, so the arrows
+      // stay in frame-step mode and the step → mark → step loop keeps working. Key 3 (underwater
+      // kick) is 81-02 and intentionally falls through to a no-op.
+      if (
+        (e.key === "1" || e.key === "2" || e.key === "4" || e.key === "5") &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        if (playheadS == null) {
+          setHint("No video playhead yet — attach a video and scrub it, or click the trace.");
+          return;
+        }
+        if (e.key === "5") {
+          placeStrokeMark(playheadS);
+          return;
+        }
+        placeBoundary(DIGIT_TO_PHASE[e.key], playheadS);
+        return;
+      }
+
       if (e.key === "Escape") {
         setSelected(null);
         return;
@@ -361,6 +421,7 @@ export default function AnnotatePage({ params }) {
     removeMark,
     clearPhase,
     placeStrokeMark,
+    placeBoundary,
     playheadS,
   ]);
 
@@ -496,6 +557,12 @@ export default function AnnotatePage({ params }) {
                 onPlayhead={v.id === activeCameraId ? setPlayheadS : undefined}
                 seekRef={v.id === activeCameraId ? seekRef : undefined}
                 frameStepRef={v.id === activeCameraId ? frameStepRef : undefined}
+                velocity={vel}
+                fsHz={fsHz}
+                phaseTools={phaseTools}
+                marks={markTimes}
+                onPlaceBoundary={placeBoundary}
+                onPlaceStrokeMark={placeStrokeMark}
                 onChanged={loadVideos}
               />
             ))}
