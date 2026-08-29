@@ -182,6 +182,7 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   auto sessions carry only the existing `auto` badge to signal that spread may be segmentation.
   ⚠ **STATE item 17 stays open** — `resample` + the median are wired, the MAD gate is not.
   ⚠ **Peak-alignment surfaced as a better axis mode than align-center and was DECLINED** → new item 19.
+  ✅ **Committed + pushed `45a858b`** (2026-08-29).
   ⚠ **Phase 83 stays 🚧 — NOT transitioned, NO phase commit.** PLAN/SUMMARY counts are now **4/4**, the
   exact heuristic that has falsely signalled "done" at 83-01, 83-02 AND 83-03. **83-04 (inset window
   framing) is scoped in STATE but still has no PLAN.**
@@ -277,7 +278,9 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 - **Committed history:** 75-03 = `7035157`, Phase 79 = `e1934ba`, Phase 78 + doc reconciliation =
   `76d2a18`, **75-05 report-card UI = `9dd5f7a`**, **75-07 report-card merge = `040ce0d`**, **81-01
   annotate marking = `a73db03`** (frontend only; `.claude/launch.json` is gitignored, stays local),
-  **75-06 + 82-01 + 83-01/02/03 whole-tree = `20c0432`** (2026-08-29, pushed to `main`).
+  **75-06 + 82-01 + 83-01/02/03 whole-tree = `20c0432`** (2026-08-29, pushed to `main`),
+  **83-05 overlay panel = `45a858b`** (2026-08-29, pushed to `main` — frontend + docs only, so this
+  deploy is Vercel-only; `scratch/_cycle*.mjs` excluded again as generated copies of `web/lib/` sources).
   Stored library backfilled 2026-08-21 (all four boundaries) and again **2026-08-28** (75-06 metrics +
   the 75-04 Start metrics). Other dirty files belong to **other streams:** `ESP_32_V5/ESP_32_V5.ino`
   (firmware), `.gitignore`, `assets/icon/`, `scratch/`, `segmenter_report.json`, the untracked Phase-80
