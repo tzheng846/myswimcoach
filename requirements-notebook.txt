@@ -1,0 +1,25 @@
+# Dependencies for the Phase 80 freestyle segmentation notebook
+# (.paul/phases/80-stroke-cycle-segmentation/freestyle_segmentation.ipynb)
+#
+# Pinned to the versions verified to run the notebook end-to-end (Python 3.13).
+# Install:  python -m venv .venv
+#           .venv/Scripts/python.exe -m pip install -r requirements-notebook.txt
+#           .venv/Scripts/python.exe -m ipykernel install --user --name swimnetics --display-name "Python (swimnetics)"
+
+# ── signal + data stack (also used by metrics.py / vel_acc_extraction.py) ──
+numpy==2.5.2
+scipy==1.18.1
+PyWavelets==1.9.0
+pandas==3.0.5
+matplotlib==3.11.1
+scikit-learn==1.9.0        # tools/segmenter_candidates.py L1 learned fit
+
+# ── Supabase access (matches requirements.txt pins) ──
+supabase==2.30.1
+postgrest==2.30.1
+python-dotenv==1.2.3       # loads the repo-root .env (SUPABASE_URL / SERVICE_ROLE key)
+
+# ── Jupyter runtime ──
+jupyterlab==4.6.3
+ipykernel==7.3.0
+nbconvert==7.17.1

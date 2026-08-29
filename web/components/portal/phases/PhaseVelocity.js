@@ -4,8 +4,16 @@
 // (NOT the cycle-coupled VelocityChart): every y-axis starts at 0, charts stay line-only.
 //   variant="hero"  → whole swim, faint phase tint bands, a Surfaced marker, and phase labels
 //                     pinned along the BOTTOM axis (their own row, so they never overlap the trace).
-//   variant="inset" → one phase's window (pass `window={[i0,i1]}`), just the slice + peak, no bands.
+//   variant="inset" → one phase's window (pass `window={[i0,i1]}`), just the slice, no bands.
 // Boundary times in seconds; missing boundaries degrade (that band/marker is skipped).
+//
+// Phase 83-01 added the optional `bands` prop (from `lib/cycleBands`): the trace is drawn once in
+// neutral grey and each band overdrawn in alternating blue/purple, so the un-segmented gaps handle
+// themselves. Without `bands` the render is exactly what it was — the hero and the Start / Whole
+// insets pass nothing and are untouched.
+//
+// 83-03 gilds the breakout band (decided in `lib/cycleBands`; this file only paints it) and drops
+// the old duration-outlier halo entirely.
 
 import { useMemo } from "react";
 
@@ -30,25 +38,17 @@ function buildPath(velocity, idxToX, yOf, i0, i1) {
   return d;
 }
 
-function argmax(velocity, i0, i1) {
-  let bi = -1;
-  let bv = -Infinity;
-  for (let i = i0; i <= i1; i++) {
-    const v = velocity[i];
-    if (v != null && Number.isFinite(v) && v > bv) {
-      bv = v;
-      bi = i;
-    }
-  }
-  return bi;
-}
-
 export default function PhaseVelocity({
   velocity = [],
   fsHz = 100,
   boundaries = null,
   window: win = null,
   variant = "hero",
+  // Phase 83-01 — all optional; null everywhere except the Swimming inset. Aliased on the way in:
+  // `bands` is already taken inside `geom` by the hero's phase-tint rects.
+  bands: cycleBands = null,
+  highlightN = null,
+  onHoverBand = null,
 }) {
   const geom = useMemo(() => {
     const n = velocity.length;
@@ -80,7 +80,6 @@ export default function PhaseVelocity({
     const plotBottom = H - pb;
 
     const d = buildPath(velocity, idxToX, yOf, i0, i1);
-    const peakIdx = argmax(velocity, i0, i1);
 
     // gridlines at integer m/s
     const grid = [];
@@ -123,11 +122,34 @@ export default function PhaseVelocity({
         ? xOfT(boundaries.stroke_start_s)
         : null;
 
+    // Per-cycle segments (83-01). Re-clamped defensively: `buildBands` already clamps to this same
+    // window, but the component must not draw off-plot if a caller ever passes a stale band list.
+    // Each segment reuses `buildPath` — one path builder for the whole component.
+    const segs = [];
+    const edges = [];
+    for (const b of cycleBands ?? []) {
+      const s0 = Math.max(i0, Math.min(i1, b.startIdx));
+      const s1 = Math.max(i0, Math.min(i1, b.endIdx));
+      if (!(s1 > s0)) continue;
+      const xa = idxToX(s0);
+      const xb = idxToX(s1);
+      segs.push({
+        n: b.n,
+        isBreakout: !!b.isBreakout,
+        d: buildPath(velocity, idxToX, yOf, s0, s1),
+        x: xa,
+        w: xb - xa,
+      });
+      edges.push(xa, xb);
+    }
+    const segTicks = [...new Set(edges.map((x) => Math.round(x * 10) / 10))];
+
     return {
       W, H, pl, pr, pt, pb, plotBottom, vmax, xOfT, yOf, idxToX,
-      d, peakIdx, grid, bands, phaseLabels, ticks, surfaced, inset,
+      d, grid, bands, phaseLabels, ticks, surfaced, inset,
+      segs, segTicks,
     };
-  }, [velocity, fsHz, boundaries, win, variant]);
+  }, [velocity, fsHz, boundaries, win, variant, cycleBands]);
 
   if (!geom) {
     return (
@@ -138,13 +160,21 @@ export default function PhaseVelocity({
   }
 
   const g = geom;
+  const banded = g.segs.length > 0;
 
   return (
     <svg
       viewBox={`0 0 ${g.W} ${g.H}`}
       className="block h-auto w-full"
       role="img"
-      aria-label={g.inset ? "Speed during this phase" : "Speed over the whole swim"}
+      aria-label={
+        banded
+          ? `Speed during this phase, coloured one band per cycle (${g.segs.length} bands)`
+          : g.inset
+            ? "Speed during this phase"
+            : "Speed over the whole swim"
+      }
+      onMouseLeave={onHoverBand ? () => onHoverBand(null) : undefined}
     >
       {/* phase tint bands */}
       {g.bands.map((b) => (
@@ -183,25 +213,52 @@ export default function PhaseVelocity({
         </g>
       ))}
 
-      {/* trace */}
+      {/* trace — one continuous line, in the idle grey when bands will overdraw it (83-01). Drawing
+          the whole window first is what makes "grey everywhere outside a cycle" free: the gaps are
+          simply the part nothing paints over. */}
       <path
         d={g.d}
         fill="none"
-        stroke="var(--color-primary)"
+        stroke={banded ? "var(--color-cycle-idle)" : "var(--color-primary)"}
         strokeWidth="2.4"
         strokeLinejoin="round"
         strokeLinecap="round"
       />
 
-      {/* peak dot */}
-      {g.peakIdx >= 0 && (
-        <circle
-          cx={g.idxToX(g.peakIdx)}
-          cy={g.yOf(velocity[g.peakIdx])}
-          r="4"
-          fill="var(--color-primary)"
+      {/* one band per cycle: the breakout in gold, everything else alternating by the cycle's OWN
+          number — so pulling the breakout out of the rotation cannot flip the parity after it */}
+      {g.segs.map((s) => (
+        <path
+          key={`seg-${s.n}`}
+          d={s.d}
+          fill="none"
+          stroke={
+            s.isBreakout
+              ? "var(--color-cycle-breakout)"
+              : s.n % 2
+                ? "var(--color-cycle-a)"
+                : "var(--color-cycle-b)"
+          }
+          strokeWidth={highlightN === s.n ? 3.8 : 2.4}
+          strokeOpacity={highlightN != null && highlightN !== s.n ? 0.45 : 1}
+          strokeLinejoin="round"
+          strokeLinecap="round"
         />
-      )}
+      ))}
+
+      {/* boundary ticks — the colourblind mitigation (83 D6), not decoration: blue and purple
+          differ mainly in the red channel, so bands must stay countable by structure alone. */}
+      {g.segTicks.map((x, i) => (
+        <line
+          key={`tick-${i}`}
+          x1={x}
+          y1={g.plotBottom}
+          x2={x}
+          y2={g.plotBottom - 14}
+          stroke="var(--color-navy)"
+          strokeWidth="1.4"
+        />
+      ))}
 
       {/* Surfaced marker */}
       {g.surfaced != null && (
@@ -261,6 +318,22 @@ export default function PhaseVelocity({
           {p.label}
         </text>
       ))}
+
+      {/* transparent hit targets, last so they sit above everything. The matching mouseleave is on
+          the <svg> itself, so sliding off the chart clears the highlight in one place. */}
+      {onHoverBand &&
+        g.segs.map((s) => (
+          <rect
+            key={`hit-${s.n}`}
+            x={s.x}
+            y={g.pt}
+            width={s.w}
+            height={g.plotBottom - g.pt}
+            fill="transparent"
+            pointerEvents="all"
+            onMouseEnter={() => onHoverBand(s.n)}
+          />
+        ))}
     </svg>
   );
 }

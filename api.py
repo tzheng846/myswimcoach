@@ -212,13 +212,20 @@ async def process_session(
         # go_signal_s is reserved for the future coach "GO" button (D13); no GO signal
         # exists yet on this path. annotation_phases is None by construction — a session
         # being processed for the first time cannot already carry a coach annotation, so
-        # every boundary here resolves from the seed or from a detector.
+        # every boundary here resolves from the seed or from a detector. For the same
+        # reason the cycles handed over are ALWAYS the auto segmenter's, and
+        # segmentation_reliable is whatever metrics.py decided (False on this path), which
+        # is what marks the per-cycle metrics provisional (75-06).
         phases = pm.compute_phases(pm.PhaseContext(
             t=t_dec, vel=vel, dist=dist_dec, accel=accel, fs=actual_fs,
             stroke_type=stroke_type, go_signal_s=None,
             annotation_phases=None,
             seed_phases=annot.build_seed(result, actual_fs)["phases"],
             initial_phase=result.get("initial_phase"),
+            cycles=result.get("cycles"),
+            segmentation_reliable=bool(
+                result["session"].get("segmentation_reliable", False)
+            ),
         ))
 
         # ── Supabase storage + session save ───────────────────────────────
@@ -712,7 +719,7 @@ async def delete_session(
     request: Request,
     _auth=Depends(require_auth),
 ):
-    """Hard-delete a session and its raw CSV in storage. Coach ownership
+    """Hard-delete a session and its raw CSV + video(s) in storage. Coach ownership
     enforced via coach_id. Sessions with null coach_id (legacy) cannot be
     deleted via this endpoint.
     """
@@ -736,18 +743,35 @@ async def delete_session(
     if not coach_row_id:
         raise HTTPException(status_code=403, detail="Coach profile not found")
 
-    # Capture the storage path before the row disappears
+    # Capture storage paths before the row disappears
     raw_csv_path = None
+    video_path = None
     try:
         path_resp = (
             sb_admin.table("sessions")
-            .select("raw_csv_path")
+            .select("raw_csv_path, video_path")
             .eq("id", session_id)
             .eq("coach_id", coach_row_id)
             .single()
             .execute()
         )
-        raw_csv_path = path_resp.data.get("raw_csv_path") if path_resp.data else None
+        if path_resp.data:
+            raw_csv_path = path_resp.data.get("raw_csv_path")
+            video_path = path_resp.data.get("video_path")
+    except Exception:
+        pass
+
+    # session_videos rows cascade-delete with the session (ON DELETE CASCADE), which erases the
+    # only record of their storage_path — so this must be read before the sessions delete fires.
+    external_video_paths = []
+    try:
+        sv_resp = (
+            sb_admin.table("session_videos")
+            .select("storage_path")
+            .eq("session_id", session_id)
+            .execute()
+        )
+        external_video_paths = [row["storage_path"] for row in (sv_resp.data or []) if row.get("storage_path")]
     except Exception:
         pass
 
@@ -759,6 +783,13 @@ async def delete_session(
     if raw_csv_path:
         try:
             sb_admin.storage.from_("raw-csvs").remove([raw_csv_path])
+        except Exception:
+            pass  # non-fatal — row is gone; orphaned file is the pre-fix status quo
+
+    video_paths_to_remove = ([video_path] if video_path else []) + external_video_paths
+    if video_paths_to_remove:
+        try:
+            sb_admin.storage.from_("videos").remove(video_paths_to_remove)
         except Exception:
             pass  # non-fatal — row is gone; orphaned file is the pre-fix status quo
 
@@ -867,8 +898,12 @@ async def put_annotations(
 
     coach_row_id, row = _owned_session(
         sb_admin, request.state.user_id, session_id,
-        "velocity_profile, distance_profile, metrics_json, metrics_json_auto, "
-        "sample_rate_hz, stroke_type",
+        # acceleration_profile is here for the phases rebuild below, not the recompute:
+        # _rebuild_phases tolerates a missing one as "pre-Phase-64 session", so omitting it
+        # would silently null out max_accel / accel_asymmetry / jerk_smoothness on every
+        # annotated session rather than failing loudly.
+        "velocity_profile, distance_profile, acceleration_profile, metrics_json, "
+        "metrics_json_auto, sample_rate_hz, stroke_type",
     )
 
     vel_list = row.get("velocity_profile") or []
@@ -922,7 +957,12 @@ async def put_annotations(
             new_dq["segmentation_reliable"] = True
             new_dq["recomputed_from_annotation"] = True
 
+            # MERGE onto old_mj rather than replacing it (Phase 75-06). Building a fresh
+            # dict here silently dropped `phases` and `go_signal_s`, so annotating a session
+            # — the one action that produces the BEST data for it — wiped its entire
+            # race-phase metric object until someone re-ran tools/backfill_phases.py.
             new_mj = _clean({
+                **old_mj,
                 "session":       result["session"],
                 "cycles":        result["cycles"],
                 # dive/pulldown detection unchanged by recompute — carry the original
@@ -936,6 +976,24 @@ async def put_annotations(
             recomputed = True
         except Exception as e:
             recompute_error = str(e)  # annotation saved; metrics untouched
+
+    # ── refresh metrics_json.phases off the annotation just saved (Phase 75-06) ──
+    # Runs whether or not the cycle recompute above fired: even a phases-only annotation
+    # (boundaries marked, too few stroke marks to form cycles) must re-resolve the four
+    # boundaries as "manual". _rebuild_phases re-reads session_annotations itself, and reads
+    # cycles off the row's metrics_json — which now holds the coach's cycles when the
+    # recompute ran, so the per-cycle metrics pick them up and drop their provisional flag.
+    # Its own write is the last one to land, so it must see the merged metrics_json.
+    phases_error = None
+    try:
+        _rebuild_phases(
+            sb_admin, session_id,
+            {**row, "metrics_json": new_mj if recomputed else (row.get("metrics_json") or {})},
+        )
+    except Exception as e:
+        # Never fail an annotation save over its phase metrics — same contract as the
+        # recompute above. The backfill tool can always re-derive them.
+        phases_error = str(e)
 
     resp = {
         "phases":         record["phases"],
@@ -951,6 +1009,8 @@ async def put_annotations(
     }
     if recompute_error:
         resp["recompute_error"] = recompute_error
+    if phases_error:
+        resp["phases_error"] = phases_error
     return resp
 
 
@@ -1036,12 +1096,20 @@ def _rebuild_phases(sb_admin, session_id: str, row: dict) -> dict:
         pass
 
     old_mj = row.get("metrics_json") or {}
+    # Phase 75-06 — where "annotations first, auto fallback" lands for per-cycle metrics.
+    # No precedence code is needed: PUT /annotations has already replaced metrics_json.cycles
+    # with compute_session_metrics(manual=...) output (and flipped segmentation_reliable) for
+    # any annotated session, so reading the stored values back gives the coach's cycles when
+    # they exist and the segmenter's otherwise.
+    old_dq = old_mj.get("data_quality") or {}
     ctx = pm.PhaseContext(
         t=t_arr, vel=vel_arr, dist=dist_arr, accel=accel_arr, fs=fs,
         stroke_type=row.get("stroke_type"), go_signal_s=old_mj.get("go_signal_s"),
         annotation_phases=ann_phases,
         seed_phases=annot.build_seed(old_mj, fs)["phases"],
         initial_phase=old_mj.get("initial_phase"),
+        cycles=old_mj.get("cycles"),
+        segmentation_reliable=bool(old_dq.get("segmentation_reliable", False)),
     )
     phases = pm.compute_phases(ctx)
     new_mj = _clean({**old_mj, "phases": phases})

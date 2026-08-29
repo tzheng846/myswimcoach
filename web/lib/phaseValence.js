@@ -37,20 +37,34 @@ export const DIRECTION_OF_GOOD = {
   first_kick_impulse: "up",
   pulldown_peak_vel: "up",
   pulldown_duration: "neutral",
-  // Swim — pre-filled for when these metrics ship (STATE item 7)
+  // Swim (Phase 75-06). `splits` is one key per 5 m segment rather than one list-valued key,
+  // because the baseline engine looks a metric up by key across the athlete's past sessions —
+  // see phaseBaseline.js. Faster on any given split is better.
   ivv: "down",
   breakout_vel: "up",
   breakout_vel_loss: "down",
   breakout_vs_steady: "neutral",
-  splits: "up",
+  splits_5m: "up",
+  splits_10m: "up",
+  splits_15m: "up",
+  splits_20m: "up",
+  splits_25m: "up",
   sr_dps_coupling: "neutral",
   dead_spot_timing: "neutral",
   accel_asymmetry: "neutral",
-  breathing_dip: "down",
-  // Whole race
-  phase_time_budget: "neutral",
-  phase_dist_budget: "neutral",
-  vel_envelope: "neutral",
+  // Whole race (Phase 75-06). Budgets stay neutral — how a race SHOULD be divided between
+  // start, underwater and swimming is a race-plan call, not something a threshold can judge.
+  // Peak speed within a phase is the one whole-race family with a clear direction.
+  phase_time_budget_start: "neutral",
+  phase_time_budget_underwater: "neutral",
+  phase_time_budget_swim: "neutral",
+  phase_dist_budget_start: "neutral",
+  phase_dist_budget_underwater: "neutral",
+  phase_dist_budget_swim: "neutral",
+  vel_envelope_start: "up",
+  vel_envelope_underwater: "up",
+  vel_envelope_swim: "up",
+  vel_envelope_overall: "up",
   jerk_smoothness: "down",
 };
 

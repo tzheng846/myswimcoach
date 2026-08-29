@@ -93,6 +93,18 @@ Swim academies and competitive programs. Coach or operator runs the device; swim
 
 - No Mac: iOS builds via Expo EAS Build (cloud Mac infra)
 - No video: encoder is the permanent primary sensor
+- **The tether measures the WAIST, not the fingertips (2026-08-28).** The line is strapped to the
+  swimmer's waist, so recorded distance is always **~1 m short of the wall-to-wall distance** — the
+  gap is the swimmer's outstretched arm plus torso. A 25-yard trial (22.86 m) therefore tops out
+  near **21.9 m of tether travel**, and every distance-anchored metric is offset by that constant.
+  Two consequences that are easy to misread as bugs: a "25 m" split can essentially never fill on a
+  25-yard swim, and total distance will always undershoot the nominal lap. This is a property of the
+  apparatus, not a calibration error — do not "fix" it by scaling distance.
+- **`finish_s` legitimately precedes velocity reaching zero (2026-08-28).** After the hand touches
+  the wall the swimmer keeps drifting into it — bending the elbows, coasting the last body-length —
+  so the tether keeps paying out after the race is over. The finish mark belongs at the touch, not
+  at the end of motion. Any detector or annotation convention that waits for stillness will land
+  late by design; the trailing drift is real signal that is not part of the swim.
 - Python backend must be preserved: vel_acc_extraction.py + metrics.py + coach.py are not rewritten
 - ~~Breaststroke only for V1~~ — **relaxed 2026-08-05** (Phases 54-01 + 55-01). All four strokes now
   render analytics in the app and on the web. Breaststroke remains the only stroke with data behind

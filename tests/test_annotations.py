@@ -407,6 +407,29 @@ RECOMPUTE_DOC = {
 }
 
 
+def _session_updates(admin):
+    """Every payload written to `sessions`, in order.
+
+    PUT /annotations now issues TWO writes (Phase 75-06): the cycle recompute, then the
+    phases rebuild. Tests must therefore pick the write they mean instead of reading
+    `update.call_args`, which is only ever the LAST one.
+    """
+    return [c[0][0] for c in admin._tables["sessions"].update.call_args_list]
+
+
+def _recompute_update(admin):
+    """The cycle-recompute write, or None when no recompute happened.
+
+    PUT /annotations issues at most two writes, in a fixed order (Phase 75-06): the cycle
+    recompute (only when the annotation yields cycles), then the phases rebuild (always
+    attempted). Since the rebuild MERGES onto the stored metrics_json, both payloads carry
+    a full one — cycles and session included — so they are told apart by position, not by
+    content.
+    """
+    writes = _session_updates(admin)
+    return writes[0] if len(writes) >= 2 else None
+
+
 class TestRecomputeOnSave:
     def test_recompute_overwrites_and_backs_up_once(self, api_client, monkeypatch):
         import api
@@ -416,8 +439,8 @@ class TestRecomputeOnSave:
                               headers=AUTH)
         assert resp.status_code == 200, resp.text
         assert resp.json()["recomputed"] is True
-        updates = admin._tables["sessions"].update.call_args[0][0]
-        assert "metrics_json" in updates
+        updates = _recompute_update(admin)
+        assert updates is not None and "metrics_json" in updates
         assert updates["metrics_json_auto"] == METRICS_JSON  # once-only backup
         new_mj = updates["metrics_json"]
         # Recomputed from the human boundaries
@@ -441,8 +464,8 @@ class TestRecomputeOnSave:
         resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
                               headers=AUTH)
         assert resp.json()["recomputed"] is True
-        updates = admin._tables["sessions"].update.call_args[0][0]
-        assert "metrics_json" in updates
+        updates = _recompute_update(admin)
+        assert updates is not None and "metrics_json" in updates
         assert "metrics_json_auto" not in updates  # backup preserved
 
     def test_too_few_boundaries_saves_without_recompute(self, api_client, monkeypatch):
@@ -456,7 +479,13 @@ class TestRecomputeOnSave:
         assert resp.status_code == 200, resp.text
         assert resp.json()["recomputed"] is False
         admin._tables["session_annotations"].upsert.assert_called_once()
-        admin._tables["sessions"].update.assert_not_called()
+        # No CYCLE recompute — but the phases rebuild still runs (Phase 75-06), because a
+        # boundaries-only annotation must still promote those boundaries to source="manual".
+        # It was previously asserted that nothing was written at all.
+        assert _recompute_update(admin) is None
+        writes = _session_updates(admin)
+        assert len(writes) == 1 and "phases" in writes[0]["metrics_json"]
+        assert all("metrics_json_auto" not in w for w in writes)
 
     def test_recompute_failure_keeps_annotation(self, api_client, monkeypatch):
         import api
@@ -471,6 +500,75 @@ class TestRecomputeOnSave:
         assert "recompute_error" in body
         admin._tables["session_annotations"].upsert.assert_called_once()
         admin._tables["sessions"].update.assert_not_called()
+
+
+class TestPhasesSurviveAnnotation:
+    """Phase 75-06 AC-3. Saving an annotation used to rebuild metrics_json as a fresh
+    4-key dict, silently deleting `phases` and `go_signal_s`. Annotated sessions — the ones
+    with the best ground truth — were therefore the ONLY ones with no race-phase metrics."""
+
+    ROW = {
+        **SESSION_ROW,
+        "metrics_json": {
+            **METRICS_JSON,
+            "go_signal_s": 2.5,
+            "phases": {"schema_version": 3, "start": {}, "underwater": {},
+                       "swim": {}, "whole": {}},
+        },
+    }
+
+    def _phases_write(self, admin):
+        """The last write's phases object — the rebuild lands after the recompute."""
+        return _session_updates(admin)[-1]["metrics_json"]
+
+    def test_go_signal_and_phases_are_not_dropped(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin(session_row=self.ROW)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        recompute_mj = _recompute_update(admin)["metrics_json"]
+        assert recompute_mj["go_signal_s"] == pytest.approx(2.5)
+        assert "phases" in recompute_mj
+
+    def test_phases_are_rebuilt_from_the_manual_boundaries(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin(session_row=self.ROW, annotation_row=RECOMPUTE_DOC)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        phases = self._phases_write(admin)["phases"]
+        sources = phases["boundaries"]["sources"]
+        assert sources["dive_start_s"] == "manual"
+        assert sources["stroke_start_s"] == "manual"
+        assert phases["boundaries"]["finish_s"] == pytest.approx(9.4)
+
+    def test_per_cycle_metrics_lose_provisional_once_annotated(self, api_client, monkeypatch):
+        """The whole point of annotations-first: the coach's cycles are trusted cycles."""
+        import api
+        admin = _annot_admin(session_row=self.ROW, annotation_row=RECOMPUTE_DOC)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC, headers=AUTH)
+        swim = self._phases_write(admin)["phases"]["swim"]
+        assert swim["dead_spot_timing"]["provisional"] is False
+        assert swim["sr_dps_coupling"]["provisional"] is False
+
+    def test_rebuild_failure_never_loses_the_annotation(self, api_client, monkeypatch):
+        import api
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("phases exploded")
+
+        admin = _annot_admin(session_row=self.ROW)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        monkeypatch.setattr(api, "_rebuild_phases", _boom)
+        resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["phases_error"] == "phases exploded"
+        admin._tables["session_annotations"].upsert.assert_called_once()
 
 
 class TestDeleteRestoresAuto:

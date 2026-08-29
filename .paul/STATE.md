@@ -8,6 +8,158 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
+- **Phase 75-06** (Swim + Whole metric batch) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-28**
+  (loop: PLAN ✓ → APPLY ✓ → UNIFY ✓). ⚠ **UNCOMMITTED — see the working-tree note below.**
+  **The race-phase registry is now complete** (37 → **47 specs**; `streamline_drag` is the only
+  `planned` one left). 23 Swim + Whole metrics implemented and rendered as the report card's last two
+  sections; the two `<ComingSoon>` stubs are gone. Suite **485 green** (+38); web build clean.
+  **User rule that shaped it:** *prioritize existing annotations first, then fall back to auto
+  segmentation* — boundary-level precedence already existed (`resolve_boundaries`: manual > detected >
+  auto), so the new work was **per-cycle**: `PhaseContext.cycles` + `segmentation_reliable`, plus a
+  `needs_cycles` spec flag that becomes an emitted **`provisional`** (schema_version 2 → **3**), which
+  the UI renders with valence forced neutral. **Verified on the live library: `dead_spot_timing` =
+  43 TRUSTED (coach cycles) / 44 provisional**, exactly matching the 43 annotated sessions.
+  ✅ **Backfill applied (user-run, twice):** 99 sessions, all schema_version 3, **0 stale keys** — this
+  also closed the never-run **75-04 Start backfill** (Start now 95–97/99). Decisions: D7 vector metrics
+  → **N scalar specs**, never list-valued (`phaseBaseline` looks up by key across history, so list
+  indices would misalign); D11 **`breathing_dip` DELETED**, not deferred — a 1-D axial encoder cannot
+  observe breaths. ⚠ **AC-7 human-verify NOT run** (portal is Supabase-auth-gated) — owed, same posture
+  as 81-01; includes judging the ~23-row panel length.
+  See [75-06-SUMMARY.md](phases/75-report-card-phase-model/75-06-SUMMARY.md) ·
+  [75-06-CONTEXT.md](phases/75-report-card-phase-model/75-06-CONTEXT.md) ·
+  [75-06-PLAN.md](phases/75-report-card-phase-model/75-06-PLAN.md).
+  **New owed items from this plan → 13–16 below.**
+- **Phase 83-01** (Per-cycle trace coloring — cycles half) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-28,
+  AC-7 approved.** Loop: `PLAN ✓ → APPLY ✓ → UNIFY ✓`. **Frontend only, zero Python — suite still 485 green.** The
+  Swimming-section inset now draws one alternating blue/purple band per `metrics_json.cycles` entry over
+  a neutral-grey base, a boundary tick at every edge, an amber halo on the duration-outlier cycle, a
+  `N cycles · annotated|auto` badge, a per-band hover readout, and bidirectional cross-highlight with the
+  four `CycleCharts` panels. Annotations-first needed **no precedence code** — `PUT /annotations` already
+  replaces `metrics_json.cycles` with the coach's, so reading the stored array *is* the precedence.
+  New pure `web/lib/cycleBands.js` is shape-agnostic and **83-02 reuses it for kicks unmodified**
+  (verified: a `{kick_num, interval_s}` fixture bands + flags correctly via `durationKey`).
+  **Unlike 75-06 and 81-01, the human-verify WAS run** — user approved on the live portal 2026-08-28.
+  ⚠ **Two silent-failure bugs found during verification, both fixed — both matter to 83-02:**
+  (1) `PhaseVelocity`'s new `bands` prop was **shadowed** by the hero variant's existing phase-tint local
+  inside `geom`, so the prop was never read (now aliased `cycleBands`); (2) **Tailwind v4 tree-shakes
+  `@theme` tokens that no utility class references** — the three new colours are read only as raw `var()`
+  in an SVG `stroke`, so they compiled away and every band rendered `stroke: none`, i.e. invisible. The
+  block is now **`@theme static`** ([globals.css](../web/app/globals.css)); any future token consumed only
+  via `var()` needs the same. Neither bug is visible to `next build` or `eslint` — only to a render check.
+  Deviations from PLAN: `web/app/app/sessions/[id]/page.js` joined `files_modified` (plan-sanctioned —
+  `segmentationReliable` threaded explicitly, never inferred from an annotation row); `@theme static`
+  rather than a plain block; the hover readout **replaces** the inset caption instead of adding a line
+  beneath it, so the four charts don't shift down mid-gesture; badge pluralises (`1 cycle`).
+  ⚠ **Stacks on the 75-06 tree, which is loop-closed but still UNCOMMITTED** (D11) — base verified
+  **485 passing** 2026-08-28. The web-side diff is now 75-06 + 83-01 mixed in `PhaseReportCard.js`, and
+  `web/lib/phaseValence.js` is 75-06's alone — same hunk-staging problem as `api.py`, one more reason the
+  next commit takes the whole tree.
+  ⚠ **Phase 83 itself stays 🚧 — NOT transitioned, NO phase commit.** 83-01 is 1 of 2 plans; the
+  plan-count heuristic would have called the phase done, but 83-02 is the kicks half.
+  See [83-01-SUMMARY.md](phases/83-per-cycle-trace-coloring/83-01-SUMMARY.md) ·
+  [83/CONTEXT.md](phases/83-per-cycle-trace-coloring/CONTEXT.md) ·
+  [83-01-PLAN.md](phases/83-per-cycle-trace-coloring/83-01-PLAN.md).
+- **Phase 83-02** (Per-cycle trace coloring — kicks half) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-28,
+  apply outcome approved.** Loop: `PLAN ✓ → APPLY ✓ → UNIFY ✓`. **Backend + frontend.** New pure
+  `metrics.segment_kick_bands` splits trough-to-trough at the plain argmin between consecutive detected
+  peaks (**no new tuning constant**, D4); `compute_phases` emits **`phases.kick_bands`** beside
+  `boundaries`; `SCHEMA_VERSION` **3 → 4**; the Underwater inset renders it through 83-01's `buildBands`
+  and `PhaseVelocity` with **zero configuration** (`duration_s` was chosen so the default `durationKey`
+  applies). Badge reads `N kicks · auto` — kicks are **auto-only**, no reliability half, until 81-02 ships
+  a coach kick-marking path. Breaststroke gated off (`pulldown · not kicks`). Suite **485 → 497 green**
+  (+12); web build clean, 19 pages.
+  ⚠ **CONTEXT D5 REVERSED at the decision checkpoint** — bands live **inside `phases`**, not at top-level
+  `metrics_json.kicks`. D5's premise ("`phases` is a pure metrics-registry payload") is factually
+  incomplete: `phases` already carries `schema_version`, `go_signal_s`, `boundaries`. A top-level key
+  needs writes at **all three** `PhaseContext` sites — the exact bug 75-06 shipped — and `PUT /annotations`
+  would carry it forward **stale** against a window the coach just replaced. Inside `phases` it re-derives
+  with the boundaries and cannot go stale. Cost: kicks read from `phases.kick_bands` while cycles come from
+  `metrics.cycles`; **81-02 may want a coach-writable kick array outside the derived object.**
+  ✅ **Backfill applied (user-run), verified against STORED state** — 99/99 sessions at `schema_version` 4,
+  **0** missing the key, **63 of 81 non-breaststroke carry bands** (84/99 have a resolvable underwater
+  window — matches item 14). `tools/backfill_phases.py` gained a `with_kick_bands` counter because AC-7
+  requires the run to make a zero *visible*; it had none.
+  ⚠ **Two deviations worth carrying forward:** (1) **AC-5 failed by the letter** — `web/lib/cycleBands.js`
+  is genuinely untouched, but **`PhaseVelocity.js` was modified**: the user directed removal of the
+  **peak dot** from the hero chart and all four insets mid-verify (its `argmax` helper deleted as an
+  orphan). (2) Tasks 2–3 were found **already applied** in the tree from a cut-off prior session, and
+  Task 4 was **half**-applied — the `kickBands`/`hoverKick` memos existed but nothing in the render read
+  them, so no band was ever drawn; only the render wiring was written this session.
+  ⚠ **`web/lib/cycleBands.js:9` now carries a false comment** (says 83-02 passes `metrics_json.kicks`
+  through it) — left alone under the DO-NOT-CHANGE boundary; **83-03 fixes it**, since it edits that file.
+  ⚠ **Phase 83 still 🚧 — NOT transitioned, NO phase commit.** Plan/summary counts are now equal (2/2),
+  which is exactly the heuristic that would wrongly call the phase done — same trap as 83-01. **83-03 is
+  next.**
+  See [83-02-SUMMARY.md](phases/83-per-cycle-trace-coloring/83-02-SUMMARY.md) ·
+  [83-02-PLAN.md](phases/83-per-cycle-trace-coloring/83-02-PLAN.md).
+- **Phase 83-03** (Breakout band + shape-anomaly investigation) — **✅ LOOP CLOSED
+  (PLAN→APPLY→UNIFY) 2026-08-29.** Loop: `PLAN ✓ → APPLY ✓ → UNIFY ✓`. AC-8 approved on the
+  SECOND attempt — the first verify was **RETRACTED** by the user. Frontend only; no Python, no
+  schema change.
+  ⚠ **The plan's central feature was CUT on evidence.** A read-only probe over the stored library
+  (90 usable sessions / 618 cycles, `scratch/shape_viability_probe.py` + `shape_sweep_probe.py`)
+  measured the shipped MAD gate: it fired on **75% of sessions at k=3.0** (15.5% of all bands) and
+  still **39% at an absurd k=8.0**. There is no k where a clean swim is quiet and a ragged one is
+  not. Cause = **sample size**: a lap holds a **median of 7 cycles**, so the MAD is small and
+  unstable — a within-lap outlier test on n=7 is not an abnormality test. Dropping cycle 1 helps
+  marginally (67% → 55% at k=4.0) and costs 10 sessions their eligibility. This also contradicts the
+  product's own SPC doctrine (baseline from HISTORY, not from within the sample).
+  **→ `web/lib/cycleShape.js` is kept but PARKED and unwired**, with the numbers in its header; the
+  red anomaly colour, halo, `anomalies` plumbing and flag hover copy are all removed. **New owed
+  item 17.**
+  ✅ **What DID ship — the breakout gold, now on measured ground.** The user's annotation convention
+  (recorded 2026-08-29, see below) makes the Swimming inset's grey lead-in **structural**:
+  `stroke_start_s` is the coach's **streamline-break** mark while `stroke_marks_s[0]` is the first
+  hand **returning overhead**, so the breakout pull itself lies between them and belongs to no cycle
+  (freestyle `k=2`, cycles = `marks[0::2]`). Measured: on all **43 annotated** sessions that gap is
+  **positive**, median **1.04 s** (0.08–1.63) — never negative. `buildBands({breakoutFirst})` inserts a
+  **SYNTHETIC `n: 0` band** spanning `i0` → the lowest-n cycle's start, painted `--color-cycle-breakout`
+  gold. ⚠ **Corrected mid-verify:** the first re-cut *merged* the pull into cycle 1 (gold = streamline
+  break → end of cycle 1) and the user rejected it — **"gold is two strokes instead of one"**. The
+  breakout is ONE stroke; cycle 1 keeps its own colour. **No gap ⇒ no gold band** (never invent a
+  zero-width stroke). `n: 0` is outside CycleCharts' keyspace, so hovering it highlights nothing there —
+  correct, it has no row. Badge counts non-breakout bands so "5 cycles" stays 5.
+  ⚠ **Gold is gated on `segmentationReliable`** — on **AUTO** sessions cycle 1 is NOT the breakout:
+  **28 of 47** start BEFORE `stroke_start_s`, worst **−12.9 s**. Auto sessions keep the grey.
+  Verified: `scratch/shape_checks.mjs` **15/15**, `next build` clean 19 pages, eslint clean apart
+  from the pre-existing `set-state-in-effect`, **no Python touched**, suite **497**. Production CSS
+  greps confirm `--color-cycle-breakout` survives tree-shaking and `--color-cycle-anomaly` is gone.
+  ⚠ The retracted verify's other two complaints — the pink halo and the ambiguous shape-vs-duration
+  hover copy — were **dissolved** by cutting the flag, not fixed.
+  ⚠ **Process lesson recorded:** `k = 3.0` was justified in the PLAN by Gaussian reasoning that needs
+  dozens of samples; **the cycle count was never checked before the gate was written.** Measure a
+  threshold's fire rate on real data before shipping it.
+  ⚠ **`annotations.py:25` is WRONG about the breakout** — it says "THE FIRST STROKE CYCLE CONTAINS THE
+  BREAKOUT", but under the coach's marking convention the pull sits AHEAD of cycle 1. Left alone
+  (Python boundary); owed a future correction, and anything reasoning from that docstring is suspect.
+  ⚠ Also fixed `cycleBands.js:9`'s false `metrics_json.kicks` comment (owed from 83-02).
+  ⚠ **Phase 83 stays 🚧 — NOT transitioned, NO phase commit.** PLAN/SUMMARY counts are now 3/3, the
+  exact heuristic that would wrongly call the phase done — the same trap flagged at 83-01 and 83-02.
+  **83-04 has no PLAN yet.**
+  See [83-03-SUMMARY.md](phases/83-per-cycle-trace-coloring/83-03-SUMMARY.md) ·
+  [83-03-PLAN.md](phases/83-per-cycle-trace-coloring/83-03-PLAN.md) — ⚠ the PLAN's AC-1/2/4/5/6
+  describe the CUT feature and no longer match the tree; read the SUMMARY, not the PLAN.
+- **Phase 83-04** (inset window framing) — **📋 dropped out of 83-03 when option B was chosen; not yet
+  planned.** Two usability findings from 83-02's verify, both confirmed against the code:
+  (1) **a single-dolphin-kick underwater stretches ~0.5 s across the full chart width** — there is no
+  minimum span; (2) **every inset hard-clips to its own phase**
+  ([PhaseVelocity.js:67](../web/components/portal/phases/PhaseVelocity.js)) — the grey the user read as
+  out-of-phase context is actually the band **base trace** showing un-segmented time *inside* the
+  window, so context padding is genuinely **new behaviour, not a consistency fix**. Scope: pad
+  Start/Underwater/Swimming past their boundaries with the extension drawn grey, plus a minimum span in
+  **seconds** (never samples — the rate is per-session, ~89.5 Hz typical). Bands must keep clamping to
+  the **phase** window, not the padded one. Whole-race inset is already the full trace ⇒ no-op there.
+- **Phase 82** (Storage Quota Cleanup) — **🚧 PLAN created 2026-08-27, awaiting APPLY.** Supabase free
+  tier is over quota (2.53 GB vs 1 GB cap; new uploads may already be blocked). Two leak sources found
+  in `DELETE /sessions/{id}`: `video_path` never removed from the `videos` bucket, and `session_videos`
+  externals `ON DELETE CASCADE` at the DB level without their storage objects being removed — together
+  716 MB (28%) of the 2.5 GB video bucket is orphaned. Confirmed exhaustive against `live_schema.json`
+  (only these two tables reference `session_id`). Plan: fix both leak sources in `api.py` + tests, ship
+  a dry-run-by-default `tools/cleanup_orphan_videos.py`, then a human-action checkpoint to actually run
+  `--apply` and reclaim the space. User separately decided to close the remaining ~800 MB gap by
+  upgrading to Supabase Pro ($25/mo, out-of-band billing action) rather than compressing/deleting
+  ground-truth video. See [82-CONTEXT.md](phases/82-storage-quota-cleanup/CONTEXT.md) ·
+  [82-01-PLAN.md](phases/82-storage-quota-cleanup/82-01-PLAN.md).
 - **Arc:** Race-phase report-card model (Phases 75–77) — segment the 4 phase boundaries, then compute
   per-phase metrics, then build the UI.
 - **Phase 77** (fly breakout) — closed + committed (`d6e00c8`, `0ff29e7`).
@@ -75,13 +227,21 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
   (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
   item 9 (annotate the backlog fast).
-- **Working tree — segmentation arc + 75-05/75-07 UI + 81-01 committed.** 75-03 = `7035157`, Phase 79 =
-  `e1934ba`, Phase 78 + doc reconciliation = `76d2a18`, **75-05 report-card UI = `9dd5f7a`**, **75-07
-  report-card merge = `040ce0d`**, **81-01 annotate marking = `a73db03`** (frontend only; `.claude/launch.json`
-  is gitignored, stays local). Stored library **backfilled 2026-08-21** (`tools/backfill_phases.py --apply`):
-  all four boundaries re-resolved from live detectors. Dirty files left uncommitted belong to **other
-  streams:** `ESP_32_V5/ESP_32_V5.ino` (firmware), `.gitignore`, `assets/icon/`, `scratch/`,
-  `segmenter_report.json`, the untracked Phase-80 dir, and the 75-04/75-06 discovery docs.
+- **⚠ Working tree — 75-06 and 82-01 are BOTH uncommitted, and they SHARE `api.py`.** This is the one
+  thing to resolve before the next commit. `api.py` + `tests/test_api.py` carry **82-01's**
+  session-delete storage cleanup (applied, never committed); `api.py` *also* carries **75-06's** cycle
+  threading + the `PUT /annotations` phases repair. Committing either plan cleanly needs hunk-level
+  staging (`git add -p`), which is unavailable in this environment — so **nothing from 75-06 was
+  committed.** 75-06's own files: `phase_metrics.py`, `tools/backfill_phases.py`,
+  `web/components/portal/phases/PhaseReportCard.js`, `web/lib/phaseValence.js`,
+  `tests/test_phase_metrics.py`, `tests/test_annotations.py`, `PIPELINE.md`, `.paul/PROJECT.md`.
+- **Committed history:** 75-03 = `7035157`, Phase 79 = `e1934ba`, Phase 78 + doc reconciliation =
+  `76d2a18`, **75-05 report-card UI = `9dd5f7a`**, **75-07 report-card merge = `040ce0d`**, **81-01
+  annotate marking = `a73db03`** (frontend only; `.claude/launch.json` is gitignored, stays local).
+  Stored library backfilled 2026-08-21 (all four boundaries) and again **2026-08-28** (75-06 metrics +
+  the 75-04 Start metrics). Other dirty files belong to **other streams:** `ESP_32_V5/ESP_32_V5.ino`
+  (firmware), `.gitignore`, `assets/icon/`, `scratch/`, `segmenter_report.json`, the untracked Phase-80
+  dir, and the 75-04/75-06 discovery docs.
 
 ## Segmentation status — the 4 phase boundaries
 Mechanisms in [PIPELINE.md §3](../PIPELINE.md).
@@ -140,10 +300,12 @@ claim that `backfill_phases.py --apply` refreshes 76/77's `stroke_start` was **w
 live detectors. **Ran 2026-08-21** — comparability break landed across the library (dive_start +
 all-four-boundary refresh in one pass). Standing pattern (57 / 59-03 / 61-01 / 65 / 79).
 
-**7. Remaining Step-2 metrics** ([phase_metrics.REGISTRY](../phase_metrics.py)):
-Start ✅ **DONE (75-04)** — 10/11 implemented; `streamline_drag` deferred; `reaction_time` via
-`PUT /sessions/{id}/go-signal` (phone↔encoder clock sync + GO-button UI still deferred). ⚠ backfill owed.
-**Swim (9 — IVV, breakout velocity, splits, dead-spot; mostly cheap) and Whole race (4) remain — next batches.**
+**7. ✅ RESOLVED + CLOSED (75-06, 2026-08-28). → [75-06-SUMMARY.md](phases/75-report-card-phase-model/75-06-SUMMARY.md).**
+The Step-2 metric registry is **complete**: Start 10/11 (75-04) + Underwater 13/13 (75-02/03) +
+**Swim 12/12 and Whole 11/11 (75-06)** = 46 of 47 specs implemented; `streamline_drag` is the only
+one still `planned`. Backfill applied — Start 95–97/99, Swim window 97/99, Whole 84–98/99.
+⚠ `reaction_time` is **0/99 and cannot fill**: the `PUT /sessions/{id}/go-signal` endpoint shipped in
+75-04 but the coach **GO button never did**, so no session has a GO time (item 15).
 
 **8. Step-3 UI.** Phase-organized web report card (Dive/Push-off / Underwater / Swim), then iOS.
 Display doctrine = within-athlete contrast, **no absolute thresholds**. Design docs:
@@ -189,7 +351,38 @@ AlexGroup/Tate). Stop claiming "back" in Phase 76's "free/**back**" until at lea
 breakout as "generalises."
 
 **12. ⚠ `finish_s` is the weakest phase marker (MAE 2.76 s, worst 6.43 s) — Phase 78.** Inherited from
-`detect_swim_window`; no phase has ever owned tuning it. Candidate for a dedicated pass.
+`detect_swim_window`; no phase has ever owned tuning it. Candidate for a dedicated pass. ⚠ Note the
+2026-08-28 domain fact (PIPELINE.md): the mark **belongs before velocity reaches zero** — swimmers
+drift into the wall after touching — so any retune must not chase stillness.
+
+**13. ⚠ 75-06 AC-7 human-verify OWED.** The four phase sections have never been looked at on a live
+session (portal is Supabase-auth-gated). Specifically owed: confirm no "coming soon" remains, hover
+shows window provenance + the provisional note, provisional rows are not colored, and — the one thing
+deliberately left to the user's eye — **judge whether ~23 new rows need grouping or collapse.**
+
+**14. ⚠ ~15 sessions have an UNRESOLVABLE underwater window.** Every underwater-dependent metric
+ceilings at 84/99 (`uw_*`, `breakout_vel_loss`, `phase_*_budget_underwater`, `vel_envelope_underwater`).
+This is why a coach can open a session and find the whole Underwater panel blank with no inset chart.
+Pre-existing (not caused by 75-06) and never diagnosed. Candidate for its own pass alongside item 12.
+
+**15. `reaction_time` cannot fill until the coach GO button ships.** Backend done in 75-04
+(`PUT /sessions/{id}/go-signal`); no UI writes to it, so 0/99 sessions carry a GO time. Also needs the
+phone↔encoder clock sync that 75-04 deferred.
+
+**16. ❓ Are 5/10/15/20/25 m the right split points?** `splits_25m` fills on **2 of 99** sessions —
+structurally, not by failure: the tether is waist-mounted, so a 25-yard lap (22.86 m) records only
+~21.9 m of travel (PIPELINE.md). `splits_20m` is 56/99. Options: drop the 25 m split, move to four
+splits, or re-anchor to yardage. **Not changed unilaterally — user decision.**
+
+**17. Shape-anomaly detection needs a CROSS-SESSION baseline (83-03 finding, measured).** Per-lap
+self-comparison is dead: median 7 cycles/lap makes the MAD gate fire on 75% of sessions at k=3.0 and
+39% at k=8.0 — no usable threshold exists. The algorithm in `web/lib/cycleShape.js` is correct and
+duration-invariant (12/12 scratch checks); only its **reference population** was wrong. The fix is to
+build the median profile from the athlete's **last N same-stroke SESSIONS** — the same within-athlete
+contrast `web/lib/phaseBaseline.js` already uses for every metric strip, and the SPC posture the
+product doctrine asks for. Needs prior sessions' velocity arrays reachable from the browser, so it is
+a **backend/data question, not a frontend one**. Probes: `scratch/shape_viability_probe.py`,
+`scratch/shape_sweep_probe.py` (read-only, re-runnable).
 
 ## Recent arc (compressed)
 - **75-01** skeleton — `MetricSpec` registry (37 specs) + `metrics_json.phases` jsonb + `POST /sessions/{id}/recompute` backfill seam.
@@ -202,6 +395,25 @@ breakout as "generalises."
 - **79** — `dive_start` redefined to foot-of-surge (`detect_dive_start`, X=2.0); MAE 0.72 s → 0.15 s.
 - **75-04** (closed 2026-08-21) — 10 Start metrics (peak/time-to-peak/max-accel, dive duration, 4 glide,
   break-into-kick, reaction_time) + `PUT /sessions/{id}/go-signal`; `streamline_drag` deferred. Suite 443.
+- **83-02** (closed 2026-08-28) — Underwater inset draws one band per detected downkick. `phases.kick_bands`
+  (schema 4) trough-to-trough, no new constant; reuses 83-01's lib unmodified; breaststroke gated off;
+  63/81 non-breaststroke backfilled. D5 reversed: bands ride inside `phases` so all three write sites get
+  them from one change and they cannot go stale against an annotated window. Peak dot removed everywhere.
+- **83-01** (closed 2026-08-28) — Swimming inset draws one alternating blue/purple band per stored cycle
+  over grey, + ticks, amber outlier halo, annotated-vs-auto badge, hover readout, bidirectional highlight
+  with `CycleCharts`. New pure `web/lib/cycleBands.js` (83-02 reuses it for kicks unmodified). Two
+  silent-failure bugs caught only by a render check: a shadowed prop, and Tailwind v4 tree-shaking
+  `@theme` tokens read only via `var()` (→ `@theme static`).
+- **75-06** (closed 2026-08-28) — 23 Swim + Whole metrics; registry complete at 46/47. `PhaseContext.cycles`
+  + `provisional` flag (schema 3) = annotations-first for per-cycle metrics (43 trusted / 44 provisional
+  live). Fixed `PUT /annotations` destroying `phases`, and a THIRD `PhaseContext` site in
+  `tools/backfill_phases.py` that had left both per-cycle metrics 0/99. Suite 485.
+
+- **83-03** (closed 2026-08-29) — Gold breakout band = the coach's streamline-break mark → their first
+  stroke mark, a SYNTHETIC `n: 0` band, annotated sessions only. **The plan's shape-anomaly flag was
+  MEASURED AND CUT**: at 7 cycles a lap the MAD gate fired on 75% of sessions (k=3.0) and 39% at k=8.0
+  — no threshold separates clean from ragged. `web/lib/cycleShape.js` parked unwired; fix needs a
+  cross-session baseline (item 17). First human-verify retracted; gold re-cut twice.
 
 ## Pointers
 - **How it works:** [PIPELINE.md](../PIPELINE.md) — signal, phase model, detectors, metrics registry

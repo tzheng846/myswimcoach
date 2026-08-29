@@ -10,6 +10,13 @@ The sensor is one **1-D axial trace**: an AS5600 encoder on a tethered wheel log
 There is no pose, no depth, no per-limb signal — metrics that need those are out of reach and are
 not faked.
 
+> **The tether is on the WAIST, so `dist_m` is ~1 m short of the wall-to-wall distance.** The gap is
+> the swimmer's outstretched arm plus torso: when the hand touches, the waist is still about a metre
+> out. A 25-yard trial (22.86 m) tops out near **21.9 m of tether travel**. This is apparatus
+> geometry, not miscalibration — never scale `dist_m` to "correct" it. It is why a 25 m split
+> essentially never fills on a 25-yard swim, and why total distance always undershoots the nominal
+> lap. `WHEEL_DIAMETER_M` calibrates counts→metres of *line paid out*, and is a separate concern.
+
 ---
 
 ## 1. Signal extraction — `vel_acc_extraction.py`
@@ -75,6 +82,14 @@ the caller keeps the incumbent boundary rather than shipping a confident wrong o
 | `underwater_start_s` ("dolphin-kick start") | **`detect_underwater_start`** (75-02) | from `baseline_end`, the start-surge peak within 4 s, then the **first velocity trough** with prominence ≥ `0.40 × v95` | median **0.13 s** vs 38 marks; answers 102/108 |
 | `stroke_start_s` = **breakout** | `detect_swim_boundaries` → per-stroke, 3 mechanisms ↓ | | |
 | `finish_s` | `detect_swim_boundaries` (= `detect_swim_window` end) | rhythm-based (CWT ridge); end of cyclic stroking | inherited (Phase 59/65) |
+
+> **`finish_s` belongs at the touch, which is BEFORE velocity reaches zero.** After the hand hits the
+> wall the swimmer keeps drifting in — bending the elbows, coasting the last body-length — so the
+> tether pays out for a while after the race has ended. A finish mark that sits mid-decay is
+> therefore **correct, not early**; anything that waits for stillness lands late by design. Read
+> alongside the waist-offset note at the top: the trailing drift is real motion that is not part of
+> the swim, which is one reason metrics averaging to the end of the swim window trim their tail
+> (e.g. `breakout_vs_steady`, Phase 75-06).
 
 > **`dive_start_s` = foot of the launch surge (Phase 79).** As the swimmer leaves the block they jump
 > and sink, tugging the line below true dive speed; the old motion-onset rule (`baseline_end`) tripped on
@@ -161,14 +176,42 @@ any raise to `value=None` (a metric never fails the whole response). Wired at **
 **`POST /sessions/{id}/recompute`** (the backfill seam — re-derives from stored velocity/distance/accel
 arrays, never the raw CSV).
 
-**Registry status (37 slots):**
+**Registry status (47 slots — 46 implemented):**
 
 | Phase bucket | Implemented | Planned (compute=None) |
 |---|---|---|
 | **Start** (11) | **10** (75-04) — peak_vel, time_to_peak_vel, max_accel, dive_duration, glide_duration/distance/avg_speed/decel, break_into_kick_vel, **reaction_time** | 1 — `streamline_drag` (nonlinear drag-decay fit; tether-confounded) |
 | **Underwater** (13) | **13** — 4 window (`uw_duration/distance/avg_speed/surface_ratio`) + 2 breast pulldown + **7 kick** (`kick_count/tempo/consistency/dist_per_kick/per_kick_decay/first_kick_impulse/uw_ivv`) | — |
-| **Swim** (9) | — none | all 9 (ivv, breakout_vel, breakout_vel_loss, breakout_vs_steady, splits, sr_dps_coupling, dead_spot_timing, accel_asymmetry, breathing_dip) |
-| **Whole** (4) | — none | all 4 (phase_time_budget, phase_dist_budget, vel_envelope, jerk_smoothness) |
+| **Swim** (12) | **12** (75-06) — ivv, breakout_vel, breakout_vel_loss, breakout_vs_steady, **splits_{5,10,15,20,25}m**, accel_asymmetry, + the two per-cycle ones (sr_dps_coupling, dead_spot_timing) | — |
+| **Whole** (11) | **11** (75-06) — **phase_{time,dist}_budget_{start,underwater,swim}**, **vel_envelope_{start,underwater,swim,overall}**, jerk_smoothness | — |
+
+- **Vector metrics are registered as N SCALAR specs, never list-valued** (75-06). `splits` became five
+  keys, each budget three, `vel_envelope` four. The reason is the report card's baseline: it builds an
+  athlete's usual range by reading the *same key* out of past sessions, so a list would force index-based
+  lookup into an array whose length varies per session (a 15 m trial has no 25 m split) and elements
+  would silently misalign across history. Scalar keys are independently `None`-able.
+- ⛔ **`breathing_dip` was REMOVED, not deferred** (75-06). It needs to know *which* cycles were breaths;
+  a 1-D axial encoder does not observe head position. Do not re-add without a second sensor.
+- **`provisional` (schema_version 3, 75-06).** A spec that reads `ctx.cycles` sets `needs_cycles=True`;
+  `compute_phases` then emits `provisional = needs_cycles and not ctx.segmentation_reliable`. Only
+  `sr_dps_coupling` and `dead_spot_timing` qualify. The report card renders a provisional metric with
+  **valence suppressed to neutral** so it can never read as a confident green or red.
+- **`kick_bands` (schema_version 4, 83-02).** `compute_phases` emits a top-level `kick_bands` list
+  beside `boundaries` — one trough-to-trough span per detected downkick
+  (`metrics.segment_kick_bands`, plain argmin between consecutive peaks, **no new tuning constant**),
+  `[]` for breaststroke, for an unusable underwater window, and below 2 kicks. It is session data,
+  not a registry metric, so it carries no `{value, unit, tier, status}` envelope. It lives **inside**
+  `phases` rather than at the top of `metrics_json` precisely because of the three-site hazard below:
+  all three write paths store `compute_phases`' return verbatim under the `phases` key, so one change
+  reaches all of them — and because `PUT /annotations` calls `_rebuild_phases` last, the bands are
+  re-derived against the coach's manual window instead of being carried forward stale against the one
+  it replaced. The report card draws them on the Underwater inset; kicks are **auto-only** (no coach
+  kick-marking path exists yet), so the badge reads `auto` with no reliability flag.
+- ⚠ **`PhaseContext` has THREE construction sites, not two:** `POST /process`, `_rebuild_phases`
+  (serving `/recompute` + `PUT /go-signal` + `PUT /annotations`), and **`tools/backfill_phases.py`**.
+  A new context field must be threaded through all three — omitting the backfill tool leaves the whole
+  stored library null for that metric while every test still passes (75-06 shipped this bug and caught
+  it by auditing stored data).
 
 - Underwater window metrics = Δdist/Δt over `[underwater_start_s, stroke_start_s]`; refuse below
   `_MIN_UW_DURATION_S = 0.5 s`.

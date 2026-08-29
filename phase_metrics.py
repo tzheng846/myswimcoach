@@ -3,13 +3,11 @@ phase_metrics.py — race-phase metric registry + compute engine (Phase 75-01).
 
 Pure module, no I/O (same convention as metrics.py / annotations.py / ratings.py).
 
-Step 1 of the Phase-75 report-card revamp (CONTEXT.md D11/D15/D16): this module is the
-"define + provide space" skeleton, NOT a metrics implementation. It declares one
-MetricSpec per taxonomy metric so every metric has a registry slot, key, unit, and
-effort tier — and every spec in REGISTRY today is status="planned" with compute=None.
-Step 2 (a later plan, one metric at a time, gated on explicit user approval per D12)
-flips a spec to status="implemented" and supplies its compute function. Nothing in this
-file computes a real metric value.
+Started (75-01) as the "define + provide space" skeleton: one MetricSpec per taxonomy
+metric so every metric had a registry slot, key, unit, and effort tier, all
+status="planned" with compute=None. Step 2 then filled them in batches — 75-02/75-03
+underwater, 75-04 start, 75-06 swim + whole race. Every spec is now implemented except
+streamline_drag; `breathing_dip` was removed rather than implemented (see REGISTRY).
 
 The phase model (three phases, matching the existing annotation contract in
 annotations.py): start (dive | push-off) -> underwater (dolphin kicks | breaststroke
@@ -32,7 +30,10 @@ PHASES = ("start", "underwater", "swim", "whole")
 TIERS = ("low", "medium", "high")
 STATUSES = ("planned", "implemented")
 
-SCHEMA_VERSION = 2  # 2 (Phase 75-02): added the resolved `boundaries` object
+SCHEMA_VERSION = 4  # 2 (75-02): added the resolved `boundaries` object.
+                    # 3 (75-06): added the per-metric `provisional` flag (cycle-derived
+                    # metrics computed off auto — not coach-annotated — stroke cycles).
+                    # 4 (83-02): added `kick_bands` — per-downkick spans for the inset.
 
 # Arithmetic-sanity floor for the underwater window: narrower than this and
 # distance/duration ratios are numerical noise rather than a measurement. It is NOT a
@@ -55,6 +56,10 @@ class MetricSpec:
     tier: str
     status: str = "planned"
     compute: Optional[Callable[["PhaseContext"], float | None]] = None
+    # True when the metric reads ctx.cycles — i.e. it inherits stroke-cycle segmentation
+    # quality. compute_phases turns this into the emitted `provisional` flag whenever the
+    # cycles came from the auto segmenter rather than a coach's annotation (75-06 D8).
+    needs_cycles: bool = False
 
     def __post_init__(self):
         if self.phase not in PHASES:
@@ -99,6 +104,15 @@ class PhaseContext:
     seed_phases: dict | None = None
     initial_phase: dict | None = None
     bounds: dict | None = None
+    # Phase 75-06: the session's per-stroke cycles (metrics_json.cycles) and whether they
+    # are trustworthy. This is where "annotations first, auto fallback" lands for per-cycle
+    # metrics — and it needs NO precedence code here, because PUT /annotations has already
+    # overwritten metrics_json.cycles with compute_session_metrics(manual=...) output before
+    # _rebuild_phases reads it. segmentation_reliable mirrors that same provenance
+    # (metrics.py sets it to bool(manual_bounds)), so False == "these are auto cycles".
+    # Both default to the safe reading: no cycles, not reliable.
+    cycles: list | None = None
+    segmentation_reliable: bool = False
 
 
 # ─── Boundary resolution ─────────────────────────────────────────
@@ -354,6 +368,33 @@ def _kick_analysis(ctx):
     }
 
 
+def _kick_bands(ctx):
+    """Drawable per-downkick spans for the report card's Underwater inset (Phase 83-02).
+
+    Session data, not a registry metric — it rides beside `boundaries` for the same reason
+    that does: raw resolved segmentation, not a {value, unit, label, tier, status} envelope.
+
+    It lives INSIDE `phases` rather than at the top of metrics_json (83-02 D5 reversed) so
+    that all three write paths get it from one change: POST /process, `_rebuild_phases` and
+    tools/backfill_phases.py each store compute_phases' return verbatim under the `phases`
+    key alone. That also makes it impossible to go stale — PUT /annotations calls
+    `_rebuild_phases` last, so the bands are re-derived against the coach's manual window
+    instead of being carried forward against the one it replaced.
+
+    [] for breaststroke (its underwater is the pulldown), for an unusable window, and for
+    fewer than 2 detected kicks. Never raises.
+    """
+    try:
+        a = _kick_analysis(ctx)
+        if a is None:
+            return []
+        return metrics.segment_kick_bands(ctx.vel, a["peaks"], a["i0"], a["i1"], ctx.fs)
+    except Exception:
+        # compute_phases guards every SPEC, but this call sits in its header dict, outside
+        # that loop — so the guard has to live here or the whole response could fail.
+        return []
+
+
 def _compute_kick_count(ctx):
     a = _kick_analysis(ctx)
     return None if a is None else int(len(a["peaks"]))
@@ -587,9 +628,350 @@ def _compute_reaction_time(ctx):
     return rt if np.isfinite(rt) and rt >= 0 else None
 
 
+# ─── Swim metrics (Phase 75-06) ───────────────────────────────────────────────
+# The Swim phase runs [stroke_start_s, finish_s] — breakout to touch. Two reliability
+# layers live here and must not be confused (75-06-DISCOVERY):
+#   Layer A — window arithmetic over ctx.bounds. As trustworthy as the boundaries, which
+#             75-03/76/77/79 measured. Most of this group.
+#   Layer B — per-CYCLE reductions over ctx.cycles. These inherit stroke-cycle segmentation
+#             quality, which is unmeasured on the auto path (Phase 80: freestyle hits the
+#             exact cycle count on 6/21 sessions). They carry needs_cycles=True so
+#             compute_phases can flag them provisional; the coach's annotated cycles arrive
+#             on ctx.cycles automatically when one exists.
+# ⚠ finish_s is the weakest boundary in the model (MAE 2.76 s, worst 6.43 s — Phase 78).
+# Anything averaging to the end of the window trims its tail rather than trusting it.
+
+# Velocity right at breakout is a single noisy sample, so it is averaged over a short span.
+_BREAKOUT_WINDOW_S = 0.5
+# How far past breakout to look for the speed trough the swimmer falls into before the
+# stroke rhythm establishes — roughly one slow stroke cycle.
+_BREAKOUT_LOSS_WINDOW_S = 2.0
+# Fraction of the swim window dropped from the END before taking a "steady state" mean.
+# This is the finish_s mitigation: an untrimmed tail drags the denominator toward whatever
+# the weak finish detector included (a wall touch, a glide-out, dead trace).
+_STEADY_TRIM_FRAC = 0.15
+# Cumulative distances (m from dive_start) at which a split velocity is reported. Each split
+# is the mean velocity of the PRECEDING 5 m segment.
+_SPLIT_DISTANCES_M = (5, 10, 15, 20, 25)
+# Correlating two 2-point series is meaningless; below this many cycles, coupling is None.
+_MIN_COUPLING_CYCLES = 3
+
+
+def _finish_s(ctx):
+    """finish_s, falling back to the end of the stored trace when the boundary is missing.
+    Mirrors the fallback _compute_uw_surface_ratio already uses: a session whose finish never
+    resolved still has a measurable swim, and reporting nothing is worse than reporting to
+    the end of what was recorded."""
+    b = _bounds(ctx)
+    fin = b.get("finish_s")
+    if fin is not None:
+        return fin
+    if ctx.fs and ctx.fs > 0 and len(ctx.vel):
+        return (len(ctx.vel) - 1) / float(ctx.fs)
+    return None
+
+
+def _swim_window(ctx):
+    return _window(ctx, _bounds(ctx).get("stroke_start_s"), _finish_s(ctx))
+
+
+def _finite_slice(arr, i0, i1):
+    """arr[i0:i1] with non-finite samples dropped. Stored profiles carry dropout nulls, so
+    every reduction in this module goes through here rather than trusting the raw slice."""
+    if len(arr) <= i0:
+        return np.array([])
+    seg = np.asarray(arr[i0:min(i1, len(arr))], dtype=float)
+    return seg[np.isfinite(seg)]
+
+
+def _compute_ivv(ctx):
+    """Intracyclic velocity variation across the swim = std ÷ mean of velocity over
+    [stroke_start, finish]. Detector-independent: it reads the window, never the cycles, so
+    it is Layer A even though "intracyclic" names a cycle. Structurally the same reduction as
+    _compute_uw_ivv but WITHOUT its breaststroke gate — that gate exists because the kick
+    group is meaningless for a pulldown, which has nothing to do with surface-swim variance."""
+    w = _swim_window(ctx)
+    if w is None:
+        return None
+    seg = _finite_slice(ctx.vel, w[0], w[1])
+    if len(seg) < 2:
+        return None
+    mean = float(np.mean(seg))
+    if not np.isfinite(mean) or mean == 0:
+        return None
+    return float(np.std(seg) / mean)
+
+
+def _breakout_slice(ctx, span_s):
+    """(i0, i1) covering span_s seconds from stroke_start, clipped to the swim window."""
+    w = _swim_window(ctx)
+    if w is None or not ctx.fs or ctx.fs <= 0:
+        return None
+    i0, i1, _dur = w
+    end = min(i1, i0 + max(1, int(round(float(span_s) * float(ctx.fs)))))
+    return (i0, end) if end > i0 else None
+
+
+def _compute_breakout_vel(ctx):
+    """Mean velocity over the first _BREAKOUT_WINDOW_S of the swim — how much speed survives
+    the transition from underwater to surface swimming."""
+    s = _breakout_slice(ctx, _BREAKOUT_WINDOW_S)
+    if s is None:
+        return None
+    seg = _finite_slice(ctx.vel, s[0], s[1])
+    return float(np.mean(seg)) if len(seg) else None
+
+
+def _compute_breakout_vel_loss(ctx):
+    """Underwater average speed − the speed trough shortly after breakout. Positive = the
+    swimmer gave up speed surfacing (the normal case). The trough is the minimum over
+    _BREAKOUT_LOSS_WINDOW_S rather than an instant, so one dropout sample cannot define it."""
+    uw = _compute_uw_avg_speed(ctx)
+    if uw is None:
+        return None
+    s = _breakout_slice(ctx, _BREAKOUT_LOSS_WINDOW_S)
+    if s is None:
+        return None
+    seg = _finite_slice(ctx.vel, s[0], s[1])
+    if len(seg) == 0:
+        return None
+    return float(uw) - float(np.min(seg))
+
+
+def _compute_breakout_vs_steady(ctx):
+    """Breakout-window mean ÷ steady-state mean. Above 1 = the breakout carried more speed
+    than the swim settled at; below 1 = the swimmer was still building. "Steady" excludes BOTH
+    ends: the breakout window itself at the front, and _STEADY_TRIM_FRAC of the window at the
+    back (the finish_s mitigation)."""
+    bo = _compute_breakout_vel(ctx)
+    if bo is None:
+        return None
+    w = _swim_window(ctx)
+    s = _breakout_slice(ctx, _BREAKOUT_WINDOW_S)
+    if w is None or s is None:
+        return None
+    i0, i1, _dur = w
+    start = s[1]
+    end = i1 - int(round((i1 - i0) * _STEADY_TRIM_FRAC))
+    if end <= start:
+        return None
+    seg = _finite_slice(ctx.vel, start, end)
+    if len(seg) < 2:
+        return None
+    steady = float(np.mean(seg))
+    if not np.isfinite(steady) or steady <= 0:
+        return None
+    return float(bo) / steady
+
+
+def _split_velocity(ctx, meters):
+    """Mean velocity over the 5 m segment ENDING at `meters`, measured from dive_start as the
+    0 m anchor. None when the swim never reached that distance — which is the normal case for
+    the 20/25 m splits on a short trial, not an error."""
+    b = _bounds(ctx)
+    i_start = _idx(ctx, b.get("dive_start_s"))
+    if i_start is None or len(ctx.dist) <= i_start:
+        return None
+    d0 = float(ctx.dist[i_start])
+    if not np.isfinite(d0):
+        return None
+    fin_idx = _idx(ctx, _finish_s(ctx))
+    end = len(ctx.dist) if fin_idx is None else min(len(ctx.dist), fin_idx + 1)
+    rel = np.asarray(ctx.dist[i_start:end], dtype=float) - d0
+
+    def _first_at(target):
+        hits = np.nonzero(np.isfinite(rel) & (rel >= target))[0]
+        return int(hits[0]) + i_start if len(hits) else None
+
+    i_a, i_b = _first_at(float(meters) - 5.0), _first_at(float(meters))
+    if i_a is None or i_b is None or i_b <= i_a:
+        return None
+    dt = float(ctx.t[i_b]) - float(ctx.t[i_a])
+    dd = float(ctx.dist[i_b]) - float(ctx.dist[i_a])
+    if not (np.isfinite(dt) and np.isfinite(dd)) or dt <= 0:
+        return None
+    return dd / dt
+
+
+def _make_split(meters):
+    def _fn(ctx):
+        return _split_velocity(ctx, meters)
+    _fn.__name__ = f"_compute_splits_{meters}m"
+    return _fn
+
+
+def _compute_accel_asymmetry(ctx):
+    """Time spent accelerating ÷ time spent decelerating across the swim. 1.0 = balanced;
+    below 1 = more of the swim is spent losing speed than making it. None when ctx.accel is
+    empty (pre-Phase-64 sessions carry no acceleration_profile) or nothing is negative."""
+    if len(ctx.accel) == 0:
+        return None
+    w = _swim_window(ctx)
+    if w is None:
+        return None
+    seg = _finite_slice(ctx.accel, w[0], w[1])
+    if len(seg) < 2:
+        return None
+    pos = int(np.count_nonzero(seg > 0))
+    neg = int(np.count_nonzero(seg < 0))
+    return float(pos) / float(neg) if neg else None
+
+
+def _swim_cycles(ctx):
+    """The stroke cycles that start inside the swim window, as (start_idx, end_idx, cycle).
+
+    THE annotations-first seam for Layer-B metrics. No precedence logic lives here: ctx.cycles
+    is whatever metrics_json.cycles holds, and PUT /annotations has already replaced that with
+    compute_session_metrics(manual=...) output whenever a coach annotated the session. So the
+    coach's cycles arrive here by construction, and the auto segmenter's arrive otherwise —
+    the difference is reported through ctx.segmentation_reliable, not decided here."""
+    if not isinstance(ctx.cycles, list) or not ctx.cycles:
+        return []
+    w = _swim_window(ctx)
+    if w is None:
+        return []
+    i0, i1, _dur = w
+    out = []
+    for c in ctx.cycles:
+        if not isinstance(c, dict):
+            continue
+        a, b = c.get("start_idx"), c.get("end_idx")
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+            continue
+        a, b = int(a), int(b)
+        if a < i0 or a >= i1 or b <= a or b > len(ctx.vel):
+            continue
+        out.append((a, b, c))
+    return out
+
+
+def _compute_sr_dps_coupling(ctx):
+    """Correlation between per-cycle stroke rate (60 ÷ duration) and distance per stroke.
+    Strongly negative = the swimmer buys tempo by giving up distance; near zero = the two move
+    independently. Pearson r over the swim window's cycles. None below _MIN_COUPLING_CYCLES
+    cycles or when either series has no variance (r undefined, not zero)."""
+    cyc = _swim_cycles(ctx)
+    sr, dps = [], []
+    for _a, _b, c in cyc:
+        dur, dist = c.get("duration_s"), c.get("dist_m")
+        if not isinstance(dur, (int, float)) or not isinstance(dist, (int, float)):
+            continue
+        dur, dist = float(dur), float(dist)
+        if not (np.isfinite(dur) and np.isfinite(dist)) or dur <= 0:
+            continue
+        sr.append(60.0 / dur)
+        dps.append(dist)
+    if len(sr) < _MIN_COUPLING_CYCLES:
+        return None
+    a, b = np.asarray(sr), np.asarray(dps)
+    if float(np.std(a)) == 0 or float(np.std(b)) == 0:
+        return None
+    r = float(np.corrcoef(a, b)[0, 1])
+    return r if np.isfinite(r) else None
+
+
+def _compute_dead_spot_timing(ctx):
+    """Mean seconds from the start of a stroke cycle to that cycle's slowest instant — where
+    in the stroke the swimmer loses the most speed (75-06 D9). Reported in absolute seconds,
+    matching the registry unit; a normalized within-cycle fraction would hide the fact that a
+    slower cycle has a later dead spot."""
+    offsets = []
+    if not ctx.fs or ctx.fs <= 0:
+        return None
+    for a, b, _c in _swim_cycles(ctx):
+        seg = np.asarray(ctx.vel[a:b], dtype=float)
+        if not np.any(np.isfinite(seg)):
+            continue
+        offsets.append(float(np.nanargmin(seg)) / float(ctx.fs))
+    return float(np.mean(offsets)) if offsets else None
+
+
+# ─── Whole-race metrics (Phase 75-06) ─────────────────────────────────────────
+# Cross-phase reductions: they describe the race as a whole rather than one window, so they
+# have no single window of their own (which is why the report card gives the Whole section a
+# full-trace inset). All Layer A — boundary and profile arithmetic, no cycles.
+
+# The three measurable race phases, each as the (start, end) boundary-key pair bounding it.
+_PHASE_SPANS = {
+    "start":      ("dive_start_s", "underwater_start_s"),
+    "underwater": ("underwater_start_s", "stroke_start_s"),
+    "swim":       ("stroke_start_s", "finish_s"),
+}
+
+
+def _phase_span(ctx, name):
+    """(i0, i1, duration_s) for one named race phase, or None. The swim span resolves its end
+    through _finish_s so a missing finish degrades to the end of the trace rather than
+    deleting the phase."""
+    b = _bounds(ctx)
+    start_key, end_key = _PHASE_SPANS[name]
+    end = _finish_s(ctx) if end_key == "finish_s" else b.get(end_key)
+    return _window(ctx, b.get(start_key), end)
+
+
+def _race_span(ctx):
+    """(i0, i1, duration_s) for the whole race — dive_start to finish."""
+    return _window(ctx, _bounds(ctx).get("dive_start_s"), _finish_s(ctx))
+
+
+def _make_time_budget(name):
+    def _fn(ctx):
+        span, total = _phase_span(ctx, name), _race_span(ctx)
+        if span is None or total is None or total[2] <= 0:
+            return None
+        return span[2] / total[2] * 100.0
+    _fn.__name__ = f"_compute_phase_time_budget_{name}"
+    return _fn
+
+
+def _make_dist_budget(name):
+    def _fn(ctx):
+        span, total = _phase_span(ctx, name), _race_span(ctx)
+        if span is None or total is None:
+            return None
+        d_span = _span_distance(ctx, span[0], span[1])
+        d_total = _span_distance(ctx, total[0], total[1])
+        if d_span is None or d_total is None or d_total <= 0:
+            return None
+        return d_span / d_total * 100.0
+    _fn.__name__ = f"_compute_phase_dist_budget_{name}"
+    return _fn
+
+
+def _make_vel_envelope(name):
+    """Peak velocity within one phase, or across the whole race for name='overall' (75-06 D6).
+    Read across the four rows, these trace how the race's speed ceiling decays after the dive."""
+    def _fn(ctx):
+        span = _race_span(ctx) if name == "overall" else _phase_span(ctx, name)
+        if span is None:
+            return None
+        seg = _finite_slice(ctx.vel, span[0], span[1])
+        return float(np.max(seg)) if len(seg) else None
+    _fn.__name__ = f"_compute_vel_envelope_{name}"
+    return _fn
+
+
+def _compute_jerk_smoothness(ctx):
+    """Mean |Δacceleration| per second across the swim — how jerky the surface swim is.
+    ⚠ Jerk is a SECOND derivative of an axial signal, so it is noise-amplified even though
+    ctx.accel is already the Savitzky-Golay derivative (PIPELINE §1.7). Usable as a
+    within-athlete relative proxy; do not read it as an absolute smoothness number.
+    None when ctx.accel is empty (pre-Phase-64 sessions)."""
+    if len(ctx.accel) == 0:
+        return None
+    w = _swim_window(ctx)
+    if w is None or not ctx.fs or ctx.fs <= 0:
+        return None
+    seg = _finite_slice(ctx.accel, w[0], w[1])
+    if len(seg) < 2:
+        return None
+    return float(np.mean(np.abs(np.diff(seg))) * float(ctx.fs))
+
+
 # ─── Registry ────────────────────────────────────────────────────────────────
-# One MetricSpec per metric in the Phase-75 CONTEXT taxonomy. ALL status="planned",
-# compute=None — see module docstring. Tiers follow the CONTEXT feasibility tags:
+# One MetricSpec per metric in the Phase-75 CONTEXT taxonomy. As of 75-06 every spec is
+# status="implemented" EXCEPT streamline_drag (a nonlinear drag-decay fit the tether
+# confounds), which stays planned. Tiers follow the CONTEXT feasibility tags:
 # already-derivable-from-existing-data (was tagged (cheap)) -> low/medium,
 # needs-new-signal-processing (peak-picker / detector / model-fit) -> high.
 # Do not add metrics beyond the taxonomy and do not flip any status here — that is
@@ -646,22 +1028,69 @@ REGISTRY: tuple[MetricSpec, ...] = (
     MetricSpec("pulldown_duration", "underwater", "Pulldown duration", "s", "low",
                status="implemented", compute=_compute_pulldown_duration),
 
-    # Phase 3 — Swim (strokes; breakout = special first stroke)
-    MetricSpec("ivv", "swim", "Intracyclic velocity variation", "ratio", "medium"),
-    MetricSpec("breakout_vel", "swim", "Breakout velocity", "m/s", "low"),
-    MetricSpec("breakout_vel_loss", "swim", "Velocity loss at breakout", "m/s", "medium"),
-    MetricSpec("breakout_vs_steady", "swim", "Breakout vs steady-state ratio", "ratio", "medium"),
-    MetricSpec("splits", "swim", "Split velocities", "m/s", "low"),
-    MetricSpec("sr_dps_coupling", "swim", "Stroke-rate ↔ DPS coupling", "ratio", "low"),
-    MetricSpec("dead_spot_timing", "swim", "Dead-spot timing within cycle", "s", "medium"),
-    MetricSpec("accel_asymmetry", "swim", "Acceleration asymmetry", "ratio", "medium"),
-    MetricSpec("breathing_dip", "swim", "Breathing-stroke velocity dip", "m/s", "high"),
+    # Phase 3 — Swim (strokes; breakout = special first stroke) — 75-06
+    # `splits` is registered as one spec PER DISTANCE rather than a single list-valued spec
+    # (75-06 D7). The report card builds an athlete's usual range by reading the SAME key out
+    # of past sessions, so a list would force baseline lookup to index into an array whose
+    # length varies per session (a 15 m trial has no 25 m split) and elements would silently
+    # misalign across history. Scalar keys are independently None-able instead.
+    # ⛔ REMOVED: `breathing_dip` (was: "Breathing-stroke velocity dip"). Not deferred —
+    # unbuildable. It requires knowing WHICH cycles were breaths, and a 1-D axial encoder on a
+    # tether does not observe head position. Do not re-add it without a second sensor.
+    MetricSpec("ivv", "swim", "Intracyclic velocity variation", "ratio", "medium",
+               status="implemented", compute=_compute_ivv),
+    MetricSpec("breakout_vel", "swim", "Breakout velocity", "m/s", "low",
+               status="implemented", compute=_compute_breakout_vel),
+    MetricSpec("breakout_vel_loss", "swim", "Velocity loss at breakout", "m/s", "medium",
+               status="implemented", compute=_compute_breakout_vel_loss),
+    MetricSpec("breakout_vs_steady", "swim", "Breakout vs steady-state ratio", "ratio", "medium",
+               status="implemented", compute=_compute_breakout_vs_steady),
+    MetricSpec("splits_5m", "swim", "Split 0–5 m", "m/s", "low",
+               status="implemented", compute=_make_split(5)),
+    MetricSpec("splits_10m", "swim", "Split 5–10 m", "m/s", "low",
+               status="implemented", compute=_make_split(10)),
+    MetricSpec("splits_15m", "swim", "Split 10–15 m", "m/s", "low",
+               status="implemented", compute=_make_split(15)),
+    MetricSpec("splits_20m", "swim", "Split 15–20 m", "m/s", "low",
+               status="implemented", compute=_make_split(20)),
+    MetricSpec("splits_25m", "swim", "Split 20–25 m", "m/s", "low",
+               status="implemented", compute=_make_split(25)),
+    MetricSpec("accel_asymmetry", "swim", "Acceleration asymmetry", "ratio", "medium",
+               status="implemented", compute=_compute_accel_asymmetry),
+    # The two Layer-B specs: they read ctx.cycles, so they inherit stroke-cycle segmentation
+    # quality and are flagged provisional whenever those cycles are auto rather than a coach's.
+    MetricSpec("sr_dps_coupling", "swim", "Stroke-rate ↔ DPS coupling", "ratio", "low",
+               status="implemented", compute=_compute_sr_dps_coupling, needs_cycles=True),
+    MetricSpec("dead_spot_timing", "swim", "Dead-spot timing within cycle", "s", "medium",
+               status="implemented", compute=_compute_dead_spot_timing, needs_cycles=True),
 
-    # Whole race (cross-phase)
-    MetricSpec("phase_time_budget", "whole", "Phase time budget", "%", "medium"),
-    MetricSpec("phase_dist_budget", "whole", "Phase distance budget", "%", "medium"),
-    MetricSpec("vel_envelope", "whole", "Velocity envelope", "m/s", "low"),
-    MetricSpec("jerk_smoothness", "whole", "Whole-swim smoothness (jerk)", "ratio", "medium"),
+    # Whole race (cross-phase) — 75-06. Same per-element expansion as splits, for the same
+    # baseline-alignment reason: `phase_time_budget`, `phase_dist_budget` and `vel_envelope`
+    # were each one vector-valued spec and are now one spec per phase.
+    MetricSpec("phase_time_budget_start", "whole", "Start time share", "%", "medium",
+               status="implemented", compute=_make_time_budget("start")),
+    MetricSpec("phase_time_budget_underwater", "whole", "Underwater time share", "%", "medium",
+               status="implemented", compute=_make_time_budget("underwater")),
+    MetricSpec("phase_time_budget_swim", "whole", "Swim time share", "%", "medium",
+               status="implemented", compute=_make_time_budget("swim")),
+    MetricSpec("phase_dist_budget_start", "whole", "Start distance share", "%", "medium",
+               status="implemented", compute=_make_dist_budget("start")),
+    MetricSpec("phase_dist_budget_underwater", "whole", "Underwater distance share", "%", "medium",
+               status="implemented", compute=_make_dist_budget("underwater")),
+    MetricSpec("phase_dist_budget_swim", "whole", "Swim distance share", "%", "medium",
+               status="implemented", compute=_make_dist_budget("swim")),
+    MetricSpec("vel_envelope_start", "whole", "Start peak velocity", "m/s", "low",
+               status="implemented", compute=_make_vel_envelope("start")),
+    MetricSpec("vel_envelope_underwater", "whole", "Underwater peak velocity", "m/s", "low",
+               status="implemented", compute=_make_vel_envelope("underwater")),
+    MetricSpec("vel_envelope_swim", "whole", "Swim peak velocity", "m/s", "low",
+               status="implemented", compute=_make_vel_envelope("swim")),
+    MetricSpec("vel_envelope_overall", "whole", "Race peak velocity", "m/s", "low",
+               status="implemented", compute=_make_vel_envelope("overall")),
+    # Unit corrected from the 75-01 placeholder "ratio": mean |Δaccel|/Δt is a jerk, m/s³. The
+    # report card overrides units for display, but the stored value is read by other consumers.
+    MetricSpec("jerk_smoothness", "whole", "Whole-swim smoothness (jerk)", "m/s³", "medium",
+               status="implemented", compute=_compute_jerk_smoothness),
 )
 
 
@@ -687,6 +1116,9 @@ def compute_phases(ctx: PhaseContext) -> dict:
         "schema_version": SCHEMA_VERSION,
         "go_signal_s": ctx.go_signal_s,
         "boundaries": ctx.bounds,
+        # Non-registry session data, like `boundaries` above (Phase 83-02). Emitted here
+        # because every write path stores this return verbatim under `phases`.
+        "kick_bands": _kick_bands(ctx),
     }
     for phase in PHASES:
         out[phase] = {}
@@ -703,5 +1135,10 @@ def compute_phases(ctx: PhaseContext) -> dict:
             "label": spec.label,
             "tier": spec.tier,
             "status": spec.status,
+            # SCHEMA_VERSION 3 (75-06). True = this number was derived from AUTO stroke
+            # cycles, whose count is unmeasured on the auto path. The report card renders a
+            # provisional metric without valence color so it never reads as confident.
+            # Always False for window metrics, which do not touch the cycles at all.
+            "provisional": bool(spec.needs_cycles and not ctx.segmentation_reliable),
         }
     return out

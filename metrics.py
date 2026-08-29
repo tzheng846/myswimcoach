@@ -884,6 +884,70 @@ def detect_underwater_kicks(t, vel, uw_start_idx, uw_end_idx):
         return None
 
 
+def segment_kick_bands(vel, peaks, i0, i1, fs):
+    """Per-downkick SPANS over the underwater window — one band per detected peak.
+
+    detect_underwater_kicks above returns points; the report-card inset needs segments to
+    color. Consecutive kicks are split at the velocity minimum between their two peaks —
+    the same trough rule segment_cycles_trough uses for stroke cycles, minus its prominence
+    gate, which is redundant here because the peaks arriving have already been
+    prominence-filtered by the detector. No new tuning constant (Phase 83-02 D4).
+
+    Needs ≥2 peaks. With 0 (a glide-only underwater) or 1 there is no interior trough, so
+    the only band derivable would span the whole window and assert a segmentation nothing
+    measured — returns [] instead.
+
+    The first band starts at i0 and the last ends at i1, so the bands tile the window
+    exactly. Every emitted number is a plain int/float: compute_phases' return is stored by
+    callers that apply _clean AROUND it rather than inside it, so a stray np.int64 would
+    raise at json time. Pure; never raises — anything degenerate yields [].
+    """
+    try:
+        i0 = int(i0)
+        i1 = int(i1)
+        fs = float(fs)
+        if i1 <= i0 or not np.isfinite(fs) or fs <= 0:
+            return []
+
+        pk = [int(p) for p in np.asarray(peaks, dtype=int).ravel()]
+        if len(pk) < 2:
+            return []
+        if any(p < i0 or p >= i1 for p in pk):
+            return []
+        if any(pk[k] >= pk[k + 1] for k in range(len(pk) - 1)):
+            return []
+
+        # A NaN anywhere in the window would win argmin outright and place a silently wrong
+        # edge. The detector interpolates dropouts internally before searching; this one
+        # refuses instead — no bands beats bands drawn at the wrong places.
+        if not np.all(np.isfinite(np.asarray(vel[i0:i1], dtype=float))):
+            return []
+
+        edges = [i0]
+        for k in range(len(pk) - 1):
+            lo, hi = pk[k] + 1, pk[k + 1]
+            # Search strictly right of the left peak so the split can never land ON it.
+            edges.append(hi if hi <= lo else lo + int(np.argmin(np.asarray(vel[lo:hi], dtype=float))))
+        edges.append(i1)
+
+        bands = []
+        for k, p in enumerate(pk):
+            a, b = int(edges[k]), int(edges[k + 1])
+            if b <= a:
+                return []
+            bands.append({
+                "kick_num": len(bands),
+                "peak_idx": int(p),
+                "start_idx": a,
+                "end_idx": b,
+                "duration_s": float((b - a) / fs),
+            })
+        return bands
+
+    except Exception:
+        return []
+
+
 # ── BREAKOUT BY KICK-BAND DISAPPEARANCE (Phase 76) ────────────────────────────
 #
 # The Underwater→Swim breakout for the flutter strokes (freestyle, backstroke). Six

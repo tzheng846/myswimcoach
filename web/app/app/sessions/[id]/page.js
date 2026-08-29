@@ -572,7 +572,10 @@ export default function ReportCardPage({ params }) {
 
       {/* The phase surface is the report body. It renders the alert + timeline (or an empty state
           for legacy sessions), then middleSlot (velocity / Time-to-Distance / video), then the
-          phase strip sections + Swimming per-cycle. */}
+          phase strip sections + Swimming per-cycle.
+          `segmentationReliable` (83-01) is the provenance behind the Swimming inset's cycle-band
+          badge — passed explicitly rather than inferred, because it is true only when the metrics
+          were recomputed from the coach's own marks. */}
       <div className="mt-5">
         <PhaseReportCard
           phases={phases}
@@ -584,6 +587,7 @@ export default function ReportCardPage({ params }) {
           sessionId={sessionId}
           cycles={metrics.cycles}
           session={metrics.session}
+          segmentationReliable={metrics.data_quality?.segmentation_reliable === true}
           unit={unit}
           middleSlot={middleSlot}
         />

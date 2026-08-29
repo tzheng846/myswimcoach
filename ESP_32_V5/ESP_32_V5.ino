@@ -37,9 +37,13 @@
  *                session_start_us == 0 means no buffered session.
  *                (8 bytes is not a multiple of 7 → sample parsers ignore it.)
  *   "DUMP"     → stream the buffered samples via TX notify in packets of
- *                DUMP_SAMPLES_PER_PACKET × 7 bytes, then a single-byte 0xEE
- *                end-of-dump marker. Buffer cleared after a complete dump;
- *                a dump aborted by disconnect retains the buffer for retry.
+ *                DUMP_SAMPLES_PER_PACKET × 7 bytes, then the single-byte 0xEE
+ *                end-of-dump marker sent 3× (resend hardens against a lost
+ *                marker). The buffer is NOT cleared by a dump — it is retained
+ *                until "CLEAR" or the next recording (Phase 74), so a retrieval
+ *                the phone never confirms stays retrievable.
+ *   "CLEAR"    → free the buffered session. Sent by the phone only AFTER it has
+ *                safely saved the dumped CSV, so a lost dump is never wiped.
  *   "STATUS"   → notify one 15-byte live-diagnostics packet:
  *                [0]      0xDD  (status marker — distinct from the 0xEE end marker)
  *                [1]      AS5600 status register (0x0B; MD/ML/MH bits)
@@ -83,7 +87,7 @@
 // works, so the app can retrieve the SAME session and the two can be compared. DEBUG is
 // forced off in this mode so the plotter shows only the angle trace — not the millis()/
 // heap numbers that otherwise flood it. SET BACK TO 0 FOR THE NORMAL BUILD.
-#define TRACE_BUFFER 1
+#define TRACE_BUFFER 0
 #define TRACE_MAX_SAMPLES 4000   // cap the print (~15 s @270 Hz); the startup pulse is early
 
 // ── Debug ─────────────────────────────────────────────────────────────────────
@@ -205,6 +209,7 @@ static volatile bool  pendingRecordStop  = false;
 static volatile bool  pendingMeta        = false;
 static volatile bool  pendingDump        = false;
 static volatile bool  pendingStatus      = false;
+static volatile bool  pendingClear       = false;   // phone confirmed save → free the buffer
 
 static LedState  ledState     = LED_PAIRING;
 static uint32_t  errorClearMs = 0;
@@ -457,9 +462,25 @@ static void sendStatus() {
 }
 
 static void sendEndOfDumpMarker() {
+  // Resend the 1-byte end marker to harden against a single lost/dropped indication —
+  // the whole retrieval hinges on the phone seeing it (Phase 74). Idempotent on the phone:
+  // it finishes on the first recognized 0xEE and ignores the rest.
   uint8_t marker = END_OF_DUMP_MARKER;
-  pTxChar->setValue(&marker, 1);
-  pTxChar->notify(false);   // false = indication (acknowledged); see TX char setup
+  for (int i = 0; i < 3; i++) {
+    pTxChar->setValue(&marker, 1);
+    pTxChar->notify(false);   // false = indication (acknowledged); see TX char setup
+    if (i < 2) delay(5);
+  }
+}
+
+// Free the buffered session. Called only via the phone's "CLEAR" (after it has saved the
+// CSV) — NOT by dumpBuffer — so a dump the phone never confirmed is never wiped (Phase 74).
+static void clearBuffer() {
+  bufCount       = 0;
+  dataReady      = false;
+  sessionStartUs = 0;
+  syncLed();
+  DBG("[CLEAR] Buffer freed by phone");
 }
 
 static void dumpBuffer() {
@@ -487,14 +508,13 @@ static void dumpBuffer() {
     // No vTaskDelay: the indication confirm paces the loop (was DUMP_PACKET_DELAY_MS for notify).
   }
   sendEndOfDumpMarker();
-  DBG("[DUMP] Complete: %lu samples", (unsigned long)sent);
+  DBG("[DUMP] Complete: %lu samples (buffer retained until CLEAR)", (unsigned long)sent);
 #if TRACE_BUFFER
   Serial.printf("# DUMP_SENT=%lu\n", (unsigned long)sent);   // firmware-sent count for app reconciliation
 #endif
-  bufCount       = 0;
-  dataReady      = false;
-  sessionStartUs = 0;
-  syncLed();
+  // Phase 74: do NOT clear the buffer here. The dump loop returning does not mean the phone
+  // received it (a lost tail/marker used to wipe a session the phone never got). The buffer is
+  // freed only by an explicit "CLEAR" (phone saved the CSV) or overwritten by the next recording.
 }
 
 // ── Deferred command processor — call from loop() only ───────────────────────
@@ -508,6 +528,7 @@ static void processPending() {
   if (pendingMeta)        { pendingMeta        = false; if (deviceConnected) sendMeta();   }
   if (pendingDump)        { pendingDump        = false; if (deviceConnected) dumpBuffer(); }
   if (pendingStatus)      { pendingStatus      = false; if (deviceConnected) sendStatus(); }
+  if (pendingClear)       { pendingClear       = false; clearBuffer();          }
 }
 
 // ── BLE callbacks ─────────────────────────────────────────────────────────────
@@ -522,6 +543,7 @@ class ServerCallbacks : public BLEServerCallbacks {
     pendingMeta = false;
     pendingDump = false;
     pendingStatus = false;
+    pendingClear = false;
     DBG("[BLE] Disconnected — restarting advertising");
     // Recording is independent of the connection in buffer mode — keep going.
     if (!recording && !motorRunning) syncLed();
@@ -540,6 +562,7 @@ class RxCallbacks : public BLECharacteristicCallbacks {
     else if (val == "STOP"     &&  recording)    { pendingRecordStop  = true;  DBG("[BLE] CMD queued: STOP"); }
     else if (val == "META")                      { pendingMeta        = true;  DBG("[BLE] CMD queued: META"); }
     else if (val == "DUMP")                      { pendingDump        = true;  DBG("[BLE] CMD queued: DUMP"); }
+    else if (val == "CLEAR")                     { pendingClear       = true;  DBG("[BLE] CMD queued: CLEAR"); }
     else if (val == "STATUS")                    { pendingStatus      = true;  DBG("[BLE] CMD queued: STATUS"); }
     else if (val == "REEL_ON"  && !motorRunning) { pendingMotorStart  = true;  DBG("[BLE] CMD queued: REEL_ON"); }
     else if (val == "REEL_OFF" &&  motorRunning) { pendingMotorStop   = true;  DBG("[BLE] CMD queued: REEL_OFF"); }

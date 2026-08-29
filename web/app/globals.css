@@ -51,6 +51,27 @@
   --font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
 }
 
+/* Per-cycle trace coloring (Phase 83-01) — the phase insets' alternating band colours.
+   The alternation is identity, NOT valence: blue/purple say "this is cycle n", never "this is good
+   or bad". 83-02 reuses them for kick bands.
+
+   83-03 added the gold, which is identity too: it marks the BREAKOUT — the coach's streamline-break
+   mark through the end of their first marked cycle, Swimming only, and only when the cycles are
+   coach-marked. The old always-on amber duration outline is gone; it flagged the segmenter as often
+   as the swimmer. No red here on purpose: a measured shape-anomaly gate fired on 75% of sessions at
+   every k worth trying, so nothing in this palette carries valence.
+
+   `static` is load-bearing: Tailwind v4 tree-shakes theme variables that no utility class
+   references, and every one of these is read ONLY as a raw var() inside an SVG stroke attribute. In
+   a plain @theme block they compile away, stroke resolves to `none`, and the bands render invisible
+   — with no complaint from `next build` or eslint. Additive — nothing in the block above changes. */
+@theme static {
+  --color-cycle-a: #2196f3;
+  --color-cycle-b: #a970ff;
+  --color-cycle-idle: #55606b;
+  --color-cycle-breakout: #f2b134;
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-ink);

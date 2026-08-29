@@ -1447,3 +1447,82 @@ class TestSessionVideos:
         assert isinstance(sent, (bytes, bytearray)), (
             f"upload got {type(sent).__name__}; must be bytes (storage3 rejects SpooledTemporaryFile)"
         )
+
+
+class TestDeleteSessionVideoCleanup:
+    """DELETE /sessions/{id} — session-delete video-storage cleanup (Phase 82).
+
+    Two leak sources fixed here: the primary `video_path` was never removed from the `videos`
+    bucket, and `session_videos` externals cascade-delete their DB row (ON DELETE CASCADE)
+    without their storage object ever being removed — so the storage_path list must be read
+    BEFORE the sessions delete fires, or it's gone.
+    """
+
+    def _admin(self, session_row, session_videos_rows=None, coach_id="coach-1"):
+        from unittest.mock import MagicMock
+
+        admin = MagicMock()
+
+        def table(name):
+            t = MagicMock()
+            result = MagicMock()
+            if name == "coaches":
+                result.data = {"id": coach_id}
+            elif name == "sessions":
+                result.data = session_row
+            elif name == "session_videos":
+                result.data = session_videos_rows or []
+            t.select.return_value = t
+            t.delete.return_value = t
+            t.eq.return_value = t
+            t.single.return_value = t
+            t.execute.return_value = result
+            return t
+
+        admin.table.side_effect = table
+        return admin
+
+    def test_primary_video_removed(self, api_client, monkeypatch):
+        import api
+
+        admin = self._admin(session_row={"raw_csv_path": "a/1.csv", "video_path": "sess-1.mp4"})
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.delete("/sessions/sess-1", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200, resp.text
+        calls = admin.storage.from_.return_value.remove.call_args_list
+        assert any(c.args[0] == ["sess-1.mp4"] for c in calls), calls
+
+    def test_external_videos_removed(self, api_client, monkeypatch):
+        import api
+
+        admin = self._admin(
+            session_row={"raw_csv_path": None, "video_path": None},
+            session_videos_rows=[
+                {"storage_path": "sess-1/a.mp4"},
+                {"storage_path": "sess-1/b.mp4"},
+            ],
+        )
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.delete("/sessions/sess-1", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200, resp.text
+        calls = admin.storage.from_.return_value.remove.call_args_list
+        assert any(sorted(c.args[0]) == ["sess-1/a.mp4", "sess-1/b.mp4"] for c in calls), calls
+
+    def test_no_video_no_remove_call(self, api_client, monkeypatch):
+        import api
+
+        admin = self._admin(session_row={"raw_csv_path": None, "video_path": None})
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.delete("/sessions/sess-1", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200, resp.text
+        assert not admin.storage.from_.return_value.remove.called
+
+    def test_storage_removal_failure_is_nonfatal(self, api_client, monkeypatch):
+        import api
+
+        admin = self._admin(session_row={"raw_csv_path": None, "video_path": "sess-1.mp4"})
+        admin.storage.from_.return_value.remove.side_effect = Exception("boom")
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.delete("/sessions/sess-1", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"ok": True}

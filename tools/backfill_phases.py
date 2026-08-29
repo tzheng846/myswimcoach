@@ -111,6 +111,9 @@ def main():
 
     written = skipped = failed = 0
     with_uw = 0
+    with_cycles = 0
+    with_kick_bands = 0
+    kickable = 0
     sources = Counter()
     for i, r in enumerate(rows, 1):
         sid = r["id"]
@@ -139,10 +142,22 @@ def main():
                 accel=_arr(row.get("acceleration_profile")),
                 fs=fs,
                 stroke_type=stroke,
-                go_signal_s=None,
+                # Read the stored GO time rather than hardcoding None, which silently nulled
+                # reaction_time on every session a coach had set one for (75-06).
+                go_signal_s=mj.get("go_signal_s"),
                 annotation_phases=ann_by_session.get(sid),
                 seed_phases=annot.build_seed(mj, fs)["phases"],
                 initial_phase=mj.get("initial_phase"),
+                # Phase 75-06 — the per-cycle metrics need the stored cycles, and this tool is a
+                # THIRD PhaseContext construction site alongside api.py's /process and
+                # _rebuild_phases. Omitting them here left sr_dps_coupling and dead_spot_timing
+                # null across the whole library even though the code computes them fine.
+                # PUT /annotations has already replaced metrics_json.cycles with the coach's
+                # where one exists, so this inherits annotations-first for free.
+                cycles=mj.get("cycles"),
+                segmentation_reliable=bool(
+                    (mj.get("data_quality") or {}).get("segmentation_reliable", False)
+                ),
             )
             phases = _clean(pm.compute_phases(ctx))
 
@@ -152,6 +167,18 @@ def main():
             uw = phases["underwater"]["uw_duration"]["value"]
             if uw is not None:
                 with_uw += 1
+            # Reported because a zero here is otherwise invisible: it means the cycles never
+            # reached the context, not that the metric is hard (75-06).
+            if phases["swim"]["dead_spot_timing"]["value"] is not None:
+                with_cycles += 1
+            # Same reason (83-02): kick_bands rides inside `phases`, so a zero would mean the
+            # bands never reached the payload at all rather than "no kicks in this library".
+            # Counted against the strokes that CAN have them — breaststroke's underwater is the
+            # pulldown and is gated off by design, so it is not a miss.
+            if stroke != "breaststroke":
+                kickable += 1
+                if phases["kick_bands"]:
+                    with_kick_bands += 1
 
             if write:
                 db.patch("sessions", sid, {"metrics_json": {**mj, "phases": phases}})
@@ -173,6 +200,8 @@ def main():
     mode = "APPLIED" if write else "DRY RUN (no writes)"
     print(f"{mode}: {written} written, {skipped} skipped, {failed} failed of {len(rows)}.")
     print(f"Sessions with a non-null uw_duration: {with_uw} of {len(rows)}")
+    print(f"Sessions with per-cycle swim metrics:  {with_cycles} of {len(rows)}")
+    print(f"Sessions with underwater kick bands:   {with_kick_bands} of {kickable} non-breaststroke")
     print("Boundary sources:")
     for key in ("dive_start_s", "underwater_start_s", "stroke_start_s", "finish_s"):
         parts = [f"{src.split('=')[1]} {n}" for src, n in sorted(sources.items())

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -36,8 +37,18 @@ export function TrendPanel({
   // Optional multi-series form: [{ dataKey, color, name }]. Omitted → the original single blue
   // line, so the report card's rendering is unchanged.
   series = null,
+  // Phase 83-01 cross-highlight, both optional. Absent → this panel behaves exactly as before,
+  // which is what keeps CompareCycleCharts (the other caller of this export) un-regressed.
+  highlightN = null,
+  onHoverN = null,
 }) {
   const lines = series ?? [{ dataKey, color: "#2196f3", name: undefined }];
+  // activeLabel is the x-category, which recharts may hand back as a string — coerce, so the
+  // number the inset compares against is always a number.
+  const reportHover = (state) => {
+    const v = Number(state?.activeLabel);
+    onHoverN(Number.isFinite(v) ? v : null);
+  };
   return (
     <div className="rounded-xl border border-navy/50 bg-surface p-3">
       <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-widest text-muted">
@@ -49,7 +60,12 @@ export function TrendPanel({
           height="100%"
           initialDimension={{ width: 260, height: 176 }}
         >
-          <LineChart data={data} margin={{ top: 6, right: 10, bottom: 0, left: -8 }}>
+          <LineChart
+            data={data}
+            margin={{ top: 6, right: 10, bottom: 0, left: -8 }}
+            onMouseMove={onHoverN ? reportHover : undefined}
+            onMouseLeave={onHoverN ? () => onHoverN(null) : undefined}
+          >
             <CartesianGrid stroke="#1e3a5f" strokeOpacity={0.25} />
             <XAxis
               dataKey="n"
@@ -89,6 +105,11 @@ export function TrendPanel({
                 ) : null
               }
             />
+            {/* the band the coach is hovering on the inset — solid, so it never reads as a second
+                mean line (83-01) */}
+            {highlightN != null && (
+              <ReferenceLine x={highlightN} stroke="#f0f2f5" strokeOpacity={0.5} strokeWidth={1.5} />
+            )}
             {mean != null && Number.isFinite(mean) && (
               <ReferenceLine
                 y={mean}
@@ -131,12 +152,34 @@ const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const fmt = (v, d = 2) => (num(v) != null ? v.toFixed(d) : "--");
 const pct = (v) => (num(v) != null ? `${(v * 100).toFixed(0)}%` : "--");
 
-export default function CycleCharts({ cycles, session, unit = "metric" }) {
+export default function CycleCharts({
+  cycles,
+  session,
+  unit = "metric",
+  // Phase 83-01 — shared with the Swimming inset. The parent owns the state; absent (the legacy
+  // no-phases branch, where there is no inset partner) the charts behave exactly as before.
+  highlightN = null,
+  onHoverN = null,
+}) {
+  const imp = unit === "imperial";
+  const factor = imp ? 1.09361 : 1;
+
+  // Memoized so a hover-driven re-render does not rebuild four recharts datasets (83 R4).
+  const data = useMemo(
+    () =>
+      (cycles ?? []).map((c, i) => ({
+        n: i + 1,
+        dps: num(c.dist_m) != null ? c.dist_m * factor : null,
+        coast: num(c.coast_fraction) != null ? c.coast_fraction * 100 : null,
+        dur: num(c.duration_s),
+        arm: num(c.arm_peak_vel) != null ? c.arm_peak_vel * factor : null,
+      })),
+    [cycles, factor]
+  );
+
   if (!cycles?.length) return null;
 
   const s = session ?? {};
-  const imp = unit === "imperial";
-  const factor = imp ? 1.09361 : 1;
   const distUnit = imp ? "yd" : "m";
   const velUnit = imp ? "yd/s" : "m/s";
   const scale = (v) => (num(v) != null ? v * factor : null);
@@ -146,18 +189,12 @@ export default function CycleCharts({ cycles, session, unit = "metric" }) {
   // code — whose means and CVs covered steady cycles only.
   const legacy = cycles.some((c) => c && "phase" in c);
 
-  const data = cycles.map((c, i) => ({
-    n: i + 1,
-    dps: scale(c.dist_m),
-    coast: num(c.coast_fraction) != null ? c.coast_fraction * 100 : null,
-    dur: num(c.duration_s),
-    arm: scale(c.arm_peak_vel),
-  }));
-
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-2">
         <TrendPanel
+          highlightN={highlightN}
+          onHoverN={onHoverN}
           title="Distance per Stroke"
           data={data}
           dataKey="dps"
@@ -166,6 +203,8 @@ export default function CycleCharts({ cycles, session, unit = "metric" }) {
           caption={`mean ${fmt(scale(s.mean_dps_m))} ${distUnit}`}
         />
         <TrendPanel
+          highlightN={highlightN}
+          onHoverN={onHoverN}
           title="Coast"
           data={data}
           dataKey="coast"
@@ -175,6 +214,8 @@ export default function CycleCharts({ cycles, session, unit = "metric" }) {
           caption={`mean ${pct(s.mean_coast_fraction)} of each cycle spent gliding`}
         />
         <TrendPanel
+          highlightN={highlightN}
+          onHoverN={onHoverN}
           title="Cycle Duration"
           data={data}
           dataKey="dur"
@@ -183,6 +224,8 @@ export default function CycleCharts({ cycles, session, unit = "metric" }) {
           caption={`mean ${fmt(s.mean_isi_s)} s · rhythm consistency (CV) ${pct(s.cv_isi)}`}
         />
         <TrendPanel
+          highlightN={highlightN}
+          onHoverN={onHoverN}
           title="Arm Peak Velocity"
           data={data}
           dataKey="arm"
