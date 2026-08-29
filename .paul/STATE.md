@@ -9,7 +9,7 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 
 - **Milestone:** v0.5 Commercial Foundation
 - **Phase 75-06** (Swim + Whole metric batch) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-28**
-  (loop: PLAN ✓ → APPLY ✓ → UNIFY ✓). ⚠ **UNCOMMITTED — see the working-tree note below.**
+  (loop: PLAN ✓ → APPLY ✓ → UNIFY ✓). ✅ **Committed `20c0432`** (whole-tree commit, 2026-08-29).
   **The race-phase registry is now complete** (37 → **47 specs**; `streamline_drag` is the only
   `planned` one left). 23 Swim + Whole metrics implemented and rendered as the report card's last two
   sections; the two `<ComingSoon>` stubs are gone. Suite **485 green** (+38); web build clean.
@@ -50,10 +50,7 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   `segmentationReliable` threaded explicitly, never inferred from an annotation row); `@theme static`
   rather than a plain block; the hover readout **replaces** the inset caption instead of adding a line
   beneath it, so the four charts don't shift down mid-gesture; badge pluralises (`1 cycle`).
-  ⚠ **Stacks on the 75-06 tree, which is loop-closed but still UNCOMMITTED** (D11) — base verified
-  **485 passing** 2026-08-28. The web-side diff is now 75-06 + 83-01 mixed in `PhaseReportCard.js`, and
-  `web/lib/phaseValence.js` is 75-06's alone — same hunk-staging problem as `api.py`, one more reason the
-  next commit takes the whole tree.
+  ✅ **Committed `20c0432`** with the rest of the tree, 2026-08-29.
   ⚠ **Phase 83 itself stays 🚧 — NOT transitioned, NO phase commit.** 83-01 is 1 of 2 plans; the
   plan-count heuristic would have called the phase done, but 83-02 is the kicks half.
   See [83-01-SUMMARY.md](phases/83-per-cycle-trace-coloring/83-01-SUMMARY.md) ·
@@ -227,17 +224,18 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
   (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
   item 9 (annotate the backlog fast).
-- **⚠ Working tree — 75-06 and 82-01 are BOTH uncommitted, and they SHARE `api.py`.** This is the one
-  thing to resolve before the next commit. `api.py` + `tests/test_api.py` carry **82-01's**
-  session-delete storage cleanup (applied, never committed); `api.py` *also* carries **75-06's** cycle
-  threading + the `PUT /annotations` phases repair. Committing either plan cleanly needs hunk-level
-  staging (`git add -p`), which is unavailable in this environment — so **nothing from 75-06 was
-  committed.** 75-06's own files: `phase_metrics.py`, `tools/backfill_phases.py`,
-  `web/components/portal/phases/PhaseReportCard.js`, `web/lib/phaseValence.js`,
-  `tests/test_phase_metrics.py`, `tests/test_annotations.py`, `PIPELINE.md`, `.paul/PROJECT.md`.
+- **✅ Working tree RESOLVED 2026-08-29 — committed + pushed as `20c0432`.** The shared-`api.py`
+  deadlock (75-06's cycle threading + `PUT /annotations` repair tangled with 82-01's session-delete
+  storage cleanup, hunk-level staging unavailable) was broken by taking the **whole tree in one
+  commit**: 75-06 + 82-01 + 83-01/02/03 + Phase-80 notebook/scripts + research docs + app icons,
+  **74 files**. ⚠ **This pushed to `main`, which auto-deploys** — Railway (api.py: the delete-cleanup
+  and the annotations repair) and Vercel (web). Excluded deliberately: `*.html` (already gitignored,
+  incl. the 14 MB Phase-80 plotly figures) and `scratch/_cycle*.mjs` (generated copies of
+  `web/lib/` sources).
 - **Committed history:** 75-03 = `7035157`, Phase 79 = `e1934ba`, Phase 78 + doc reconciliation =
   `76d2a18`, **75-05 report-card UI = `9dd5f7a`**, **75-07 report-card merge = `040ce0d`**, **81-01
-  annotate marking = `a73db03`** (frontend only; `.claude/launch.json` is gitignored, stays local).
+  annotate marking = `a73db03`** (frontend only; `.claude/launch.json` is gitignored, stays local),
+  **75-06 + 82-01 + 83-01/02/03 whole-tree = `20c0432`** (2026-08-29, pushed to `main`).
   Stored library backfilled 2026-08-21 (all four boundaries) and again **2026-08-28** (75-06 metrics +
   the 75-04 Start metrics). Other dirty files belong to **other streams:** `ESP_32_V5/ESP_32_V5.ino`
   (firmware), `.gitignore`, `assets/icon/`, `scratch/`, `segmenter_report.json`, the untracked Phase-80
