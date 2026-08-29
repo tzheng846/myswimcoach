@@ -1,10 +1,15 @@
 // cycleShape — per-band shape anomaly detection for the phase insets.
 //
-// ⚠ PARKED, NOT WIRED (Phase 83-03). Nothing imports this. It is kept because it is correct and
-// covered by `scratch/shape_checks.mjs`, and because the follow-up that needs it is a real owed
-// item — not because anything renders it today.
+// ⚠ PARTLY WIRED (Phase 83-05). `resample`, `median`, `POINTS` and `MIN_ITEMS` ARE imported — by
+// `lib/cycleTraces`, which uses them to draw every cycle on one axis for the overlay panel's
+// normalized (% of cycle) mode and its pointwise-median reference line.
 //
-// Why it was cut: measured across the stored library (90 sessions, 618 cycles), the MAD gate below
+// ⚠ `analyzeShapes` and its MAD gate below remain PARKED AND UNIMPORTED (Phase 83-03). They are
+// kept because the algorithm is correct and covered by `scratch/shape_checks.mjs`, and because the
+// follow-up that needs it is a real owed item (STATE item 17) — not because anything renders it.
+// Do not wire `analyzeShapes` without first fixing its reference population; see below.
+//
+// Why the gate was cut: measured across the stored library (90 sessions, 618 cycles), the MAD gate below
 // fired on 75% of sessions at k=3.0 and still on 39% at an absurd k=8.0. There is no k where a
 // clean swim is quiet and a ragged one is not. The cause is sample size — a lap holds a median of
 // 7 cycles, so the MAD is small and unstable, and a within-lap outlier test on n=7 is not a
@@ -41,7 +46,9 @@ export const MIN_ITEMS = 5;
 
 const fin = (v) => typeof v === "number" && Number.isFinite(v);
 
-function median(xs) {
+// Exported for `lib/cycleTraces` (83-05) so the overlay's median line and this file's reference
+// profile cannot drift into two different definitions of "median".
+export function median(xs) {
   const s = [...xs].sort((a, b) => a - b);
   const m = s.length >> 1;
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
@@ -52,7 +59,7 @@ function median(xs) {
 // Returns null when the span is too short or carries ANY non-finite value: a dropout must exclude
 // the band, never be filled. `detect_underwater_kicks` interpolates over dropouts because peak
 // SHAPE survives it, but a distance measure would silently score the fill itself.
-function resample(velocity, start, end, points) {
+export function resample(velocity, start, end, points) {
   const a = Math.max(0, Math.trunc(start));
   const b = Math.min(velocity.length, Math.trunc(end));
   const len = b - a;

@@ -146,6 +146,48 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   Start/Underwater/Swimming past their boundaries with the extension drawn grey, plus a minimum span in
   **seconds** (never samples — the rate is per-session, ~89.5 Hz typical). Bands must keep clamping to
   the **phase** window, not the padded one. Whole-race inset is already the full trace ⇒ no-op there.
+- **Phase 83-05** (cycle/kick OVERLAY panel) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-29,
+  AC-8 approved after two live corrections.** Loop: `PLAN ✓ → APPLY ✓ → UNIFY ✓`. **Frontend only;
+  no Python, no schema, no backfill — suite still 497.** The replacement for 83-03's cut classifier:
+  instead of *asserting* which stroke is odd, every cycle (or downkick) is drawn on ONE shared axis
+  beneath its phase inset, in neutral grey, with a left number gutter that hover-previews and
+  click-pins. New pure `web/lib/cycleTraces.js` + `CycleOverlay.js`; `PhaseReportCard` lifts the pin
+  state and resolves `active = hovered ?? pinned` ONCE (D9). Seconds axis by default, normalized
+  `% of cycle` toggle adding a pointwise-median line gated at 5 traces. **`PhaseVelocity.js`,
+  `cycleBands.js` and `CycleCharts.js` are byte-identical — absent from `git diff`**, unlike 83-02
+  which broke its own zero-diff AC.
+  ⚠ **Two live corrections at the verify, both now shipped:**
+  (1) **the gutter wraps at 10 rows** — a 15-dolphin-kick underwater made a single column stand
+  taller than the chart beside it (`grid-auto-flow: column`; 9→1 col, 15→2×8, 25→3×9). The
+  `0 · breakout` row moved OUTSIDE the grid so its long label cannot set every column's width.
+  (2) **AC-3 was OVERRIDDEN by the user** — the breakout row is no longer inert; hovering it now
+  highlights the gold `n: 0` band in the inset. It stays dim (no trace of it in the pack) and nothing
+  in CycleCharts reacts, since 0 is outside that keyspace. ⚠ Numbered `dropout`/`too-short` rows are
+  **still inert** — the same argument applies to them but was not generalised.
+  ⚠ **Two boundary widenings, both forced by contradictions inside the PLAN itself:**
+  (a) `cycleShape.js` gained **two `export` keywords** (Task 1 mandates importing `resample` +
+  `median`; the boundary said "header comment only"). `analyzeShapes` + `K` untouched and, by grep,
+  **still imported nowhere**. (b) **`niceMax` is DUPLICATED** from the DO-NOT-CHANGE `PhaseVelocity.js`
+  — guarded by a render check asserting the two function bodies are **byte-identical**, so the copy
+  cannot drift.
+  ✅ **New reusable harness: `scratch/overlay_render_check.mjs`** (40 checks) — transpiles the
+  component with the bundled `typescript` package, server-renders it with `react-dom/server`, and
+  asserts on markup. **Needs no auth, so it works despite the Supabase-gated portal.** It targets
+  83-01's two silent-failure classes directly: no path may render `stroke: none`, every trace must
+  carry real `d="M…"` geometry. Plus `scratch/overlay_checks.mjs` (32 data checks). Build clean
+  19 pages; eslint clean apart from the pre-existing `set-state-in-effect`.
+  ⚠ **Ships the item-18 kick-tiling artifact knowingly** (D8) — but see the item-18 correction below:
+  at 15 kicks the two tiling bands are 2 of 15, not "2 of 5", and the live pack read as tight.
+  ⚠ **D5's auto-session posture survived the verify unchanged** — no caution copy was requested, so
+  auto sessions carry only the existing `auto` badge to signal that spread may be segmentation.
+  ⚠ **STATE item 17 stays open** — `resample` + the median are wired, the MAD gate is not.
+  ⚠ **Peak-alignment surfaced as a better axis mode than align-center and was DECLINED** → new item 19.
+  ⚠ **Phase 83 stays 🚧 — NOT transitioned, NO phase commit.** PLAN/SUMMARY counts are now **4/4**, the
+  exact heuristic that has falsely signalled "done" at 83-01, 83-02 AND 83-03. **83-04 (inset window
+  framing) is scoped in STATE but still has no PLAN.**
+  See [83-05-SUMMARY.md](phases/83-per-cycle-trace-coloring/83-05-SUMMARY.md) ·
+  [83-05-PLAN.md](phases/83-per-cycle-trace-coloring/83-05-PLAN.md) ·
+  [83-05-CONTEXT.md](phases/83-per-cycle-trace-coloring/83-05-CONTEXT.md).
 - **Phase 82** (Storage Quota Cleanup) — **🚧 PLAN created 2026-08-27, awaiting APPLY.** Supabase free
   tier is over quota (2.53 GB vs 1 GB cap; new uploads may already be blocked). Two leak sources found
   in `DELETE /sessions/{id}`: `video_path` never removed from the `videos` bucket, and `session_videos`
@@ -382,6 +424,31 @@ product doctrine asks for. Needs prior sessions' velocity arrays reachable from 
 a **backend/data question, not a frontend one**. Probes: `scratch/shape_viability_probe.py`,
 `scratch/shape_sweep_probe.py` (read-only, re-runnable).
 
+**18. ⚠ Kick bands TILE their window — the first and last are not kicks (found 2026-08-29, 83-05 discuss).**
+`segment_kick_bands` builds `edges = [i0, ...troughs..., i1]` ([metrics.py:926](../metrics.py)), so band 1
+spans `underwater_start` → first trough (the **push-off glide**) and band N spans last trough →
+`stroke_start` (the **breakout transition**). Only the interior bands are true trough-to-trough kicks.
+Harmless in 83-02's banded inset — the bands simply tile — but it means the badge's "N kicks" **overcounts
+by up to 2**, and any surface that compares bands to each other (83-05's overlay) shows ~2 of ~5 traces
+departing for a reason that has nothing to do with the swimmer. ⚠ **CORRECTED 2026-08-29 (83-05 verify):
+the "~2 of ~5" figure is worst-case, not typical** — the artifact is a FIXED cost of two bands, so its
+visual weight scales inversely with kick count. On the live 15-kick session used for 83-05's AC-8 it is
+2 of 15 and the overlay pack read as tight. The badge overcount and the defect are still real.
+**Fix:** emit only interior spans and let
+the inset draw honest grey for the glide and the breakout edge. Cost is Python + `SCHEMA_VERSION` bump +
+backfill across the 63 sessions carrying bands, which is why 83-05 accepts the artifact rather than
+absorbing a backend change (83-05 D8).
+
+**19. Peak-alignment as an overlay axis mode (83-05, declined for that plan).** The overlay's
+seconds mode anchors every trace on the cycle **start** — a segmentation artifact — so all error
+accumulates rightward, which is the fan visible at the right of the underwater pack. Anchoring instead
+on each cycle's **velocity peak** (the arm-pull, read from the signal itself) would make the spread real
+stroke variation, keep durations honest (no rescaling, unlike normalized), and **largely dissolve 83-05
+D5's accepted caveat** that auto-session spread may be segmentation rather than stroke. Align-CENTER was
+considered and argued against: the midpoint inherits jitter from both boundaries and corresponds to no
+physical event. Cost ~30 lines in `web/lib/cycleTraces.js` + a third toggle state; frontend only, no
+schema. User declined for 83-05 — revisit if the pack ever reads too loose to judge.
+
 ## Recent arc (compressed)
 - **75-01** skeleton — `MetricSpec` registry (37 specs) + `metrics_json.phases` jsonb + `POST /sessions/{id}/recompute` backfill seam.
 - **75-02** — `detect_underwater_start` + 4 underwater window metrics; backfilled all 108 sessions.
@@ -406,6 +473,13 @@ a **backend/data question, not a frontend one**. Probes: `scratch/shape_viabilit
   + `provisional` flag (schema 3) = annotations-first for per-cycle metrics (43 trusted / 44 provisional
   live). Fixed `PUT /annotations` destroying `phases`, and a THIRD `PhaseContext` site in
   `tools/backfill_phases.py` that had left both per-cycle metrics 0/99. Suite 485.
+
+- **83-05** (closed 2026-08-29) — Overlay panel: every cycle/kick on one shared axis beneath its inset,
+  grey pack + wrapping number gutter with hover-preview and click-to-pin, three-surface highlight,
+  seconds/normalized toggle with a gated median line. New `web/lib/cycleTraces.js` + `CycleOverlay.js`;
+  the three protected components stayed byte-identical. Two live corrections: gutter wraps at 10 rows,
+  and AC-3 was overridden so the breakout row highlights `n: 0`. New reusable **headless render-check
+  harness** — the concrete answer to 83-01's "build and lint are blind to this".
 
 - **83-03** (closed 2026-08-29) — Gold breakout band = the coach's streamline-break mark → their first
   stroke mark, a SYNTHETIC `n: 0` band, annotated sessions only. **The plan's shape-anomaly flag was

@@ -26,6 +26,7 @@ import CycleCharts from "@/components/portal/CycleCharts";
 import { HoverExplainProvider } from "./HoverExplain";
 import RangeStrip from "./RangeStrip";
 import PhaseVelocity from "./PhaseVelocity";
+import CycleOverlay from "./CycleOverlay";
 import PhaseTimeline from "./PhaseTimeline";
 import AlertSummary from "./AlertSummary";
 
@@ -385,6 +386,9 @@ export default function PhaseReportCard({
   // One hover, two surfaces: the inset band and the point in all four CycleCharts panels. Lifted
   // here because neither child may own it (83 D8); both get it as a plain optional prop.
   const [hoverCycle, setHoverCycle] = useState(null);
+  // 83-05 D9: a pin is a SECOND, longer-lived channel. `setHoverCycle` still only ever writes the
+  // hover half, so a mouseleave clears the preview and leaves the pin standing.
+  const [pinnedCycle, setPinnedCycle] = useState(null);
   const hoverRow = useMemo(() => {
     if (hoverCycle == null || !cycles?.length) return null;
     return (
@@ -419,12 +423,20 @@ export default function PhaseReportCard({
   // Its OWN hover state, deliberately not shared with hoverCycle: the two insets must not highlight
   // each other, and there is no CycleCharts partner under Underwater, so this stays inset-local.
   const [hoverKick, setHoverKick] = useState(null);
+  const [pinnedKick, setPinnedKick] = useState(null);
   const hoverKickRow = useMemo(() => {
     // Kick bands carry `kick_num`, not `cycle_num`, so buildBands numbers them by array position
     // (+1) — which makes n-1 an index straight back into the stored array.
     if (hoverKick == null) return null;
     return kickSource?.[hoverKick - 1] ?? null;
   }, [kickSource, hoverKick]);
+
+  // The one resolution rule (83-05 D9). Hover PREVIEWS over a pin without clearing it; releasing
+  // the hover falls back to whatever is pinned. Everything that highlights reads this, never the
+  // raw hover — except the inset's readout line, which stays hover-only so a pin does not park a
+  // caption over the section's own copy.
+  const activeCycle = hoverCycle ?? pinnedCycle;
+  const activeKick = hoverKick ?? pinnedKick;
 
   const strokeLabel = STROKE_LABELS[strokeType];
   const baselineNote = strokeLabel
@@ -477,9 +489,9 @@ export default function PhaseReportCard({
                   fsHz={fsHz}
                   window={[i0, i1]}
                   {...(s.cycleCharts && swimBands.length
-                    ? { bands: swimBands, highlightN: hoverCycle, onHoverBand: setHoverCycle }
+                    ? { bands: swimBands, highlightN: activeCycle, onHoverBand: setHoverCycle }
                     : isUW && kickBands.length
-                    ? { bands: kickBands, highlightN: hoverKick, onHoverBand: setHoverKick }
+                    ? { bands: kickBands, highlightN: activeKick, onHoverBand: setHoverKick }
                     : null)}
                 />
                 {/* The hover readout REPLACES the caption rather than sitting under it: the four
@@ -517,6 +529,43 @@ export default function PhaseReportCard({
                     )
                   )}
                 </div>
+                {/* 83-05: the overlay lives INSIDE the same bordered box, below the inset and its
+                    badge row (D2) — it is the same picture read a second way, not a new section.
+                    Both panels self-gate: CycleOverlay returns null below two drawable traces, so
+                    breaststroke (whose kick_bands the backend already emits as []) needs no gate
+                    here, and neither does a session with a single cycle. */}
+                {s.cycleCharts && (
+                  <CycleOverlay
+                    items={cycles}
+                    velocity={velocity}
+                    fsHz={fsHz}
+                    window={[i0, i1]}
+                    label="cycle"
+                    activeN={activeCycle}
+                    onHoverN={setHoverCycle}
+                    pinnedN={pinnedCycle}
+                    onPinN={setPinnedCycle}
+                    excludeBreakout={swimBands.some((b) => b.isBreakout)}
+                  />
+                )}
+                {/* ⚠ Kick bands TILE their window (STATE item 18): band 1 is the push-off glide and
+                    band N the breakout transition, not kicks. So ~2 of ~5 underwater traces will
+                    always sit outside the pack for a reason that has nothing to do with the swimmer.
+                    83-05 D8 ships this KNOWINGLY — no filter, no heuristic here. The fix is upstream
+                    in `segment_kick_bands` and costs a SCHEMA_VERSION bump plus a backfill. */}
+                {isUW && (
+                  <CycleOverlay
+                    items={kickSource}
+                    velocity={velocity}
+                    fsHz={fsHz}
+                    window={[i0, i1]}
+                    label="kick"
+                    activeN={activeKick}
+                    onHoverN={setHoverKick}
+                    pinnedN={pinnedKick}
+                    onPinN={setPinnedKick}
+                  />
+                )}
               </div>
             )}
             <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
@@ -546,7 +595,7 @@ export default function PhaseReportCard({
                     cycles={cycles}
                     session={session}
                     unit={unit}
-                    highlightN={hoverCycle}
+                    highlightN={activeCycle}
                     onHoverN={setHoverCycle}
                   />
                 ) : (
