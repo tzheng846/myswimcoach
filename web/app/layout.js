@@ -1,9 +1,11 @@
 import "./globals.css";
 
+// The mark is wired as the favicon by the Next.js file convention: app/icon.png and
+// app/apple-icon.png are picked up automatically, so there is no icon entry here.
 export const metadata = {
-  title: "Swimnetics — Biomechanical Swim Coaching",
+  title: "Swimnetics | Race-Phase Swim Analysis",
   description:
-    "Biomechanical swim coaching from a tethered magnetic encoder wheel. Stroke-level metrics delivered poolside in seconds — no laptop required.",
+    "Precision performance metrics from a tethered encoder at the starting block. Every lap comes back split into the start, the underwater and the swimming, each scored against that swimmer's own recent history.",
 };
 
 export default function RootLayout({ children }) {

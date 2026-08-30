@@ -1,18 +1,18 @@
 const steps = [
   {
     n: "1",
-    title: "Clip it on",
-    body: "It clips to the starting block and tethers to the swimmer. Nothing to install, nothing worn in the water.",
+    title: "Clamp it on",
+    body: "The unit clamps to the starting block and the swimmer buckles on the belt. Setup takes about a minute, and you only do it once for the whole session.",
   },
   {
     n: "2",
-    title: "Swim the set",
-    body: "Tap record in the app. The swimmer just swims — no wearables, no change to the set.",
+    title: "Run the set",
+    body: "Tap record and coach the lane the way you normally would. The swimmer just swims. Nothing about the set has to change to fit the device.",
   },
   {
     n: "3",
-    title: "See it instantly",
-    body: "Speed, stroke rate, fatigue, and consistency — back on your phone seconds after the swim.",
+    title: "Read the card",
+    body: "The swim uploads on its own and comes back split by phase, with anything that moved already marked at the top.",
   },
 ];
 
@@ -24,7 +24,7 @@ export default function HowItWorks() {
           HOW IT WORKS
         </p>
         <h2 className="mt-3 text-3xl font-bold text-ink-900">
-          From dive to data in three steps
+          From dive to report card in three steps.
         </h2>
         <div className="mt-10 grid gap-5 sm:grid-cols-3">
           {steps.map((s) => (

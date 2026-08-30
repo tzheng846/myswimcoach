@@ -33,7 +33,7 @@ export default function ContactDialog({
     const fd = new FormData(e.currentTarget);
     const payload = {
       access_key: WEB3FORMS_ACCESS_KEY,
-      subject: "Swimnetics — quote request",
+      subject: "Swimnetics quote request",
       from_name: "Swimnetics website",
       name: fd.get("name"),
       email: fd.get("email"),
@@ -56,7 +56,7 @@ export default function ContactDialog({
       }
     } catch {
       setStatus("error");
-      setError(`Network error — please email ${CONTACT_EMAIL}.`);
+      setError(`Network error. Please email ${CONTACT_EMAIL}.`);
     }
   }
 
@@ -79,7 +79,7 @@ export default function ContactDialog({
         {status === "success" ? (
           <div className="text-center">
             <DialogHeader>
-              <DialogTitle>Thanks — we&apos;ll be in touch</DialogTitle>
+              <DialogTitle>Thanks, we&apos;ll be in touch</DialogTitle>
               <DialogDescription>
                 We got your request and will reach out shortly with a quote that
                 fits your program.

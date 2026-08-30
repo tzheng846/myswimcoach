@@ -189,6 +189,37 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [83-05-SUMMARY.md](phases/83-per-cycle-trace-coloring/83-05-SUMMARY.md) ·
   [83-05-PLAN.md](phases/83-per-cycle-trace-coloring/83-05-PLAN.md) ·
   [83-05-CONTEXT.md](phases/83-per-cycle-trace-coloring/83-05-CONTEXT.md).
+- **Phase 85-01** (Marketing home page refresh) — **APPLY ✓ 2026-08-29, AC-8 approved on the live
+  local site; loop `PLAN ✓ → APPLY ✓ → UNIFY ○`.** Frontend only, no Python touched, suite still 497.
+  The marketing site had not moved since `17086cb` (2026-06-22); it now leads with the race-phase
+  report card. Shipped: the Swimnetics mark enters the web surface for the first time (nav lockup
+  inverted over the hero, footer lockup, `app/icon.png` + `app/apple-icon.png` replacing
+  `favicon.ico`); hero copy per D21 with the floating chart card gone; new `PhaseStory` (one whole-lap
+  real trace, three phase windows tinted in place, grey post-finish tail) + reusable `PhaseRadar`
+  (axis count read from the data); `UsualRange`, `CyclePack`, `VideoSync`, `Device`; `Features.js`
+  and `SampleChart.js` retired. Geometry is **baked at author time** into `web/lib/marketingGeom.js`
+  by `scratch/_export_marketing_geom.py`, so a public page makes **no Supabase call** — whole-lap
+  polyline decimated 1762 → 882 points (10 KB), cycles left whole.
+  ⚠ **Copy rule now enforced by a check, not by eye:** `scratch/marketing_render_check.mjs`
+  (**45 checks green**) counts BOTH dash forms (the FAQ was 10 `&mdash;` entities to 2 literals, so a
+  character-only grep read it as clean), flags the banned strings, and — the 83-05 pattern — headlessly
+  server-renders the components to assert no `stroke: none`, no empty `points`, and the usual-range
+  coherence rule (a coloured strip sits OUTSIDE its band, a grey one inside).
+  ⚠ **Four deviations:** (1) the copy check is scoped to the **marketing surface**, not all of
+  `web/components` — the portal carries ~285 comment dashes, says "GoPro" legitimately in its upload
+  help, and holds `changed (unclear)` inside the `AlertSummary.js` that **D27 forbids this plan to
+  touch**; a permanently red check is a check nobody reads. (2) **AC-7's "still 19 pages" is now 20**,
+  measured: `favicon.ico` is worth one static page and the two icon file conventions are worth two.
+  (3) The three phase cards align their radars with a per-card **CSS grid row** (`1fr` on the blurb)
+  rather than the mockup's reserved `min-height`, which held at 1280 but broke at 880 where the
+  underwater blurb wraps to a fifth line and pushed its radar 21 px low; still never a flex column,
+  and the radar SVG measures 227/159/119 px at 1280/880/700 so nothing collapsed. (4) `Brand` uses
+  `next/image` because `@next/next/no-img-element` IS enabled in this config.
+  ⚠ `web/src/data/sample-session.json` is now an **orphan** (SampleChart was its only reader), left in
+  place. `/privacy` and `/blog` keep their em dashes by D5, including in their `<title>`.
+  ✅ **Committed + pushed to `main` — Vercel auto-deploys, so this is the public site now.**
+  See [85-01-PLAN.md](phases/85-website-home-refresh/85-01-PLAN.md) ·
+  [85/CONTEXT.md](phases/85-website-home-refresh/CONTEXT.md). **UNIFY still owed.**
 - **Phase 82** (Storage Quota Cleanup) — **🚧 PLAN created 2026-08-27, awaiting APPLY.** Supabase free
   tier is over quota (2.53 GB vs 1 GB cap; new uploads may already be blocked). Two leak sources found
   in `DELETE /sessions/{id}`: `video_path` never removed from the `videos` bucket, and `session_videos`

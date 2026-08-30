@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Brand from "@/components/Brand";
 import { CONTACT_EMAIL } from "@/lib/site";
 
 export default function Footer() {
@@ -6,9 +7,7 @@ export default function Footer() {
     <footer className="border-t border-line bg-paper">
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-12 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <span className="text-xs font-extrabold tracking-[0.3em] text-ink-900">
-            SWIMNETICS
-          </span>
+          <Brand />
           <p className="mt-3 text-sm text-ink-400">
             Built for swim academies and competitive programs.
           </p>

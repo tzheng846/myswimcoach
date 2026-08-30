@@ -2,19 +2,20 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import Brand from "@/components/Brand";
 import ContactDialog from "@/components/marketing/ContactDialog";
 
 const links = [
+  { href: "/#report-card", label: "Report card" },
   { href: "/#how-it-works", label: "How it works" },
-  { href: "/#features", label: "Features" },
   { href: "/blog", label: "Blog" },
   { href: "/faq", label: "FAQ" },
 ];
 
 export default function Nav({ overHero = false }) {
   // overHero=false (default): always solid (pages with a light background at the
-  // top — /faq, /privacy). overHero=true: transparent glass over the dark gradient
-  // hero, flipping to solid on scroll (homepage only).
+  // top, so /faq and /privacy). overHero=true: transparent glass over the dark
+  // gradient hero, flipping to solid on scroll (homepage only).
   const [scrolled, setScrolled] = useState(!overHero);
 
   useEffect(() => {
@@ -38,13 +39,8 @@ export default function Nav({ overHero = false }) {
       }`}
     >
       <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
-        <Link
-          href="/"
-          className={`text-sm font-extrabold tracking-[0.3em] transition-colors ${
-            scrolled ? "text-ink-900" : "text-white"
-          }`}
-        >
-          SWIMNETICS
+        <Link href="/">
+          <Brand inverted={!scrolled} />
         </Link>
 
         <div className="hidden items-center gap-8 sm:flex">
