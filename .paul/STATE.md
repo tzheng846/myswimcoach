@@ -217,7 +217,9 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   `next/image` because `@next/next/no-img-element` IS enabled in this config.
   ⚠ `web/src/data/sample-session.json` is now an **orphan** (SampleChart was its only reader), left in
   place. `/privacy` and `/blog` keep their em dashes by D5, including in their `<title>`.
-  ✅ **Committed + pushed to `main` — Vercel auto-deploys, so this is the public site now.**
+  ✅ **Committed + pushed `a75c373` (2026-08-29) — Vercel auto-deploys `main`, so this is the public
+  site now.** Excluded from the commit: `scratch/_home_session.json` (the raw probe dump carries the
+  source athlete), `scratch/_mockup_template.html` (`*.html` is gitignored), and the round-1 leftovers.
   See [85-01-PLAN.md](phases/85-website-home-refresh/85-01-PLAN.md) ·
   [85/CONTEXT.md](phases/85-website-home-refresh/CONTEXT.md). **UNIFY still owed.**
 - **Phase 82** (Storage Quota Cleanup) — **🚧 PLAN created 2026-08-27, awaiting APPLY.** Supabase free
