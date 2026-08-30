@@ -189,8 +189,8 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [83-05-SUMMARY.md](phases/83-per-cycle-trace-coloring/83-05-SUMMARY.md) ·
   [83-05-PLAN.md](phases/83-per-cycle-trace-coloring/83-05-PLAN.md) ·
   [83-05-CONTEXT.md](phases/83-per-cycle-trace-coloring/83-05-CONTEXT.md).
-- **Phase 85-01** (Marketing home page refresh) — **APPLY ✓ 2026-08-29, AC-8 approved on the live
-  local site; loop `PLAN ✓ → APPLY ✓ → UNIFY ○`.** Frontend only, no Python touched, suite still 497.
+- **Phase 85** (Marketing home page refresh) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-29,
+  AC-8 approved on the live local site; PHASE TRANSITIONED, 1/1 plans.** Frontend only, no Python touched, suite still 497.
   The marketing site had not moved since `17086cb` (2026-06-22); it now leads with the race-phase
   report card. Shipped: the Swimnetics mark enters the web surface for the first time (nav lockup
   inverted over the hero, footer lockup, `app/icon.png` + `app/apple-icon.png` replacing
@@ -220,8 +220,13 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   ✅ **Committed + pushed `a75c373` (2026-08-29) — Vercel auto-deploys `main`, so this is the public
   site now.** Excluded from the commit: `scratch/_home_session.json` (the raw probe dump carries the
   source athlete), `scratch/_mockup_template.html` (`*.html` is gitignored), and the round-1 leftovers.
-  See [85-01-PLAN.md](phases/85-website-home-refresh/85-01-PLAN.md) ·
-  [85/CONTEXT.md](phases/85-website-home-refresh/CONTEXT.md). **UNIFY still owed.**
+  ✅ **Phase 85 IS complete and WAS transitioned — unlike 83, the plan-count heuristic is trustworthy
+  here.** The trap that misfired at 83-01/02/03/05 is a phase with known remaining scope; Phase 85 has
+  none: all four CONTEXT goals shipped in one plan, and D27's portal chip rename was scoped as a
+  SEPARATE phase from the start, not as 85-02.
+  See [85-01-SUMMARY.md](phases/85-website-home-refresh/85-01-SUMMARY.md) ·
+  [85-01-PLAN.md](phases/85-website-home-refresh/85-01-PLAN.md) ·
+  [85/CONTEXT.md](phases/85-website-home-refresh/CONTEXT.md).
 - **Phase 82** (Storage Quota Cleanup) — **🚧 PLAN created 2026-08-27, awaiting APPLY.** Supabase free
   tier is over quota (2.53 GB vs 1 GB cap; new uploads may already be blocked). Two leak sources found
   in `DELETE /sessions/{id}`: `video_path` never removed from the `videos` bucket, and `session_videos`
@@ -313,7 +318,9 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   annotate marking = `a73db03`** (frontend only; `.claude/launch.json` is gitignored, stays local),
   **75-06 + 82-01 + 83-01/02/03 whole-tree = `20c0432`** (2026-08-29, pushed to `main`),
   **83-05 overlay panel = `45a858b`** (2026-08-29, pushed to `main` — frontend + docs only, so this
-  deploy is Vercel-only; `scratch/_cycle*.mjs` excluded again as generated copies of `web/lib/` sources).
+  deploy is Vercel-only; `scratch/_cycle*.mjs` excluded again as generated copies of `web/lib/` sources),
+  **Phase 85 marketing home = `a75c373`** (2026-08-29, pushed to `main` — Vercel-only; excludes
+  `scratch/_home_session.json`, which carries the source athlete's raw session).
   Stored library backfilled 2026-08-21 (all four boundaries) and again **2026-08-28** (75-06 metrics +
   the 75-04 Start metrics). Other dirty files belong to **other streams:** `ESP_32_V5/ESP_32_V5.ino`
   (firmware), `.gitignore`, `assets/icon/`, `scratch/`, `segmenter_report.json`, the untracked Phase-80
@@ -485,6 +492,15 @@ considered and argued against: the midpoint inherits jitter from both boundaries
 physical event. Cost ~30 lines in `web/lib/cycleTraces.js` + a third toggle state; frontend only, no
 schema. User declined for 83-05 — revisit if the pack ever reads too loose to judge.
 
+**20. Portal alert chip still reads "changed (unclear)" while the site says "Normal" (Phase 85 D26/D27).**
+The **gate already matches on both surfaces** — `flagVerdict` in `web/lib/phaseValence.js` returns
+`flagged: false` for anything inside the band, so an alert already means out-of-range everywhere. What
+does NOT match is the wording of the out-of-range-but-direction-ambiguous bucket:
+`web/components/portal/phases/AlertSummary.js:38` labels it `changed (unclear)`, and D26 renames it
+**"to review"**. One component, one string, deliberately deferred out of Phase 85 (D27, marketing-only
+scope). ⚠ Note the marketing page shows **no example of that bucket at all**, an accepted
+simplification, so a coach meets it first in the portal.
+
 ## Recent arc (compressed)
 - **75-01** skeleton — `MetricSpec` registry (37 specs) + `metrics_json.phases` jsonb + `POST /sessions/{id}/recompute` backfill seam.
 - **75-02** — `detect_underwater_start` + 4 underwater window metrics; backfilled all 108 sessions.
@@ -516,6 +532,14 @@ schema. User declined for 83-05 — revisit if the pack ever reads too loose to 
   the three protected components stayed byte-identical. Two live corrections: gutter wraps at 10 rows,
   and AC-3 was overridden so the breakout row highlights `n: 0`. New reusable **headless render-check
   harness** — the concrete answer to 83-01's "build and lint are blind to this".
+
+- **85** (closed 2026-08-29, phase transitioned 1/1) — Marketing home page rebuilt around the
+  race-phase report card, ten weeks after the site last moved. Real trace geometry baked at author
+  time into `web/lib/marketingGeom.js` (whole lap decimated 1762 → 882 pts), so a public page makes
+  no Supabase call; the Swimnetics mark enters the web surface; `Features.js` + `SampleChart.js`
+  retired. New reusable gate `scratch/marketing_render_check.mjs` (45 checks) counts BOTH dash forms
+  — the FAQ was 10 `&mdash;` entities to 2 literals, so every character-only grep had read it as
+  clean — and headlessly renders the components for the 83-01 silent-failure classes.
 
 - **83-03** (closed 2026-08-29) — Gold breakout band = the coach's streamline-break mark → their first
   stroke mark, a SYNTHETIC `n: 0` band, annotated sessions only. **The plan's shape-anomaly flag was
