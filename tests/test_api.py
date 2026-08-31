@@ -23,15 +23,23 @@ RESPONSE_TOP_KEYS = [
 ]
 
 
-def _post_csv(client, csv_bytes: bytes, head_waist_m: float = 0.0, go_signal_s=None):
+def _post_csv(client, csv_bytes: bytes, head_waist_m: float = 0.0, go_signal_s=None,
+              session_start_utc_ms=None, sync_error_ms=None, clock_offset_ms=None):
     """Helper: POST a CSV to /process and return the Response.
 
-    go_signal_s is added to the form ONLY when supplied, so the ~20 existing callers keep
-    posting the exact field set they always did (AC-2 depends on that being true).
+    go_signal_s and the three Phase 86-01 session-clock fields are added to the form ONLY
+    when supplied, so the ~20 existing callers keep posting the exact field set they always
+    did (AC-2 depends on that being true).
     """
     data = {"head_waist_m": str(head_waist_m)}
     if go_signal_s is not None:
         data["go_signal_s"] = str(go_signal_s)
+    if session_start_utc_ms is not None:
+        data["session_start_utc_ms"] = str(session_start_utc_ms)
+    if sync_error_ms is not None:
+        data["sync_error_ms"] = str(sync_error_ms)
+    if clock_offset_ms is not None:
+        data["clock_offset_ms"] = str(clock_offset_ms)
     return client.post(
         "/process",
         files={"file": ("session.csv", io.BytesIO(csv_bytes), "text/csv")},
@@ -1592,3 +1600,156 @@ class TestDeleteSessionVideoCleanup:
         resp = api_client.delete("/sessions/sess-1", headers={"Authorization": "Bearer fake"})
         assert resp.status_code == 200, resp.text
         assert resp.json() == {"ok": True}
+
+
+# ── Phase 86-01 session clock: /process persists the absolute start + its error bars ──
+# session_start_utc_ms is the phone's measured UTC instant of encoder sample #0. Like the
+# QR slate's recording_token, each key is written ONLY when a value survived validation, so
+# the insert stays valid on a DB that has not yet had patch_14 applied. Absent key and
+# explicit NULL are indistinguishable in the stored row (nullable, no default).
+
+class TestSessionClockPersisted:
+    # A real instant, comfortably inside the sanity window.
+    GOOD_MS = 1756500000123
+
+    def _row(self, api_client, monkeypatch, csv_bytes, **clock):
+        from unittest.mock import MagicMock
+        import api
+        admin = MagicMock()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        monkeypatch.setattr(
+            api, "_get_coach_row",
+            lambda *a, **k: {"id": "coach-1", "device_limit": None,
+                             "monthly_session_limit": None},
+        )
+        data = {"head_waist_m": "0.0", "athlete_id": "ath-1"}
+        for key, val in clock.items():
+            if val is not None:
+                data[key] = str(val)
+        resp = api_client.post(
+            "/process",
+            files={"file": ("session.csv", io.BytesIO(csv_bytes), "text/csv")},
+            data=data,
+            headers={"Authorization": "Bearer fake-token-mocked"},
+        )
+        assert resp.status_code == 200, resp.text
+        return admin.table.return_value.insert.call_args[0][0]
+
+    def test_valid_start_is_persisted(self, api_client, monkeypatch, synthetic_csv_bytes):
+        """AC-1: a plausible epoch-ms instant reaches the insert unchanged, as an int."""
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes,
+                        session_start_utc_ms=self.GOOD_MS)
+        assert row["session_start_utc_ms"] == self.GOOD_MS
+        assert type(row["session_start_utc_ms"]) is int
+
+    def test_absent_start_leaves_the_key_off(self, api_client, monkeypatch,
+                                             synthetic_csv_bytes):
+        """AC-2: no field sent -> key absent -> column NULL, and valid pre-patch_14."""
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes)
+        assert "session_start_utc_ms" not in row
+        assert "sync_error_ms" not in row
+        assert "clock_offset_ms" not in row
+
+    def test_absent_start_changes_no_other_stored_field(self, api_client, monkeypatch,
+                                                        synthetic_csv_bytes):
+        """AC-2: an upload without the new fields stores exactly the pre-change key set."""
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes)
+        assert set(row) == {
+            "athlete_id", "coach_id", "metrics_json", "velocity_profile",
+            "distance_profile", "acceleration_profile", "sample_rate_hz",
+            "raw_csv_path", "upload_status", "name", "notes", "stroke_type", "device_id",
+        }
+
+    @pytest.mark.parametrize("bad", [
+        -5,                # negative
+        0,                 # zero
+        1756500000,        # SECONDS, not milliseconds - the realistic client bug
+        1756500000123456,  # microseconds, not milliseconds
+    ])
+    def test_bad_start_is_dropped_but_the_swim_is_saved(self, api_client, monkeypatch,
+                                                        synthetic_csv_bytes, bad):
+        """AC-3: 200, session still inserted, the bad value simply never reaches the row.
+
+        The request carries the swim, which is unrepeatable - losing it over a malformed
+        clock annotation would trade an irreplaceable measurement for a replaceable one.
+        """
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes,
+                        session_start_utc_ms=bad)
+        assert "session_start_utc_ms" not in row
+        assert row["velocity_profile"]  # the session itself was still saved
+
+    def test_error_bars_ride_along(self, api_client, monkeypatch, synthetic_csv_bytes):
+        """AC-5: both diagnostics persist as plain floats."""
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes,
+                        sync_error_ms=7.4, clock_offset_ms=-32.1)
+        assert row["sync_error_ms"] == pytest.approx(7.4)
+        assert row["clock_offset_ms"] == pytest.approx(-32.1)
+        assert type(row["sync_error_ms"]) is float
+
+    def test_error_bars_are_independent_of_each_other(self, api_client, monkeypatch,
+                                                      synthetic_csv_bytes):
+        """AC-5: supplying one must not gate the other."""
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes, sync_error_ms=7.4)
+        assert row["sync_error_ms"] == pytest.approx(7.4)
+        assert "clock_offset_ms" not in row
+
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes, clock_offset_ms=-32.1)
+        assert row["clock_offset_ms"] == pytest.approx(-32.1)
+        assert "sync_error_ms" not in row
+
+    def test_error_bars_do_not_gate_on_a_valid_start(self, api_client, monkeypatch,
+                                                     synthetic_csv_bytes):
+        """AC-5: a REJECTED start with a recorded offset is the forensic case these exist for."""
+        row = self._row(api_client, monkeypatch, synthetic_csv_bytes,
+                        session_start_utc_ms=-5, sync_error_ms=7.4, clock_offset_ms=-32.1)
+        assert "session_start_utc_ms" not in row
+        assert row["sync_error_ms"] == pytest.approx(7.4)
+        assert row["clock_offset_ms"] == pytest.approx(-32.1)
+
+    def test_new_fields_are_optional_on_the_plain_post_path(self, api_client,
+                                                            synthetic_csv_bytes):
+        """AC-2: the ~20 existing callers that send nothing still get a 200."""
+        assert _post_csv(api_client, synthetic_csv_bytes).status_code == 200
+        assert _post_csv(api_client, synthetic_csv_bytes,
+                         session_start_utc_ms=self.GOOD_MS,
+                         sync_error_ms=7.4, clock_offset_ms=-32.1).status_code == 200
+
+
+# ── Phase 86-01: GET /time ────────────────────────────────────────────────────
+# Deliberately unauthenticated. The client measures its own RTT against this endpoint and
+# derives its clock offset from RTT/2, so any network call inside the handler (require_auth
+# does one, to Supabase, per request) would land inside the interval being measured.
+
+class TestServerTimeEndpoint:
+    def test_returns_epoch_ms_without_auth(self, api_client):
+        """AC-4: 200 and an integer, with NO Authorization header sent."""
+        resp = api_client.get("/time")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body) == {"server_utc_ms"}
+        assert isinstance(body["server_utc_ms"], int)
+        assert not isinstance(body["server_utc_ms"], bool)
+
+    def test_value_tracks_the_host_clock(self, api_client):
+        import time as _t
+        before = int(_t.time() * 1000)
+        got = api_client.get("/time").json()["server_utc_ms"]
+        after = int(_t.time() * 1000)
+        assert before <= got <= after
+
+    def test_handler_performs_no_network_io(self, api_client, monkeypatch):
+        """AC-4: prove it, do not assert it in prose - make every Supabase path explode."""
+        import api
+
+        def boom(*a, **k):
+            raise AssertionError("GET /time must not touch the network")
+
+        monkeypatch.setattr(api, "_get_supabase", boom)
+        monkeypatch.setattr(api, "_get_supabase_admin", boom)
+        monkeypatch.setattr(api, "create_client", boom)
+        assert api_client.get("/time").status_code == 200
+
+    def test_auth_header_is_neither_required_nor_rejected(self, api_client):
+        """A client that sends one anyway must not be 401ed - and still must not be verified."""
+        resp = api_client.get("/time", headers={"Authorization": "Bearer garbage"})
+        assert resp.status_code == 200

@@ -125,9 +125,54 @@ def _session_fs(row) -> float:
     return f if f > 0 and not (math.isnan(f) or math.isinf(f)) else float(annot.FS_HZ)
 
 
+# Session-clock sanity window (Phase 86-01). A value outside this window is not a clock
+# reading, it is a unit error on the client — and the two realistic ones land nowhere near
+# a real "now": seconds-instead-of-milliseconds lands in 1970, microseconds-instead-of-
+# milliseconds lands tens of thousands of years out. Both are caught by a window this wide,
+# so the check costs nothing in false rejections even against a badly skewed phone clock.
+_EPOCH_MS_FLOOR           = 1577836800000     # 2020-01-01T00:00:00Z — predates the hardware
+_EPOCH_MS_FUTURE_SLACK_MS = 48 * 3600 * 1000  # tolerate a phone clock up to 2 days fast
+
+
+def _valid_session_start_ms(v) -> bool:
+    """True when v is plausibly an absolute epoch-ms instant. See _EPOCH_MS_FLOOR."""
+    try:
+        ms = int(v)
+    except (TypeError, ValueError):
+        return False
+    if ms <= 0:
+        return False
+    return _EPOCH_MS_FLOOR <= ms <= int(time.time() * 1000) + _EPOCH_MS_FUTURE_SLACK_MS
+
+
+def _finite_or_none(v):
+    """Coerce a clock diagnostic to float, dropping NaN/inf (they break JSON on insert)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/time")
+def server_time():
+    """Server UTC in epoch milliseconds.
+
+    UNAUTHENTICATED ON PURPOSE (Phase 86-01) — this is a correctness requirement, not an
+    auth oversight, so do NOT add Depends(require_auth). The client calls this to measure
+    its own round-trip time and derives its clock offset from RTT/2; require_auth calls
+    sb.auth.get_user(), a network round trip to Supabase on every request, which would land
+    *inside* the interval being measured and corrupt the very number this exists to produce.
+
+    For the same reason the handler stays free of ALL I/O: no Supabase client, no DB read,
+    no logging call that could touch the network. It discloses only the current time.
+    """
+    return {"server_utc_ms": int(time.time() * 1000)}
 
 
 @app.post("/process")
@@ -143,6 +188,9 @@ async def process_session(
     firmware_version: Optional[str] = Form(None),
     recording_token: Optional[str] = Form(None),
     go_signal_s: Optional[float] = Form(None),
+    session_start_utc_ms: Optional[int] = Form(None),
+    sync_error_ms: Optional[float] = Form(None),
+    clock_offset_ms: Optional[float] = Form(None),
     _auth=Depends(require_auth),
 ):
     raw_path = None
@@ -239,6 +287,29 @@ async def process_session(
                 result["session"].get("segmentation_reliable", False)
             ),
         ))
+
+        # ── Session clock (Phase 86-01) ───────────────────────────────────
+        # session_start_utc_ms is the phone's measured UTC instant of encoder sample #0;
+        # sync_error_ms and clock_offset_ms are the two diagnostics behind it (measured BLE
+        # flight time, measured offset from server UTC). The diagnostics are NOT corrections
+        # — the correction is already baked into the start — so they are independently
+        # nullable and neither gates the other, nor does either gate on the start being valid.
+        # A rejected start with a recorded offset is exactly the forensic case they exist for.
+        #
+        # All three are None on every app build before 86-02, and NULL is PERMANENT for the
+        # sessions that predate it: only the phone can produce this, at record time. A reader
+        # must treat NULL as "unknown" and must never substitute recorded_at, which is UPLOAD
+        # time, not swim time.
+        #
+        # Same drop-don't-422 posture as go_signal_s above, for the same reason: this request
+        # carries the swim, so a malformed clock annotation costs the annotation, never the
+        # session. (PUT /go-signal 422s precisely because nothing is at stake there.)
+        _start_ms = session_start_utc_ms
+        if _start_ms is not None and not _valid_session_start_ms(_start_ms):
+            print(f"/process: discarding implausible session_start_utc_ms={_start_ms!r}")
+            _start_ms = None
+        _sync_err  = _finite_or_none(sync_error_ms)
+        _clock_off = _finite_or_none(clock_offset_ms)
 
         # ── Supabase storage + session save ───────────────────────────────
         session_save_error = None
@@ -362,6 +433,19 @@ async def process_session(
                     # insert stays valid on a DB that has not yet had patch_13 applied.
                     if recording_token:
                         session_row["recording_token"] = recording_token
+                    # Session clock (Phase 86-01): each key is added ONLY when a value
+                    # survived validation, for the same reason recording_token is
+                    # conditional above — the insert must stay valid on a DB that has not
+                    # yet had patch_14 applied, and existing app builds send nothing.
+                    # An absent key and an explicit NULL are indistinguishable in the stored
+                    # row (all three columns are nullable with no default), so the "store
+                    # NULL when absent" contract is met either way and nothing is lost.
+                    if _start_ms is not None:
+                        session_row["session_start_utc_ms"] = int(_start_ms)
+                    if _sync_err is not None:
+                        session_row["sync_error_ms"] = _sync_err
+                    if _clock_off is not None:
+                        session_row["clock_offset_ms"] = _clock_off
                     insert_resp = sb_admin.table("sessions").insert(session_row).select("id").execute()
                     session_id_saved = insert_resp.data[0]["id"] if insert_resp.data else None
                     if not (session_save_error and "Storage upload" in session_save_error):
