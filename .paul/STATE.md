@@ -833,11 +833,17 @@ ceilings at 84/99 (`uw_*`, `breakout_vel_loss`, `phase_*_budget_underwater`, `ve
 This is why a coach can open a session and find the whole Underwater panel blank with no inset chart.
 Pre-existing (not caused by 75-06) and never diagnosed. Candidate for its own pass alongside item 12.
 
-**15. 🟡 CODE COMPLETE, NOT SHIPPED (84-02 loop closed 2026-08-30). → [84-02-SUMMARY.md](phases/84-mobile-user-feedback/84-02-SUMMARY.md).**
-The GO button, the `/process` form field and the horn-off all exist in the working trees and the
-suite is green (505), but **nothing is committed, pushed or built**, so `reaction_time` is still
-**0/99** and stays there until the backend is live on Railway *and* the EAS build ships — in that
-order, or every session recorded in the gap loses its marker silently. Original entry below.
+**15. 🟡 SHIPPED TO BACKEND, AWAITING THE APP BUILD (84-02 loop closed 2026-08-30; committed + pushed
+2026-08-31). → [84-02-SUMMARY.md](phases/84-mobile-user-feedback/84-02-SUMMARY.md).**
+✅ **The load-bearing deploy ordering is now MET.** Backend committed and pushed FIRST
+(`b3c07e5`, `myswimcoach@main` → Railway), then the mobile half (`6b24c79`,
+`swimnetics-mobile@main`). Because `/process` accepts `go_signal_s` before any app can send it,
+there is **no gap in which a session loses its marker silently**.
+🔴 **Still 0/99, and stays there until the EAS build ships** — the app that sends the field is not
+built yet. ⚠ **No backfill is possible**: `reaction_time` fills only for sessions recorded *after*
+the build lands, a permanent discontinuity `phaseBaseline.js` (last-5-same-stroke) will see as a
+metric that simply begins one day. ⚠ The first device check must **judge the NUMBER, not just its
+presence** — the coach's own thumb latency is inside it. Original entry below.
 Backend done in 75-04
 (`PUT /sessions/{id}/go-signal`); no UI writes to it, so 0/99 sessions carry a GO time.
 ⚠ **CORRECTED 2026-08-29 (Phase 84 discuss):** the "also needs the phone↔encoder clock sync that
