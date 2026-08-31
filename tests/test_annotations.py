@@ -909,3 +909,123 @@ class TestStrokeTypeReachesTheEndpoints:
         # (_annot_admin creates table handles lazily, so absence IS the assertion.)
         assert "session_annotations" not in admin._tables
         admin._tables["sessions"].update.assert_not_called()
+
+
+# 7 marks = 6 single-arm strokes = 3 cycles, with nothing dangling.
+DOC_7_MARKS = {
+    "phases": {"stroke_start_s": 2.0, "finish_s": 5.6},
+    "stroke_marks_s": [2.0, 2.6, 3.2, 3.8, 4.4, 5.0, 5.6],
+}
+
+
+class TestStrokeBounds:
+    """Phase 87-01, AC-3: the SINGLE-ARM view of the same marks."""
+
+    def test_seven_marks_give_six_stroke_bounds_and_three_cycles(self):
+        out = annot.annotation_to_overrides(DOC_7_MARKS, 3000, 100, "freestyle")
+        assert out["stroke_bounds"] == [(200, 260), (260, 320), (320, 380),
+                                        (380, 440), (440, 500), (500, 560)]
+        assert out["cycle_bounds"] == [(200, 320), (320, 440), (440, 560)]
+
+    def test_cycle_bounds_are_byte_identical_to_the_pre_change_expectation(self):
+        """The pre-87-01 contract, pinned: adding stroke_bounds moved nothing else."""
+        out = annot.annotation_to_overrides(DOC_5_MARKS, 3000, 100, "freestyle")
+        assert out["cycle_bounds"] == [(200, 320), (320, 440)]
+        assert out["ip_end_idx"] == 200
+        assert out["swim_end_idx"] == 441
+
+    def test_backstroke_matches_freestyle(self):
+        assert (annot.annotation_to_overrides(DOC_7_MARKS, 3000, 100, "backstroke")
+                == annot.annotation_to_overrides(DOC_7_MARKS, 3000, 100, "freestyle"))
+
+    @pytest.mark.parametrize("stroke", LEGACY_STROKES)
+    def test_no_stroke_bounds_at_one_mark_per_cycle(self, stroke):
+        """At k == 1 stroke_bounds would equal cycle_bounds — a pure drift hazard."""
+        out = annot.annotation_to_overrides(DOC_7_MARKS, 3000, 100, stroke)
+        assert "stroke_bounds" not in out
+
+    def test_finish_is_never_appended_to_stroke_bounds(self):
+        """A wall touch is not an arm entry — the k > 1 rule, applied per stroke."""
+        out = annot.annotation_to_overrides(DOC_FINISH_BEYOND, 3000, 100, "freestyle")
+        assert out["stroke_bounds"] == [(200, 260), (260, 320), (320, 380)]
+        assert max(b for _, b in out["stroke_bounds"]) < 500   # finish_s = 5.0 → idx 500
+
+    def test_odd_marks_leave_the_trailing_stroke_paired_but_no_cycle(self):
+        out = annot.annotation_to_overrides(DOC_5_MARKS, 3000, 100, "freestyle")
+        assert len(out["stroke_bounds"]) == 4      # every consecutive pair of 5 marks
+        assert len(out["cycle_bounds"]) == 2
+
+
+# ── Phase 87-01: strokes persisted from the coach's marks ─────────────────────
+
+FREE_ROW = {**SESSION_ROW, "stroke_type": "freestyle"}
+
+# 7 arm entries → 6 strokes → 3 cycles, all inside [stroke_start_s, finish_s].
+FREE_DOC = {
+    "phases": {"dive_start_s": 1.1, "stroke_start_s": 4.2, "finish_s": 12.0},
+    "stroke_marks_s": [5.0, 6.2, 7.4, 8.6, 9.8, 11.0, 11.9],
+}
+
+
+class TestStrokesPersistedOnAnnotation:
+    """AC-5: PUT /annotations replaces metrics_json.strokes from the coach's marks,
+    without disturbing anything the 75-06 merge already protects."""
+
+    ROW = {
+        **FREE_ROW,
+        "metrics_json": {
+            **METRICS_JSON,
+            "go_signal_s": 2.5,
+            "strokes": [{"stroke_num": 0, "start_idx": 1, "end_idx": 2}],  # stale
+            "phases": {"schema_version": 3, "start": {}, "underwater": {},
+                       "swim": {}, "whole": {}},
+        },
+    }
+
+    def test_strokes_are_written_from_the_marks(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin(session_row=self.ROW)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=FREE_DOC, headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        mj = _recompute_update(admin)["metrics_json"]
+        # 6 single-arm strokes from 7 marks; 3 cycles from every 2nd mark.
+        assert [(s["start_idx"], s["end_idx"]) for s in mj["strokes"]] == [
+            (500, 620), (620, 740), (740, 860), (860, 980), (980, 1100), (1100, 1190)]
+        assert len(mj["cycles"]) == 3
+        assert mj["strokes"][0]["stroke_num"] == 0
+        assert "duration_s" in mj["strokes"][0]   # same field set as a cycle
+
+    def test_phases_go_signal_and_the_backup_survive(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin(session_row=self.ROW)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=FREE_DOC, headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        updates = _recompute_update(admin)
+        mj = updates["metrics_json"]
+        assert mj["go_signal_s"] == pytest.approx(2.5)
+        assert mj["phases"]["schema_version"] == 3
+        assert updates["metrics_json_auto"] == self.ROW["metrics_json"]  # once-only backup
+
+    def test_asymmetry_keys_ride_along_in_session(self, api_client, monkeypatch):
+        import api
+        admin = _annot_admin(session_row=self.ROW)
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        api_client.put("/sessions/sess-1/annotations", json=FREE_DOC, headers=AUTH)
+        sess = _recompute_update(admin)["metrics_json"]["session"]
+        for k in ("arm_asym_tempo_pct", "arm_asym_dps_pct", "arm_asym_peak_vel_pct",
+                  "cv_stroke_interval_a", "cv_stroke_interval_b",
+                  "cv_stroke_dps_a", "cv_stroke_dps_b"):
+            assert k in sess
+
+    def test_non_alternating_stroke_gets_no_strokes(self, api_client, monkeypatch):
+        """breaststroke: one arm entry IS one cycle, so annotation_to_overrides emits no
+        stroke_bounds and the stored array is None rather than a copy of cycles."""
+        import api
+        admin = _annot_admin()          # SESSION_ROW is breaststroke
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        resp = api_client.put("/sessions/sess-1/annotations", json=RECOMPUTE_DOC,
+                              headers=AUTH)
+        assert resp.status_code == 200, resp.text
+        assert _recompute_update(admin)["metrics_json"]["strokes"] is None

@@ -34,12 +34,29 @@ const fin = (v) => typeof v === "number" && Number.isFinite(v);
 // breakout is never IN `items` — it is synthesised by `buildBands` from the gap between
 // `stroke_start_s` and the coach's first stroke mark — so the row exists here only to explain why
 // the pack has one fewer trace than the inset has bands. It is never drawn and never interactive.
+//
+// `numberKey` / `parity` (87-02). `numberKey` mirrors `buildBands`' seam so a strokes array numbers
+// itself by `stroke_num`; the default keeps cycles and kick bands exactly as they are. `parity` tags
+// every row and trace with the ALTERNATING-ARM side — `side: n % 2 ? "A" : "B"`, stated once here —
+// and adds two pointwise per-side medians in normalized mode, each gated independently at
+// MIN_ITEMS. ⚠ A and B are never left and right: a 1-D axial encoder cannot observe which arm is
+// which (87-01 D3). The rule matches PhaseVelocity's band colouring (`s.n % 2 ? cycle-a : cycle-b`)
+// so side A is blue in the inset, in the pack and in the Arm balance chips — one alignment, not
+// three. The combined `median` key is computed exactly as before either way, so the cycle path is
+// untouched.
 export function buildTraces(
   items,
   velocity,
-  { fsHz, mode = "seconds", durationKey = "duration_s", excludeBreakout = false } = {}
+  {
+    fsHz,
+    mode = "seconds",
+    durationKey = "duration_s",
+    numberKey = "cycle_num",
+    excludeBreakout = false,
+    parity = false,
+  } = {}
 ) {
-  const empty = { rows: [], traces: [], median: null, maxDuration: 0 };
+  const empty = { rows: [], traces: [], median: null, medianA: null, medianB: null, maxDuration: 0 };
   if (!Array.isArray(items) || !items.length) return empty;
   if (!Array.isArray(velocity) || velocity.length < 2) return empty;
   if (!fin(fsHz) || fsHz <= 0) return empty;
@@ -53,7 +70,8 @@ export function buildTraces(
 
   items.forEach((c, i) => {
     if (!c) return; // same skip as buildBands — a null item is not a row
-    const n = fin(c.cycle_num) ? c.cycle_num + 1 : i + 1;
+    const n = fin(c[numberKey]) ? c[numberKey] + 1 : i + 1;
+    const side = parity ? (n % 2 ? "A" : "B") : null;
     const a = fin(c.start_idx) ? Math.max(0, Math.trunc(c.start_idx)) : null;
     const b = fin(c.end_idx) ? Math.min(velocity.length, Math.trunc(c.end_idx)) : null;
     const span = a != null && b != null ? b - a : 0;
@@ -61,7 +79,7 @@ export function buildTraces(
     // Prefer the stored duration; fall back to the span so a gutter row can still name itself.
     const duration = fin(c[durationKey]) ? c[durationKey] : span >= 2 ? span / fsHz : null;
 
-    const row = { n, available: false, reason: "too-short", duration };
+    const row = { n, side, available: false, reason: "too-short", duration };
     rows.push(row);
     if (span < 2) return;
 
@@ -73,7 +91,7 @@ export function buildTraces(
         row.reason = "dropout";
         return;
       }
-      traces.push({ n, points: prof.map((v, j) => [j / (POINTS - 1), v]) });
+      traces.push({ n, side, points: prof.map((v, j) => [j / (POINTS - 1), v]) });
     } else {
       // Seconds mode keeps the dropout: `null` is a pen-up marker, so the component draws a gap
       // rather than a straight line across missing signal.
@@ -93,7 +111,7 @@ export function buildTraces(
         row.reason = "dropout";
         return;
       }
-      traces.push({ n, points });
+      traces.push({ n, side, points });
     }
 
     row.available = true;
@@ -112,7 +130,29 @@ export function buildTraces(
     }
   }
 
-  return { rows, traces, median: pointwise, maxDuration };
+  // Per-side medians (87-02), normalized only and gated PER SIDE at the same MIN_ITEMS — so ten
+  // strokes are needed for two lines, roughly the five cycles the combined median already asks for.
+  // Either side short of it draws NEITHER: a median of one arm is not the picture, and silently
+  // falling back to the combined median would hide the very split this mode exists to show.
+  let medianA = null;
+  let medianB = null;
+  if (normalized && parity) {
+    const bySide = (want) => {
+      const ts = traces.filter((t) => t.side === want);
+      if (ts.length < MIN_ITEMS) return null;
+      const out = [];
+      for (let j = 0; j < POINTS; j++) out.push([j / (POINTS - 1), median(ts.map((t) => t.points[j][1]))]);
+      return out;
+    };
+    medianA = bySide("A");
+    medianB = bySide("B");
+    if (!medianA || !medianB) {
+      medianA = null;
+      medianB = null;
+    }
+  }
+
+  return { rows, traces, median: pointwise, medianA, medianB, maxDuration };
 }
 
 export default buildTraces;

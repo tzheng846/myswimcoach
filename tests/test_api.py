@@ -1753,3 +1753,71 @@ class TestServerTimeEndpoint:
         """A client that sends one anyway must not be 401ed - and still must not be verified."""
         resp = api_client.get("/time", headers={"Authorization": "Bearer garbage"})
         assert resp.status_code == 200
+
+
+class TestStrokesOnProcess:
+    """Phase 87-01 AC-5: POST /process carries `strokes` in the response and in the stored
+    metrics_json — additive, so nothing else about the payload moves."""
+
+    def _post(self, client, csv_bytes, stroke_type):
+        return client.post(
+            "/process",
+            files={"file": ("session.csv", io.BytesIO(csv_bytes), "text/csv")},
+            data={"head_waist_m": "0.0", "stroke_type": stroke_type},
+            headers={"Authorization": "Bearer fake-token-mocked"},
+        )
+
+    def test_response_carries_strokes_for_freestyle(self, api_client, synthetic_csv_bytes):
+        resp = self._post(api_client, synthetic_csv_bytes, "freestyle")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert isinstance(data["strokes"], list) and data["strokes"]
+        assert "stroke_num" in data["strokes"][0]
+        assert "duration_s" in data["strokes"][0]   # same field set as a cycle
+
+    def test_strokes_is_none_for_a_non_alternating_stroke(self, api_client,
+                                                          synthetic_csv_bytes):
+        resp = self._post(api_client, synthetic_csv_bytes, "breaststroke")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["strokes"] is None
+
+    def test_key_present_on_the_default_no_stroke_type_post(self, api_client,
+                                                            synthetic_csv_bytes):
+        data = _post_csv(api_client, synthetic_csv_bytes).json()
+        assert "strokes" in data and data["strokes"] is None
+
+    def test_asymmetry_keys_are_in_the_session_dict(self, api_client, synthetic_csv_bytes):
+        sess = self._post(api_client, synthetic_csv_bytes, "freestyle").json()["session"]
+        for k in ("arm_asym_tempo_pct", "arm_asym_dps_pct", "arm_asym_peak_vel_pct",
+                  "cv_stroke_interval_a", "cv_stroke_interval_b",
+                  "cv_stroke_dps_a", "cv_stroke_dps_b"):
+            assert k in sess
+
+    def test_stored_metrics_json_carries_strokes(self, api_client, monkeypatch,
+                                                 synthetic_csv_bytes):
+        """The INSERT payload, not just the response body (the TestSampleRatePersisted
+        capture pattern)."""
+        from unittest.mock import MagicMock
+        import api
+        admin = MagicMock()
+        monkeypatch.setattr(api, "_get_supabase_admin", lambda: admin)
+        monkeypatch.setattr(
+            api, "_get_coach_row",
+            lambda *a, **k: {"id": "coach-1", "device_limit": None,
+                             "monthly_session_limit": None},
+        )
+        resp = api_client.post(
+            "/process",
+            files={"file": ("session.csv", io.BytesIO(synthetic_csv_bytes), "text/csv")},
+            data={"head_waist_m": "0.0", "athlete_id": "ath-1",
+                  "stroke_type": "freestyle"},
+            headers={"Authorization": "Bearer fake-token-mocked"},
+        )
+        assert resp.status_code == 200, resp.text
+        row = admin.table.return_value.insert.call_args[0][0]
+        strokes = row["metrics_json"]["strokes"]
+        assert isinstance(strokes, list) and strokes
+        assert len(strokes) >= len(row["metrics_json"]["cycles"])
+        # Additive only: the keys that were already there are still there.
+        for k in ("session", "cycles", "initial_phase", "data_quality", "phases"):
+            assert k in row["metrics_json"]

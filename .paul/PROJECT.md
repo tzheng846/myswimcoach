@@ -78,6 +78,24 @@ Swim academies and competitive programs. Coach or operator runs the device; swim
   owed (the 4-video synced playback was built without live data — highest-risk piece). ⚠ Free-tier
   50 MB/clip; the long-take → many-sessions workflow is still deferred.
 
+- ✓ **Arm-by-arm view — the individual stroke as a first-class unit (Phase 87, 2026-08-31).** A
+  freestyle or backstroke cycle is TWO arm strokes, and every stored number described the pair, so a
+  cycle's own left/right contrast was structurally zero. The backend now segments and stores single
+  arm strokes (`metrics_json.strokes` beside `cycles`) plus three signed asymmetry percentages
+  (tempo / distance / peak velocity) and four per-side consistency CVs; the coach portal's Swimming
+  section carries a **cycles / strokes** toggle that rebuilds the inset bands, count badge, trace
+  pack and all four trend panels at stroke scale, with the two arms drawn in different colours and
+  an **Arm balance** readout naming the magnitude and direction of each split. Backfilled to 47 of
+  101 stored sessions. **The signal is real and it separates:** 6.1% median tempo contrast across 23
+  annotated freestyle sessions, 0.4% on the evenest swim and 29.4% on the most lopsided.
+  ⚠ **Two limits that are product facts, not bugs.** The sides are **A and B, never left and right**
+  — a single-axis encoder cannot observe which arm is which. And on **auto-segmented** sessions the
+  asymmetry is *uncorrelated with coach-mark truth* (r = −0.06): one extra or missing boundary flips
+  the A/B side of every later stroke. It ships anyway, marked only by the existing `auto` chip
+  (explicit user decision, 87-01 D2) — so on an unannotated session the number is a prompt to
+  annotate, not a finding. Backstroke rides freestyle's code path and has **0 annotated sessions**,
+  so nothing about it is validated.
+
 ### Nice to Have
 - PDF report generation (server-side, emailed to coach)
 - Session compare in iOS app (✓ shipped on web portal instead — Phase 23)
@@ -142,4 +160,4 @@ known drift (Railway pre-Phase-24, committed SQL ≠ live DB, git coverage gaps)
 *Requirements & product intent above are the durable spec. **Current status / in-flight work: see
 [STATE.md](STATE.md).** The per-phase change log was archived 2026-08-21 →
 [.paul/archive/PROJECT-changelog-2026-08-20.md](archive/PROJECT-changelog-2026-08-20.md).*
-*Created: 2026-05-17 · Docs restructured 2026-08-21 · Last updated 2026-08-29 after Phase 85.*
+*Created: 2026-05-17 · Docs restructured 2026-08-21 · Last updated 2026-08-31 after Phase 87.*

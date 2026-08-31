@@ -41,8 +41,12 @@ export function TrendPanel({
   // which is what keeps CompareCycleCharts (the other caller of this export) un-regressed.
   highlightN = null,
   onHoverN = null,
+  // Phase 87-02 — the noun this panel calls one plotted item. Defaults to today's exact strings,
+  // which is what keeps CompareCycleCharts (the other caller of this export) un-regressed.
+  itemLabel = "cycle",
 }) {
   const lines = series ?? [{ dataKey, color: "#2196f3", name: undefined }];
+  const Item = itemLabel.charAt(0).toUpperCase() + itemLabel.slice(1);
   // activeLabel is the x-category, which recharts may hand back as a string — coerce, so the
   // number the inset compares against is always a number.
   const reportHover = (state) => {
@@ -87,7 +91,9 @@ export function TrendPanel({
                         surface this plan is not supposed to touch (AC-5). */}
                     {series ? (
                       <>
-                        <p className="text-muted">Cycle {payload[0].payload.n}</p>
+                        <p className="text-muted">
+                          {Item} {payload[0].payload.n}
+                        </p>
                         {payload.map((pl) => (
                           <p key={pl.dataKey} style={{ color: pl.stroke }}>
                             {pl.name ? `${pl.name}: ` : ""}
@@ -97,7 +103,7 @@ export function TrendPanel({
                       </>
                     ) : (
                       <>
-                        Cycle {payload[0].payload.n}:{" "}
+                        {Item} {payload[0].payload.n}:{" "}
                         {payload[0].value?.toFixed(decimals)} {unit}
                       </>
                     )}
@@ -152,10 +158,15 @@ const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const fmt = (v, d = 2) => (num(v) != null ? v.toFixed(d) : "--");
 const pct = (v) => (num(v) != null ? `${(v * 100).toFixed(0)}%` : "--");
 
+// ⚠ The `cycles` prop is handed STROKES in the report card's stroke mode (87-02 D5). The name is
+// kept deliberately: renaming it to `items` would ripple into CompareCycleCharts and the legacy
+// no-phases branch, both out of that plan's scope. `itemLabel` is what tells this component which
+// of the two it is drawing — the same shape-agnostic posture buildBands has had since 83-02.
 export default function CycleCharts({
   cycles,
   session,
   unit = "metric",
+  itemLabel = "cycle",
   // Phase 83-01 — shared with the Swimming inset. The parent owns the state; absent (the legacy
   // no-phases branch, where there is no inset partner) the charts behave exactly as before.
   highlightN = null,
@@ -188,6 +199,7 @@ export default function CycleCharts({
   // `phase` on cycle dicts, so its presence means the stored metrics were computed by the old
   // code — whose means and CVs covered steady cycles only.
   const legacy = cycles.some((c) => c && "phase" in c);
+  const isStroke = itemLabel === "stroke";
 
   return (
     <>
@@ -195,7 +207,8 @@ export default function CycleCharts({
         <TrendPanel
           highlightN={highlightN}
           onHoverN={onHoverN}
-          title="Distance per Stroke"
+          itemLabel={itemLabel}
+          title={isStroke ? "Distance per Arm Stroke" : "Distance per Stroke"}
           data={data}
           dataKey="dps"
           unit={distUnit}
@@ -205,18 +218,20 @@ export default function CycleCharts({
         <TrendPanel
           highlightN={highlightN}
           onHoverN={onHoverN}
+          itemLabel={itemLabel}
           title="Coast"
           data={data}
           dataKey="coast"
           unit="%"
           mean={num(s.mean_coast_fraction) != null ? s.mean_coast_fraction * 100 : null}
           decimals={0}
-          caption={`mean ${pct(s.mean_coast_fraction)} of each cycle spent gliding`}
+          caption={`mean ${pct(s.mean_coast_fraction)} of each ${itemLabel} spent gliding`}
         />
         <TrendPanel
           highlightN={highlightN}
           onHoverN={onHoverN}
-          title="Cycle Duration"
+          itemLabel={itemLabel}
+          title={isStroke ? "Stroke Duration" : "Cycle Duration"}
           data={data}
           dataKey="dur"
           unit="s"
@@ -226,6 +241,7 @@ export default function CycleCharts({
         <TrendPanel
           highlightN={highlightN}
           onHoverN={onHoverN}
+          itemLabel={itemLabel}
           title="Arm Peak Velocity"
           data={data}
           dataKey="arm"
@@ -235,11 +251,11 @@ export default function CycleCharts({
         />
       </div>
       <p className="px-1 text-[11px] leading-relaxed text-muted">
-        One point per detected cycle.
+        One point per detected {itemLabel}.
         {legacy
           ? " This session was processed before the cycle-counting fix, so its means and CVs cover" +
             " only steady-state cycles — the dashed line may not sit at the visual average of the dots."
-          : " Means and CVs cover every cycle shown, so the dashed line is the average of the dots."}
+          : ` Means and CVs cover every ${itemLabel} shown, so the dashed line is the average of the dots.`}
       </p>
     </>
   );

@@ -1215,3 +1215,152 @@ class TestBreakoutFlyIntegration:
         n = m.compute_session_metrics(
             t, vel, dist, stroke_type="butterfly")["session"]["stroke_count"]
         assert n > 0
+
+
+# ── Phase 87-01: single-arm strokes + asymmetry ───────────────────────────────
+
+def _alternating_free_trace(fs=90.0, long_s=0.70, short_s=0.50, n_cycles=9):
+    """A freestyle-shaped trace whose arm strokes ALTERNATE long/short deliberately, so the
+    A/B contrast has a known sign and magnitude. Each arm stroke is one raised-cosine hump;
+    strokes are laid down in pairs (long, short), so side A is the slow side."""
+    def hump(dur, peak):
+        n = max(2, int(dur * fs))
+        return peak * (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(n) / n))
+
+    parts = [np.zeros(int(1.0 * fs))]
+    bounds = []                      # (start, end) of every arm stroke, full-trace
+    pos = len(parts[0])
+    for _ in range(n_cycles):
+        for dur in (long_s, short_s):
+            h = hump(dur, 1.6)
+            parts.append(h)
+            bounds.append((pos, pos + len(h)))
+            pos += len(h)
+    parts.append(np.full(int(1.0 * fs), 0.02))
+    vel = np.concatenate(parts)
+    t = np.arange(len(vel)) / fs
+    dist = np.concatenate([[0.0], np.cumsum(np.abs(vel[:-1]) / fs)])
+    return t, vel, dist, bounds
+
+
+_STROKE_FIELDS = ["start_idx", "end_idx", "duration_s", "dist_m", "impulse_m", "mean_vel_ms",
+                  "trough_vel_ms", "dead_spot_s", "coast_fraction", "arm_peak_idx",
+                  "arm_peak_vel", "kick_peak_idx", "kick_peak_vel", "arm_kick_delay_s",
+                  "arm_kick_vel_ratio"]
+
+
+class TestSegmentStrokes:
+    """AC-1: strokes exist for alternating-arm strokes only."""
+
+    @pytest.mark.parametrize("stroke_type",
+                             ["butterfly", "breaststroke", "im", "udk", "not_a_stroke", None])
+    def test_non_alternating_strokes_get_none(self, stroke_type):
+        t, vel, dist, _ = _full_free_trace()
+        assert m.segment_strokes(t, vel, stroke_type) is None
+        r = m.compute_session_metrics(t, vel, dist, stroke_type=stroke_type)
+        assert "strokes" in r and r["strokes"] is None
+
+    @pytest.mark.parametrize("stroke_type", ["freestyle", "backstroke"])
+    def test_strokes_roughly_double_the_cycles(self, stroke_type):
+        t, vel, dist, _ = _full_free_trace()
+        r = m.compute_session_metrics(t, vel, dist, stroke_type=stroke_type)
+        assert r["strokes"], "alternating strokes must segment this fixture"
+        # One cycle is two arm strokes; pairing drops at most one trailing boundary.
+        assert len(r["strokes"]) in (2 * len(r["cycles"]), 2 * len(r["cycles"]) + 1)
+
+    def test_stroke_entries_carry_the_cycle_field_set_plus_stroke_num(self):
+        t, vel, dist, _ = _full_free_trace()
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle")
+        for st in r["strokes"]:
+            for f in _STROKE_FIELDS:
+                assert f in st, f
+            assert "stroke_num" in st
+        assert [s["stroke_num"] for s in r["strokes"]] == list(range(len(r["strokes"])))
+
+    def test_manual_stroke_bounds_bypass_the_segmenter(self):
+        t, vel, dist, bounds = _alternating_free_trace()
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle",
+                                      manual={"stroke_bounds": bounds})
+        assert len(r["strokes"]) == len(bounds)
+        assert [(s["start_idx"], s["end_idx"]) for s in r["strokes"]] == bounds
+
+
+class TestArmAsymmetry:
+    """AC-4: signed, documented, gated on sample size."""
+
+    def test_all_seven_keys_are_none_without_strokes(self):
+        t, vel, dist, _ = _full_free_trace()
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="butterfly")
+        for k in m._ASYM_KEYS:
+            assert r["session"][k] is None
+
+    def test_fewer_than_three_per_side_is_none(self):
+        t, vel, dist, bounds = _alternating_free_trace(n_cycles=9)
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle",
+                                      manual={"stroke_bounds": bounds[:4]})
+        assert len(r["strokes"]) == 4          # 2 per side — one short of the gate
+        for k in m._ASYM_KEYS:
+            assert r["session"][k] is None
+
+    def test_three_per_side_computes(self):
+        t, vel, dist, bounds = _alternating_free_trace(n_cycles=9)
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle",
+                                      manual={"stroke_bounds": bounds[:6]})
+        for k in m._ASYM_KEYS:
+            assert r["session"][k] is not None
+
+    def test_sign_and_magnitude_of_a_known_imbalance(self):
+        """Side A is the LONG stroke (0.70 s vs 0.50 s) so tempo asymmetry is positive and
+        close to (0.70-0.50)/0.60 = +33%."""
+        t, vel, dist, bounds = _alternating_free_trace(long_s=0.70, short_s=0.50)
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle",
+                                      manual={"stroke_bounds": bounds})
+        assert r["session"]["arm_asym_tempo_pct"] == pytest.approx(33.3, abs=3.0)
+        assert r["session"]["arm_asym_dps_pct"] > 0        # the long stroke travels further
+        # Peak velocity is equal by construction on this fixture.
+        assert abs(r["session"]["arm_asym_peak_vel_pct"]) < 1.0
+        # Each side is internally uniform, so the per-side CVs are ~0.
+        for k in ("cv_stroke_interval_a", "cv_stroke_interval_b"):
+            assert r["session"][k] == pytest.approx(0.0, abs=0.05)
+
+    def test_sign_flips_when_the_sides_swap(self):
+        t, vel, dist, bounds = _alternating_free_trace()
+        r_a = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle",
+                                        manual={"stroke_bounds": bounds})
+        r_b = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle",
+                                        manual={"stroke_bounds": bounds[1:]})
+        assert (r_a["session"]["arm_asym_tempo_pct"]
+                == pytest.approx(-r_b["session"]["arm_asym_tempo_pct"], abs=3.0))
+
+    def test_asymmetry_is_not_computed_from_cycles(self):
+        """A cycle contains BOTH sides, so a cycle-level A/B contrast is structurally
+        meaningless. Guard: the strokes-derived number is non-trivial on a fixture whose
+        cycles are near-identical."""
+        t, vel, dist, bounds = _alternating_free_trace()
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle",
+                                      manual={"stroke_bounds": bounds})
+        assert abs(r["session"]["arm_asym_tempo_pct"]) > 10.0
+
+
+class TestStrokeDriftGuard:
+    """AC-2: adding strokes changes NOTHING a coach can already see."""
+
+    @pytest.mark.parametrize("stroke_type",
+                             ["freestyle", "backstroke", "butterfly", "breaststroke", None])
+    def test_cycles_and_preexisting_session_keys_are_untouched(self, stroke_type, monkeypatch):
+        t, vel, dist, _ = _full_free_trace()
+        r_new = m.compute_session_metrics(t, vel, dist, stroke_type=stroke_type)
+        # The pre-87-01 behavior is exactly this run with the strokes path inert.
+        monkeypatch.setattr(m, "segment_strokes", lambda *a, **k: None)
+        r_old = m.compute_session_metrics(t, vel, dist, stroke_type=stroke_type)
+        assert r_new["cycles"] == r_old["cycles"]
+        old_keys = {k: v for k, v in r_old["session"].items() if k not in m._ASYM_KEYS}
+        new_keys = {k: v for k, v in r_new["session"].items() if k not in m._ASYM_KEYS}
+        assert new_keys == old_keys
+
+    def test_strokes_and_cycles_share_the_same_pad_drop_rule(self):
+        """The 59-05 leading-pad drop is shared code, so the first stroke boundary and the
+        first cycle boundary can never disagree."""
+        t, vel, dist, _ = _full_free_trace()
+        r = m.compute_session_metrics(t, vel, dist, stroke_type="freestyle")
+        assert r["strokes"][0]["start_idx"] == r["cycles"][0]["start_idx"]

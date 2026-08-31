@@ -49,6 +49,10 @@ export default function PhaseVelocity({
   bands: cycleBands = null,
   highlightN = null,
   onHoverBand = null,
+  // Phase 87-02 — the ONLY addition this file takes for that plan, and it is display copy, not
+  // geometry: the banded aria-label reads "one band per cycle", which would be wrong in stroke mode
+  // for exactly the users who cannot see the colours. Defaults to "cycle"; nothing else reads it.
+  itemLabel = "cycle",
 }) {
   const geom = useMemo(() => {
     const n = velocity.length;
@@ -169,7 +173,7 @@ export default function PhaseVelocity({
       role="img"
       aria-label={
         banded
-          ? `Speed during this phase, coloured one band per cycle (${g.segs.length} bands)`
+          ? `Speed during this phase, coloured one band per ${itemLabel} (${g.segs.length} bands)`
           : g.inset
             ? "Speed during this phase"
             : "Speed over the whole swim"

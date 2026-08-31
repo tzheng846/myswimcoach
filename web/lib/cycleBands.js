@@ -13,7 +13,7 @@ const fin = (v) => typeof v === "number" && Number.isFinite(v);
 
 // items → [{ n, startIdx, endIdx, duration, isBreakout }]
 //
-// `n` is the item's original 1-based position (`cycle_num + 1` when stored, else array position
+// `n` is the item's original 1-based position (`{numberKey} + 1` when stored, else array position
 // + 1) and NOT a renumbering of the survivors: it is the cross-highlight key shared with
 // CycleCharts' `n: i + 1`, so dropping a band must not shift the ones after it.
 //
@@ -32,7 +32,16 @@ const fin = (v) => typeof v === "number" && Number.isFinite(v);
 // breakout, and on AUTO-segmented sessions "cycle 1" is not the breakout at all — 28 of 47 start
 // BEFORE `stroke_start_s` (worst −12.9 s). Only a caller that knows the cycles are coach-marked may
 // pass true.
-export function buildBands(items, { fsHz, i0, i1, durationKey = "duration_s", breakoutFirst = false } = {}) {
+// `numberKey` (87-02) names the field the item numbers itself by. Default `cycle_num` keeps cycles
+// and kick bands numbering exactly as they always have (kick bands carry `kick_num` and are
+// deliberately numbered by array position — this must NOT start reading it). Strokes pass
+// `numberKey: "stroke_num"`: numerically identical to the array-position fallback while that field
+// is dense and 0-based, but it makes the numbering read from the field the backend owns, which is
+// what the A/B colour alignment in PhaseVelocity's `s.n % 2` rests on.
+export function buildBands(
+  items,
+  { fsHz, i0, i1, durationKey = "duration_s", numberKey = "cycle_num", breakoutFirst = false } = {}
+) {
   if (!Array.isArray(items) || !items.length) return [];
   if (!fin(i0) || !fin(i1) || i1 <= i0) return [];
 
@@ -46,7 +55,7 @@ export function buildBands(items, { fsHz, i0, i1, durationKey = "duration_s", br
     const endIdx = Math.max(i0, Math.min(i1, b));
     if (endIdx <= startIdx) return; // fell entirely outside the window
     bands.push({
-      n: fin(c.cycle_num) ? c.cycle_num + 1 : i + 1,
+      n: fin(c[numberKey]) ? c[numberKey] + 1 : i + 1,
       startIdx,
       endIdx,
       duration: fin(c[durationKey]) ? c[durationKey] : null,

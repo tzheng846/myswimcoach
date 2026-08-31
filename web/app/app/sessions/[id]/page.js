@@ -586,6 +586,7 @@ export default function ReportCardPage({ params }) {
           strokeType={strokeType}
           sessionId={sessionId}
           cycles={metrics.cycles}
+          strokes={metrics.strokes}
           session={metrics.session}
           segmentationReliable={metrics.data_quality?.segmentation_reliable === true}
           unit={unit}

@@ -8,6 +8,127 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
+- **Phase 87-01** (Stroke-level segmentation + arm asymmetry — BACKEND) — **✅ CLOSED
+  (PLAN→APPLY→UNIFY) 2026-08-31; backfill applied by the user. Loop:
+  `PLAN ✓ → APPLY ✓ → UNIFY ✓`.** Summary:
+  [87-01-SUMMARY.md](phases/87-stroke-level-asymmetry/87-01-SUMMARY.md). Suite 520 → **563 green**
+  (43 new tests, no pre-existing test modified). Backfill wrote **47 of 101** sessions —
+  24 from coach marks, 20 from the auto segmenter, 3 with a window but no strokes, 11 left
+  asymmetry None for <3 strokes per side; 54 skipped as non-free/back, 0 failed.
+  ⚠ One plan deviation: `segment_strokes` gates on stroke_type (freestyle/backstroke), NOT on
+  the segmenter's `.k == 1` as the plan's Task 1 step 3 said — fly/breast carry `k=2` (a
+  detector property), so a `.k` gate would have contradicted the plan's own AC-1. New phase; **2 plans** (87-01 backend,
+  87-02 frontend toggle + visuals). Goal: make the individual arm stroke a stored unit
+  (`metrics_json.strokes` beside `cycles`) for freestyle/backstroke, plus seven session keys —
+  3 signed asymmetry percentages (tempo / distance / peak velocity) and 4 per-side CVs.
+  ✅ **Four read-only probes were run against the live library during planning** — the 83-03
+  lesson ("measure a threshold's fire rate before shipping it") applied preemptively:
+  (1) **The signal is real and it separates.** Across the 23 usable annotated freestyle sessions,
+  odd/even contrast is **6.1% median in tempo** (0.4–29.4%) and **9.4% in distance per stroke**
+  (0.1–33.2%), clearing the within-side noise floor (t>2) on 7/23 and 9/23. Some sessions sit at
+  0.4%, others at 30% — unlike 83-03's MAD gate, which fired on everything.
+  🔴 (2) **On AUTO sessions the same number is uncorrelated with truth: Pearson r = −0.06**,
+  median error **10.2 percentage points** against a 6.1% signal, agreeing on only **2 of the 7**
+  most-lopsided sessions. Cause is **parity, not precision** — un-paired wavelet boundaries land at
+  **1.10× the coach's mark count** (0.50–1.33) and match 88% of marks within 0.35 s, but one extra
+  or missing boundary **flips the A/B assignment of every later stroke**. ⚠ **The user saw this
+  measurement and chose to ship the number on auto sessions anyway, marked only by the existing
+  `auto` chip (D2).** Recorded as their call, not an oversight.
+  ⚠ (3) **Backstroke has 0 annotated sessions.** Census: freestyle 45 (24 annotated), **backstroke
+  2 total / 0 annotated**, butterfly 29 (16), breaststroke 20 (4), udk 5 (1). It shares freestyle's
+  code path exactly so it costs nothing to include, but nothing about it can be verified —
+  confirms owed item 10.
+  ⚠ (4) **The user's premise when choosing storage was wrong and was corrected before planning:
+  stroke segmentation is NOT stored today.** `metrics_json.cycles` is already the *paired* product;
+  coach marks live in `session_annotations.stroke_marks_s`, a table the report card never queries;
+  and the auto boundaries are built and **discarded inside `_pair_boundaries`**
+  ([metrics.py:388-397](../metrics.py)). So the backend must start *emitting* strokes, not
+  re-reduce something on hand.
+  **Decisions:** D1 `metrics_json.strokes` **top-level beside `cycles`**, not inside `phases` —
+  83-02's D5 reversal does not transfer, because `strokes` comes from the same call and the same
+  two write sites as `cycles`, so it cannot go stale against it; no `SCHEMA_VERSION` bump (that
+  version lives inside `phases`). D3 sides are **A / B, never left/right** — a 1-D axial encoder
+  cannot observe which arm is which. D4 the Swimming **usual-range strips do NOT switch** with the
+  toggle (their baselines are five *cycle-level* swims deep), so `phase_metrics.py` is untouched
+  and the two `needs_cycles` specs are out of scope. D5 backfill is a **new additive-only tool**
+  writing exactly two keys.
+  ⚠ **Blast radius is small by measurement:** only 2 of the 47 registry specs read `ctx.cycles`.
+  ⚠ **The riskiest edit is a refactor, not a feature** — the per-cycle derived-metrics loop is
+  extracted verbatim into `_derive_item_metrics` so cycles and strokes cannot drift; AC-2 (cycles
+  byte-identical, 505 suite green, no pre-existing test modified) is what proves it.
+  ⚠ The `_anchors_from_marks` **leading-pad drop is load-bearing and must be SHARED, not
+  reimplemented**: 59-05 measured boundary F1 **0.000 with the pad vs 0.458 without**, and it went
+  unnoticed because `stroke_rate_spm` is blind to it.
+  ⚠ Carries a **blocking human-action checkpoint** — the user runs the backfill, as with every
+  prior one. Probes at `scratch/_asym_probe.py`, `scratch/_asym_auto_probe.py`,
+  `scratch/_asym_auto_vs_truth.py` (read-only, uncommitted).
+  See [87-01-PLAN.md](phases/87-stroke-level-asymmetry/87-01-PLAN.md).
+- **Phase 87-02** (Stroke-level view — FRONTEND toggle + visuals) — **✅ CLOSED
+  (PLAN→APPLY→UNIFY) 2026-08-31, human-verify approved. Loop: `PLAN ✓ → APPLY ✓ → UNIFY ✓`.**
+  Summary: [87-02-SUMMARY.md](phases/87-stroke-level-asymmetry/87-02-SUMMARY.md).
+  All 9 acceptance criteria pass. All 4 auto tasks + the blocking human-verify done. New `scratch/stroke_toggle_check.mjs` **63/63**; the two
+  regression gates pass **unedited** (`overlay_render_check.mjs` 40/40,
+  `marketing_render_check.mjs` 45/45); `npm run build` clean; `pytest` 563 green (no Python in the
+  diff). Diff is exactly the nine planned files.
+  ⚠ **Two APPLY deviations, both small and both recorded here rather than in a comment:**
+  (1) **AC-7's hover/pin clearing lives in the toggle's click handler, not an effect on `mode`** as
+  Task 3 step 7 said — the repo's eslint config errors on `react-hooks/set-state-in-effect`, and the
+  click is the only way `mode` ever changes under a coach's hand. (2) **`npx eslint .` is NOT clean
+  at baseline** (25 problems / 22 errors before this plan, incl. `useTracePrefs.js` and
+  `PhaseReportCard`'s own pre-existing `dismissed` hydrate), so the plan's "eslint clean" could not
+  be met literally; the diff adds **exactly one** new error — the granularity `localStorage` hydrate,
+  identical in kind to the `dismissed` one directly above it and **required by D2** (a lazy
+  initializer would desync hydration).
+  ⚠ **Harness limitation, worked around and stated in the file:** `renderToStaticMarkup` never runs
+  effects, so stroke mode is unreachable from outside — the check rewrites the ONE
+  `useState("cycle")` initializer in its own transpiled copy (production source untouched; it
+  asserts the exact initializer exists so it fails loudly if that line moves). The hydrate itself is
+  therefore covered only by the human-verify's reload step, which passed.
+  `depends_on: ["87-01"]`, wave 2, 4 auto tasks + a blocking
+  human-verify. Puts a **cycles / strokes** toggle in the Swimming section header; in stroke mode
+  the inset bands, the count badge, the `CycleOverlay` pack and all four `CycleCharts` panels
+  rebuild from `metrics_json.strokes`, and a new **Arm balance** block renders 87-01's three signed
+  asymmetry percentages plus the four per-side CVs.
+  ✅ **Two live code findings during planning, both load-bearing:**
+  (1) **The A/B sides are already drawn — for free.** `PhaseVelocity.js:236-241` has painted bands
+  `s.n % 2 ? var(--color-cycle-a) : var(--color-cycle-b)` since 83-01, and 87-01 D3 makes side A the
+  **even array positions**, so `stroke_num` 0 → `n = 1` → odd → `cycle-a`. **Side A is blue, side B
+  is purple, with zero change to the band renderer** — the tokens were named `cycle-a` / `cycle-b`
+  before there were sides. ⚠ It is an accidental alignment of two independent conventions, holding
+  only while `stroke_num` is dense and 0-based, so it is pinned by AC-4 and a render assertion, not
+  a comment.
+  (2) **The whole `PhaseReportCard` renders headlessly** — proven, not assumed:
+  `scratch/_prc_render_probe.mjs` produces 55 KB of markup with the badge, the overlay and all four
+  chart captions, so the toggle can be machine-checked end to end rather than component by
+  component. ⚠ **Measured limitation:** recharts emits an EMPTY wrapper under
+  `renderToStaticMarkup`, so the dashed mean line and the dots are **not** assertable — the panel
+  captions carry the same numbers and are what the harness keys on.
+  **Decisions (all mine, at the user's direction — "all decisions are up to your recommendations"):**
+  D2 toggle state is **local to `PhaseReportCard`**, not lifted into `useTracePrefs` (that hook is
+  shared with the `/video` route, where granularity has no meaning); persisted **globally** at
+  `swimnetics.swimGranularity`, hydrated in an effect never a lazy initializer. D3 effective mode is
+  `strokes?.length ? pref : "cycle"` and the fallback is **never persisted**. D4 stroke-level means
+  are **re-derived client-side** (new pure `web/lib/strokeStats.js`, population std to match numpy) —
+  87-01 stores no stroke means and a cycle is two strokes, so the stored `mean_isi_s` would draw the
+  dashed line clean off the top of the dots. D6 **one deliberate exception to `PhaseVelocity.js`'s
+  standing DO-NOT-CHANGE** — an optional `itemLabel` used ONLY in its aria-label, because that string
+  would otherwise read "one band per cycle" to exactly the users who cannot see the colours;
+  geometry untouched, diff bounded by AC-8. D7 in stroke mode the overlay pack is **tinted by side**
+  and its single median is replaced by **two per-side medians** (normalized only, `MIN_ITEMS = 5`
+  gated per side) — 83-05's all-grey rule was about not *asserting* which stroke is odd, and naming
+  which arm produced a trace asserts nothing. D8 **no warning banner on auto sessions** — 87-01 D2
+  is the user's explicit call; what is added is the *definition* of A and B, without which the
+  readout is unreadable. D9 the readout states **magnitude and direction, never a verdict** — no
+  "even" threshold (83-03's cut classifier is the precedent), no good/bad colour, and it is
+  **unit-invariant** (percentages and ratios do not convert). D10 one 8-word line in stroke mode:
+  *"Usual-range comparisons below stay per cycle"* — 87-01 D4 keeps the strips cycle-level, and a
+  coach who just switched the section would otherwise misread the band.
+  ✅ **Gate cleared** — 87-01 applied and backfilled (47 of 101 sessions carry `strokes`), so the
+  human-verify ran on real data. On the other 54 the toggle is simply absent, the designed
+  degradation.
+  ⚠ Regression gates that must pass **unedited**: `scratch/overlay_render_check.mjs` (40 checks) and
+  `scratch/marketing_render_check.mjs`.
+  See [87-02-PLAN.md](phases/87-stroke-level-asymmetry/87-02-PLAN.md).
 - **Phase 75-06** (Swim + Whole metric batch) — **✅ LOOP CLOSED (PLAN→APPLY→UNIFY) 2026-08-28**
   (loop: PLAN ✓ → APPLY ✓ → UNIFY ✓). ✅ **Committed `20c0432`** (whole-tree commit, 2026-08-29).
   **The race-phase registry is now complete** (37 → **47 specs**; `streamline_drag` is the only
@@ -650,8 +771,57 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
   (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
   item 9 (annotate the backlog fast).
-- **Phase 86** (session clock accuracy — absolute, measured session start) — **📋 86-01 PLAN created
-  2026-08-30, APPLY DELIBERATELY GATED.** New phase, not in ROADMAP's 1–85 index and not derived from
+- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 86-01 LOOP CLOSED
+  (PLAN ✓ → APPLY ✓ → UNIFY ✓) 2026-08-31; 86-02 PLAN created 2026-08-31
+  (PLAN ✓ → APPLY ○ → UNIFY ○).** Suite **505 → 520**
+  (+15, zero pre-existing failures — +15 is exactly the new-test count, so nothing pre-existing was
+  altered). ✅ **`patch_14` APPLIED by the user 2026-08-31** — the three columns are live.
+  ✅ **86-01 COMMITTED `861040b` and PUSHED to `main` 2026-08-31; Railway deploy VERIFIED live** —
+  `GET /time` went 404 → 200 across the rollout and the deployed `/openapi.json` carries all three
+  form fields plus `/time` with no security requirement. **Item 27's deploy-ordering gate is now
+  SATISFIED: the backend is live BEFORE any 86-02 build exists.** 86-03 not written.
+  **86-02 = the mobile half, and the only thing that can ever fill 86-01's columns.** Replaces the
+  one-shot META with a **burst of 10 timed round trips**, keeps the **minimum** RTT (Cristian's — the
+  least-congested sample), and corrects `sessionStartPhoneMs` by `minRTT/2`. That correction is the
+  **live overlay bug fix**: `deviceNowUs` is captured when the ESP32 *builds* the reply, so the
+  inbound BLE leg is currently attributed to the encoder and the start is biased **late** by one
+  one-way flight time. Then measures the phone's offset against `GET /time` **concurrently with the
+  ~20 s dump** (so it costs no wall clock) and sends all three fields on the swim's own
+  `POST /process`. Files: new pure `swimnetics-mobile/src/lib/sessionClock.js` (zero imports) +
+  `RecordScreen.js` + new `scratch/session_clock_check.mjs` — the 84-05 harness pattern, since the
+  mobile tree has no test runner.
+  🔴 **`Math.round` on `session_start_utc_ms` is load-bearing:** `api.py` declares `Optional[int]`, so
+  a fractional string 422s at **Pydantic coercion, before the handler runs** — 86-01's
+  drop-don't-422 posture cannot protect a value that never reaches it, and the whole swim is lost.
+  Pinned by AC-3 and a source-level harness assertion.
+  ⚠ **86-01's D2 window bites the phone:** floor 2020-01-01, ceiling `now + 48 h`. Seconds-for-ms
+  lands in 1970 and is discarded **with a log line the phone never sees** — so the harness parses
+  `_EPOCH_MS_FLOOR` / `_EPOCH_MS_FUTURE_SLACK_MS` out of `api.py` and fails on drift (the
+  `MAX_VIDEO_BYTES` precedent).
+  ✅ **`clock_offset_ms` is measured and reported, NEVER applied.** The app records at poolside where
+  `GET /time` can fail outright; applying it would make the primary number's meaning depend on
+  whether an unrelated network call succeeded. `session_start_utc_ms` is therefore always "phone
+  clock, corrected for BLE flight only" — one definition, every session. Matches api.py:292-297.
+  Sign is documented: **positive = phone ahead of server**; convert with `start − offset`.
+  ⚠ **The clock probe may never cost a swim** (AC-2): every probe can time out and DUMP still runs,
+  the CSV still saves, the fields are simply absent. It also must not race the Phase 74 stalled
+  retry — a generation ref aborts an in-flight burst, and the retry keeps its one-META-then-DUMP shape.
+  ⚠ **84-02's GO marker moves** — it resolves against the corrected start now, shifting `go_signal_s`
+  by ~`rtt/2` (tens of ms), far below the coach thumb latency the metric already embeds.
+  ⚠ **`rtt/2` assumes symmetric legs and remains an ESTIMATE until 86-03.** Two facts bound it, both
+  verified: `processPending()` is the **first** call in a free-running `loop()` with no `delay` while
+  not recording, so device-side queueing is negligible; and both directions are acknowledged
+  (`writeCharacteristicWithResponseForService` out, `notify(false)` — an indication — in). Until the
+  tap test runs, no document may quote a corrected-overlay accuracy figure as measured.
+  ⚠ **AC-7 is build-gated** and must ride the same EAS build as Phase 84's owed device-verify batch.
+  Out of scope and named as such: STATE item 25's ISO debug line at `RecordScreen.js:1155`, which this
+  plan makes more meaningful but does not get to redesign.
+  ⚠ **UNIFY reconciled from the TREE, not from execution memory** — APPLY ran in a cut-off prior
+  session. Every claim was re-verified: full `git diff`, `pytest tests/`, a live `TestClient` call on
+  `/time` (200, 3 ms off the host clock, no auth header), `python -c "import api"`.
+  ⚠ **Phase 86 stays 🚧 — NOT transitioned, NO phase commit.** Plan/summary counts are now equal
+  (1/1), which is exactly the heuristic that wrongly called 83-01 and 83-02 done. **86-01 is 1 of 3.**
+  New phase, not in ROADMAP's 1–85 index and not derived from
   any owed item; it comes out of the SwimClips integration conversation but the first two plans are
   **useful with or without that partnership** — they fix a live bug in the shipped video overlay.
   **The problem:** every sample is stamped `micros()` (boot-relative, wraps at 71.6 min). Absolute time
@@ -672,14 +842,24 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   The client uses this endpoint to measure its own RTT and derive clock offset from RTT/2; an
   uncontrolled network call inside the handler lands *inside the interval being measured*. It reads
   like an auth oversight, so the reason is pinned in a code comment and an AC.
-  ⚠ **GATED ON PHASE 84.** `api.py` holds **uncommitted 84-02** work in the same `process_session`
-  signature 86-01 edits, and `tests/test_api.py` holds its `_post_csv` helper; the mobile repo has 14
-  modified files incl. `RecordScreen.js` (84-02's file, and 84-05 is planned against it). Applying now
-  entangles two phases in one blob that cannot be committed, deployed or rolled back separately.
-  **Prerequisite: Phase 84 committed and its backend deployed.**
+  ✅ **The Phase-84 gate is LIFTED — verified 2026-08-31, not assumed.** Backend repo clean at
+  `54cb8d1` = `origin/main`; mobile repo clean at `6b24c79` = `origin/main` (the 14 modified files are
+  gone); and the **deployed** `/openapi.json` returns 200 containing `go_signal_s`, so 84-02's backend
+  is genuinely live on Railway. That was the whole prerequisite (`api.py` + `tests/test_api.py` no
+  longer hold uncommitted 84-02 work), so 86-01 could be applied without entangling two phases.
   ⚠ **Deploy ordering is load-bearing** (same constraint as 84-02, now doubled): `api.py` live on
   Railway **before** the 86-02 build that sends the fields, or FastAPI drops the unknown form fields
   silently and sessions recorded in the gap lose their start with no error anywhere.
+  ✅ **A SECOND ordering hazard was found during APPLY and designed out.** The plan's Task 2 says to add
+  the three keys to the `session_row` dict literal — which would have made **deploying `api.py` before
+  the user applies `patch_14` break every upload** (PostgREST rejects unknown columns), and would also
+  have failed `TestSchemaContract`, whose static extractor checks every column named in an `.insert({…})`
+  literal against the `supabase/live_schema.json` snapshot (the columns are not in the live DB yet, and
+  hand-adding them to the snapshot would make the guard lie). Both are avoided by the **Phase 70
+  `recording_token` precedent three lines above**: assign each key by subscript, only when a value
+  survived validation. Verified the extractor ignores that form. Absent key ≡ explicit NULL in the
+  stored row (nullable, no default), so the contract is unchanged — **patch_14 and the deploy can now
+  land in either order.**
   ⚠ **No backfill is possible** — only the phone can produce this at record time, so all 99 existing
   sessions hold NULL permanently. Consumers must treat NULL as *unknown* and never substitute
   `recorded_at`; same reasoning that forbids backfilling NULL `sample_rate_hz` with 100.
@@ -687,9 +867,22 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   than `metrics_json.phases` — this is session provenance like `sample_rate_hz` (patch_09), not a
   metric, and `phases` is rewritten by recompute and `PUT /annotations`; `recorded_at` semantics
   **deliberately unchanged** (fixing it is a library-wide comparability break → new owed item 22).
-  **3 plans: 86-01 backend (written) · 86-02 mobile round-trip + send · 86-03 the tap test.**
+  **3 plans: 86-01 backend (✅ closed, uncommitted) · 86-02 mobile round-trip + send (📋 planned) · 86-03 the tap test (not written).**
   ⚠ **Every accuracy figure in this phase is an ESTIMATE until 86-03 runs** — hence its own plan.
-  See [86-01-PLAN.md](phases/86-session-clock-accuracy/86-01-PLAN.md).
+  **Two UNIFY findings beyond the plan:** (1) `_finite_or_none()` was added un-planned — a NaN/inf
+  diagnostic serializes to invalid JSON and would fail the whole insert, which would violate AC-3's own
+  principle (never lose the swim over a clock annotation); (2) the sanity window is **2020-01-01 floor →
+  now + 48 h** (`_EPOCH_MS_FLOOR`), wide on purpose: both realistic client unit errors land nowhere near
+  a real "now" (seconds→1970, micros→tens of thousands of years out), so a wide window costs nothing in
+  false rejections even against a badly skewed phone clock. **86-02 must not send seconds.**
+  ⚠ **The plan's checklist item `grep -n "recorded_at" api.py` "returns nothing" is now literally
+  false** — it returns `api.py:301`, a **comment** warning readers never to substitute it. Never *set*,
+  so the boundary holds; the check's form changed, not the behaviour.
+  ⚠ **AC-1/AC-5 are proven only against the MOCKED insert** — nothing has touched a real column.
+  **Two blockers before the 86-02 app build ships → new owed items 26–27 below.**
+  See [86-01-SUMMARY.md](phases/86-session-clock-accuracy/86-01-SUMMARY.md) ·
+  [86-01-PLAN.md](phases/86-session-clock-accuracy/86-01-PLAN.md) ·
+  [86-02-PLAN.md](phases/86-session-clock-accuracy/86-02-PLAN.md).
 - **✅ Working tree RESOLVED 2026-08-29 — committed + pushed as `20c0432`.** The shared-`api.py`
   deadlock (75-06's cycle threading + `PUT /annotations` repair tangled with 82-01's session-delete
   storage cleanup, hunk-level staging unavailable) was broken by taking the **whole tree in one
@@ -813,6 +1006,11 @@ existing bk sessions: Tony + AlexGroup/Tate) and far more breaststroke. Then **r
 
 **10. ⛔ Backstroke breakout unvalidated (n=0) — Phase 78.** 2 labelable bk sessions exist (Tony,
 AlexGroup/Tate). Stop claiming "back" in Phase 76's "free/**back**" until at least those are scored.
+⚠ **WIDENED 2026-08-31 (Phase 87).** The same n=0 now blocks a second claim: `segment_strokes` and
+the arm-asymmetry readout both run for backstroke on exactly freestyle's code path, so the toggle,
+the two-colour pack and the Arm balance block all render for a bk session — and **nothing about any
+of it has ever been checked against a human mark.** Inclusion was free; validation is still zero.
+Annotating those 2 sessions now buys two phases at once.
 
 **11. ⚠ Fly breakout thins outside Tony/Leo — Phase 78.** Chantee (post-tuning, 3 sessions) sits at
 0.87 s median (0/3 ≤0.5 s) vs Tony 0.26 s / Leo 0.29 s. Re-check after item 9; don't oversell fly
@@ -1017,6 +1215,67 @@ cuts safe); extract the shared helpers. Also decide the fate of the ISO timestam
 make load-bearing**.
 ⚠ **Touches `RecordScreen.js`, so it must land AFTER Phase 84 is committed**, not inside it.
 
+**26. ✅ RESOLVED 2026-08-31 — user applied `supabase/patch_14_session_clock.sql`, run reported clean.**
+The three columns are live in the DB. ⚠ **Still unproven end-to-end:** AC-1/AC-5 remain verified only
+against the mocked insert — no real row has carried a non-NULL `session_start_utc_ms` yet, because only
+the phone can produce one and 86-02 has not shipped. The first real write is 86-02's own AC. Original
+item text follows for the record.
+**26-orig. USER ACTION: apply `supabase/patch_14_session_clock.sql` (86-01 UNIFY, 2026-08-31).**
+Three nullable `sessions` columns — `session_start_utc_ms` BIGINT, `sync_error_ms` and
+`clock_offset_ms` DOUBLE PRECISION, all `ADD COLUMN IF NOT EXISTS`. Standing pattern: the user runs
+patches against the live DB (patch_11 / patch_12 precedent). **Until it runs, AC-1 and AC-5 are proven
+only against the mocked insert** — nothing has been written to a real column. ✅ **Not urgent relative
+to the deploy**: 86-01's conditional-subscript insert means `api.py` is safe to deploy first (the keys
+are omitted entirely when absent), so patch and deploy can land in either order. Both must precede the
+86-02 app build.
+
+**27. ✅ RESOLVED 2026-08-31 — 86-01 committed `861040b`, pushed to `main`, Railway deploy VERIFIED.**
+Not assumed: polled the deployed host until `GET /time` returned 200 (404 → 200 across the rollout,
+`{"server_utc_ms":1788164715302}`), then confirmed the deployed `/openapi.json` lists
+`session_start_utc_ms`, `sync_error_ms` and `clock_offset_ms` on `POST /process` and `/time` with **no
+security requirement**. The backend is live **before** any 86-02 build exists, which is the ordering
+the item existed to protect. ⚠ **The constraint still binds in the other direction for every future
+change to these fields:** an app that sends a field an older backend does not know gets it dropped
+**silently** — no 4xx, no log — and item 22's reasoning means no backfill can ever repair those rows.
+Original item text follows for the record.
+**27-orig. DEPLOY ORDERING: `api.py` must be live on Railway BEFORE the 86-02 app build (86-01 UNIFY).**
+Identical in shape to 84-02's constraint. If an app that sends `session_start_utc_ms` /
+`sync_error_ms` / `clock_offset_ms` reaches an older backend, **FastAPI drops the unknown form fields
+silently** — no 4xx, no log, nothing. Sessions recorded in that gap lose their absolute start
+permanently, and item 22's reasoning means there is **no backfill that could ever repair them**. ⚠ The
+86-01 work is currently **uncommitted** (`M api.py`, `M tests/test_api.py`, `?? supabase/patch_14…`),
+so it is not on Railway yet. Commit + push (auto-deploys) before 86-02 ships, and confirm with a
+deployed `/openapi.json` fetch — the same check that lifted 86-01's own Phase-84 gate.
+⚠ **CORRECTED 2026-08-31 (verified, not assumed):** the "uncommitted" clause above is **stale**.
+`861040b feat(86-01): absolute session clock backend` (api.py + tests/test_api.py +
+supabase/patch_14_session_clock.sql + the SUMMARY) is committed **and pushed** — `main` is level
+with `origin/main`, and `git status` shows no `M api.py`. The deploy-ordering constraint itself
+still stands and `patch_14` is still unapplied; only the "not pushed" half is resolved.
+
+
+**28. 🔴 The AUTO-path arm asymmetry is uncorrelated with coach-mark truth — and is now ON SCREEN
+(Phase 87, 2026-08-31).** Measured, not suspected: Pearson **r = −0.06**, median error **10.2
+percentage points** against a **6.1% median signal**, agreeing on only **2 of the 7** most-lopsided
+sessions (`scratch/_asym_auto_vs_truth.py`, 23 annotated freestyle sessions). The cause is **parity,
+not precision** — un-paired wavelet boundaries land at 1.10× the coach's mark count and match 88% of
+marks within 0.35 s, but **one extra or missing boundary flips the A/B side of every stroke after
+it**. ⚠ **The user saw this measurement and chose to ship anyway** (87-01 D2 / 87-02 D8), marked only
+by the existing `auto` chip and no warning banner — their call, recorded not softened. What changed
+at 87-02 is the **exposure**: the number is no longer a stored key, it is a sentence a coach reads
+(`Tempo — 6.2% apart · A slower`) on 20 of the 47 backfilled sessions. Two ways out, neither scoped:
+annotate the session (coach marks make it exact — `segmentation_reliable` flips true), or fix the
+parity by pairing the auto boundaries against a stroke-side prior. Until one of them lands, treat
+`auto` asymmetry as a prompt to annotate, never as a finding.
+
+**29. 🟡 DEPLOY ORDERING FOR PHASE 87 — backend must reach Railway before the frontend reaches
+Vercel (87-02 UNIFY, 2026-08-31).** The backfill has **already been applied to the live DB** (47 of
+101 sessions carry `metrics_json.strokes`), so the coach portal would find data even if only Vercel
+deployed. But `POST /process` and `PUT /annotations` on the **deployed** Railway backend do not yet
+emit `strokes`, so every session recorded or re-annotated in a frontend-only gap silently loses its
+stroke array and its seven asymmetry keys — the same silent-drop shape as items 27 and 84-02, and
+the toggle simply does not appear for them. Phase 87 is committed locally and **not pushed**;
+push once, which auto-deploys both, then confirm on a freshly-uploaded freestyle session that the
+toggle appears. ⚠ Do **not** push the frontend alone.
 
 ## Recent arc (compressed)
 - **75-01** skeleton — `MetricSpec` registry (37 specs) + `metrics_json.phases` jsonb + `POST /sessions/{id}/recompute` backfill seam.

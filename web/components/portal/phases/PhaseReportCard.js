@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from "react";
 import { flagVerdict, directionOfGood } from "@/lib/phaseValence";
 import { BASELINE_LIMIT } from "@/lib/phaseBaseline";
 import { buildBands } from "@/lib/cycleBands";
+import { deriveMeans, armBalance } from "@/lib/strokeStats";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
 import CycleCharts from "@/components/portal/CycleCharts";
 import { HoverExplainProvider } from "./HoverExplain";
@@ -128,18 +129,37 @@ const PROVISIONAL_NOTE =
 // memo can call it without taking a new closure as a dependency on every render.
 const toIdx = (tS, fsHz) => (tS == null || !(fsHz > 0) ? null : Math.round(tS * fsHz));
 
+// Global, not per-session (87-02 D2).
+const GRANULARITY_KEY = "swimnetics.swimGranularity";
+
 const fmt = (v) => (v == null || !Number.isFinite(v) ? "—" : Number.isInteger(v) ? String(v) : v.toFixed(2));
 
 // The hovered band's own stored numbers (83-01 AC-3) — read off `metrics_json.cycles`, never
 // recomputed from the trace, so the readout and the four charts below can never disagree.
-function cycleReadout(c, n, unit) {
+function cycleReadout(c, n, unit, noun = "Cycle") {
   const imp = unit === "imperial";
   const k = imp ? 1.09361 : 1;
   const d = (v) => (Number.isFinite(v) ? (v * k).toFixed(2) : "—");
-  return `Cycle ${n} · ${fmt(c.duration_s)} s · ${d(c.dist_m)} ${imp ? "yd" : "m"}/stroke · peak ${d(
+  return `${noun} ${n} · ${fmt(c.duration_s)} s · ${d(c.dist_m)} ${imp ? "yd" : "m"}/stroke · peak ${d(
     c.arm_peak_vel
   )} ${imp ? "yd/s" : "m/s"}`;
 }
+
+// The A/B definition (87-01 D3), and the scope statement 87-01 D4 makes necessary. Both are always
+// visible in stroke mode: the readout is unreadable without the first, and a coach who has just
+// switched the whole section to strokes would otherwise reasonably read the usual-range bands below
+// as stroke-level. Neither is a warning — 87-01 D2 shipped the auto-path number marked only by the
+// existing `auto` chip, and softening that with chrome the user declined is not this plan's call.
+const AB_DEFINITION =
+  "A and B are the two alternating arms — a single-axis encoder cannot tell which is left.";
+const STRIP_SCOPE_NOTE = "Usual-range comparisons below stay per cycle.";
+
+const pctFmt = (v) => (Number.isFinite(v) ? `${Math.abs(v).toFixed(1)}% apart` : "—");
+const cvFmt = (v) => (Number.isFinite(v) ? `${(v * 100).toFixed(0)}%` : "—");
+
+// The two side tokens, written as the same real `var(--color-…)` strings the bands and the pack
+// use, so the chip that NAMES a side is painted by the colour that DRAWS it (AC-4).
+const SIDE_COLOR = { A: "var(--color-cycle-a)", B: "var(--color-cycle-b)" };
 
 // The breakout band (83-03) has no row in `metrics_json.cycles` — it is the span between the coach's
 // streamline-break mark and their first stroke mark, so the only number it owns is its own length.
@@ -247,6 +267,56 @@ function metricExplain(disp, value, base, verdict, unit, notes = []) {
   };
 }
 
+// Arm balance (87-02) — the three signed asymmetry percentages and the four per-side CVs that
+// 87-01 stored, rendered and never recomputed. States magnitude and direction and passes NO verdict:
+// no "even" threshold, no good/bad colour, no flag, no dismiss control. 83-03 is the precedent for
+// not shipping an unmeasured cutoff, and there is no usual-range baseline for these seven keys.
+//
+// ⚠ UNIT-INVARIANT. Asymmetry is a percentage and the four CVs are ratios, so `unit` is deliberately
+// not threaded in here — nothing in this block may ever be multiplied by 1.09361.
+function ArmBalance({ session }) {
+  const model = armBalance(session);
+  return (
+    <div className="mb-4">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted">Arm balance</p>
+      {model ? (
+        <>
+          <div className="grid gap-1.5 sm:grid-cols-3">
+            {model.rows.map((r) => (
+              <div key={r.key} className="rounded-lg border border-navy/50 bg-surface-2 px-3 py-2">
+                <p className="text-[11px] text-muted">{r.label}</p>
+                <p className="mt-0.5 font-mono text-sm tabular-nums text-ink">{pctFmt(r.pct)}</p>
+                <p className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-subtle">
+                  <span
+                    aria-hidden="true"
+                    className="inline-block h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: SIDE_COLOR[r.leader] }}
+                  />
+                  {r.phrase}
+                </p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 space-y-0.5">
+            {model.cvs.map((c) => (
+              <p key={c.label} className="text-[11.5px] text-muted">
+                {c.label} — <span className="font-mono tabular-nums">A {cvFmt(c.a)}</span> ·{" "}
+                <span className="font-mono tabular-nums">B {cvFmt(c.b)}</span>
+              </p>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="text-[11.5px] leading-relaxed text-muted">
+          Not enough strokes on each side to compare the two arms on this swim.
+        </p>
+      )}
+      <p className="mt-2 text-[11px] leading-relaxed text-subtle">{AB_DEFINITION}</p>
+      <p className="text-[11px] leading-relaxed text-subtle">{STRIP_SCOPE_NOTE}</p>
+    </div>
+  );
+}
+
 export default function PhaseReportCard({
   phases,
   velocity = [],
@@ -257,6 +327,10 @@ export default function PhaseReportCard({
   sessionId,
   middleSlot = null, // page-owned velocity / Time-to-Distance / video cards, threaded after the timeline
   cycles, // per-cycle rows for the Swimming section
+  // Phase 87-02 — `metrics_json.strokes`, the single-arm half-cycles. null for butterfly /
+  // breaststroke / im / udk and absent on every session predating 87-01's backfill, which is what
+  // makes `hasStrokes` the gate for the entire strokes mode rather than a stroke-type check here.
+  strokes = null,
   session, // metrics_json.session — CycleCharts means/CVs
   // data_quality.segmentation_reliable, passed EXPLICITLY by the page (83-01 AC-2). It flips true
   // only when metrics were recomputed from a coach's marks, so it is the one honest source for the
@@ -266,6 +340,20 @@ export default function PhaseReportCard({
 }) {
   const storageKey = `phaseDismiss:${sessionId}`;
   const [dismissed, setDismissed] = useState(() => new Set());
+
+  // Swimming-section granularity (87-02). Local to this card and deliberately NOT lifted into
+  // `useTracePrefs`: that hook is page-owned and shared with the /video route so trace colours stay
+  // in step across surfaces, and granularity has no meaning there. Persisted GLOBALLY rather than
+  // per-session — a coach who thinks in strokes should stay in strokes on the next swim.
+  const [granularity, setGranularity] = useState("cycle");
+  const hasStrokes = Array.isArray(strokes) && strokes.length > 0;
+  // The effective mode. A session with no strokes renders exactly today's card even with "stroke"
+  // stored, and that fallback is NEVER written back — opening a butterfly swim must not silently
+  // reset the preference.
+  const mode = hasStrokes ? granularity : "cycle";
+  const strokeMode = mode === "stroke";
+  const itemLabel = strokeMode ? "stroke" : "cycle";
+  const swimItems = strokeMode ? strokes : cycles;
 
   // Hydrate the dismissed set from localStorage after mount (never during render — the server has
   // no localStorage and reading it in a lazy initializer would desync hydration). Client-only this
@@ -278,6 +366,32 @@ export default function PhaseReportCard({
       /* private mode — the count just resets on reload */
     }
   }, [storageKey]);
+
+  // Same rule as above: read localStorage in an effect, never in a lazy initializer — the server
+  // has none and reading it during render desyncs hydration.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(GRANULARITY_KEY);
+      if (raw === "stroke" || raw === "cycle") setGranularity(raw);
+    } catch {
+      /* private mode — the card just opens on cycles */
+    }
+  }, []);
+
+  const chooseGranularity = (next) => {
+    setGranularity(next);
+    // The two keyspaces must never mix: cycle 3 pinned and cycle 5 hovered say nothing about
+    // strokes 3 and 5 (AC-7). Cleared HERE rather than in an effect on `mode` — this is the only
+    // way the mode ever changes under a coach's hand, and an effect would be a cascading render.
+    // The kick hover/pin is a separate keyspace and stays put.
+    setHoverCycle(null);
+    setPinnedCycle(null);
+    try {
+      window.localStorage.setItem(GRANULARITY_KEY, next);
+    } catch {
+      /* non-fatal */
+    }
+  };
 
   const persist = (next) => {
     try {
@@ -374,13 +488,16 @@ export default function PhaseReportCard({
   // starting BEFORE the breakout (worst −12.9 s), where the same gold would be a lie.
   const swimBands = useMemo(
     () =>
-      buildBands(cycles, {
+      buildBands(swimItems, {
         fsHz,
         i0: toIdx(boundaries?.[SWIM_WIN[0]], fsHz),
         i1: toIdx(boundaries?.[SWIM_WIN[1]], fsHz),
+        numberKey: strokeMode ? "stroke_num" : "cycle_num",
+        // Unchanged by the mode. In stroke mode the gold band's semantics only get BETTER: the
+        // breakout genuinely is one stroke sitting among strokes rather than among cycles.
         breakoutFirst: segmentationReliable,
       }),
-    [cycles, fsHz, boundaries, segmentationReliable]
+    [swimItems, strokeMode, fsHz, boundaries, segmentationReliable]
   );
 
   // One hover, two surfaces: the inset band and the point in all four CycleCharts panels. Lifted
@@ -389,13 +506,14 @@ export default function PhaseReportCard({
   // 83-05 D9: a pin is a SECOND, longer-lived channel. `setHoverCycle` still only ever writes the
   // hover half, so a mouseleave clears the preview and leaves the pin standing.
   const [pinnedCycle, setPinnedCycle] = useState(null);
+  const numberKey = strokeMode ? "stroke_num" : "cycle_num";
   const hoverRow = useMemo(() => {
-    if (hoverCycle == null || !cycles?.length) return null;
+    if (hoverCycle == null || !swimItems?.length) return null;
     return (
-      cycles.find((c, i) => (Number.isFinite(c?.cycle_num) ? c.cycle_num + 1 : i + 1) === hoverCycle) ?? null
+      swimItems.find((c, i) => (Number.isFinite(c?.[numberKey]) ? c[numberKey] + 1 : i + 1) === hoverCycle) ?? null
     );
-  }, [cycles, hoverCycle]);
-  // The badge counts CYCLES, so it must exclude the synthetic breakout band — it is a stroke, but
+  }, [swimItems, numberKey, hoverCycle]);
+  // The badge counts CYCLES (or strokes), so it must exclude the synthetic breakout band — it is a stroke, but
   // it is not one of the coach's marked cycles and the four charts below have no row for it.
   const swimCycleCount = useMemo(() => swimBands.filter((b) => !b.isBreakout).length, [swimBands]);
 
@@ -477,9 +595,50 @@ export default function PhaseReportCard({
         const isPulldown = isUW && strokeType === "breaststroke";
         return (
           <section key={s.phase} className="mb-5 rounded-2xl border border-navy/50 bg-surface p-5 shadow-sm">
-            <h2 className="mb-3.5 font-semibold text-ink">
-              {s.title}
-              {s.note && <span className="ml-2 text-[11.5px] font-normal text-muted">{s.note}</span>}
+            <h2
+              className={`mb-3.5 font-semibold text-ink${
+                s.cycleCharts && hasStrokes ? " flex items-center justify-between gap-3" : ""
+              }`}
+            >
+              {s.cycleCharts && hasStrokes ? (
+                <>
+                  <span>
+                    {s.title}
+                    <span className="ml-2 text-[11.5px] font-normal text-muted">
+                      {strokeMode ? "arm-by-arm" : s.note}
+                    </span>
+                  </span>
+                  {/* Same control styling as CycleOverlay's own x-axis toggle, so the card does not
+                      grow a second visual language for the same gesture. */}
+                  <span
+                    className="flex shrink-0 overflow-hidden rounded-md border border-navy/60"
+                    role="group"
+                    aria-label="Swimming detail granularity"
+                  >
+                    {[
+                      ["cycle", "cycles"],
+                      ["stroke", "strokes"],
+                    ].map(([key, text]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => chooseGranularity(key)}
+                        aria-pressed={mode === key}
+                        className={`px-2 py-0.5 text-[10.5px] font-medium transition-colors ${
+                          mode === key ? "bg-navy/60 text-ink" : "text-muted hover:text-subtle"
+                        }`}
+                      >
+                        {text}
+                      </button>
+                    ))}
+                  </span>
+                </>
+              ) : (
+                <>
+                  {s.title}
+                  {s.note && <span className="ml-2 text-[11.5px] font-normal text-muted">{s.note}</span>}
+                </>
+              )}
             </h2>
             {showInset && (
               <div className="mb-4 rounded-xl border border-navy/50 bg-surface-2 px-3.5 py-3">
@@ -489,7 +648,7 @@ export default function PhaseReportCard({
                   fsHz={fsHz}
                   window={[i0, i1]}
                   {...(s.cycleCharts && swimBands.length
-                    ? { bands: swimBands, highlightN: activeCycle, onHoverBand: setHoverCycle }
+                    ? { bands: swimBands, highlightN: activeCycle, onHoverBand: setHoverCycle, itemLabel }
                     : isUW && kickBands.length
                     ? { bands: kickBands, highlightN: activeKick, onHoverBand: setHoverKick }
                     : null)}
@@ -502,14 +661,14 @@ export default function PhaseReportCard({
                     {hoverBand?.isBreakout && s.cycleCharts
                       ? breakoutReadout(hoverBand)
                       : hoverRow && s.cycleCharts
-                      ? cycleReadout(hoverRow, hoverCycle, unit)
+                      ? cycleReadout(hoverRow, hoverCycle, unit, strokeMode ? "Stroke" : "Cycle")
                       : hoverKickRow && isUW
                       ? kickReadout(hoverKickRow, hoverKick, unit, velocity)
                       : s.caption}
                   </p>
                   {s.cycleCharts && swimCycleCount > 0 && (
                     <p className="shrink-0 text-[11px] font-semibold uppercase tracking-widest text-subtle">
-                      {swimCycleCount} {swimCycleCount === 1 ? "cycle" : "cycles"} ·{" "}
+                      {swimCycleCount} {swimCycleCount === 1 ? itemLabel : `${itemLabel}s`} ·{" "}
                       {segmentationReliable ? "annotated" : "auto"}
                     </p>
                   )}
@@ -536,11 +695,13 @@ export default function PhaseReportCard({
                     here, and neither does a session with a single cycle. */}
                 {s.cycleCharts && (
                   <CycleOverlay
-                    items={cycles}
+                    items={swimItems}
                     velocity={velocity}
                     fsHz={fsHz}
                     window={[i0, i1]}
-                    label="cycle"
+                    label={itemLabel}
+                    numberKey={numberKey}
+                    colorByParity={strokeMode}
                     activeN={activeCycle}
                     onHoverN={setHoverCycle}
                     pinnedN={pinnedCycle}
@@ -590,11 +751,18 @@ export default function PhaseReportCard({
                 registry metrics are the phase model's content, the charts are the detail under it. */}
             {s.cycleCharts && (
               <div className="mt-5 border-t border-navy/40 pt-4">
-                {cycles?.length ? (
+                {strokeMode && <ArmBalance session={session} />}
+                {swimItems?.length ? (
                   <CycleCharts
-                    cycles={cycles}
-                    session={session}
+                    cycles={swimItems}
+                    /* Stroke-level means, re-derived from the plotted items — the stored
+                       session.mean_* keys are CYCLE-level and a cycle is two strokes, so the dashed
+                       reference line would sit clean off the top of the dots (87-02 D4). Not merged
+                       with `session`: one leftover cycle-level key under stroke dots is exactly the
+                       failure this guards. */
+                    session={strokeMode ? deriveMeans(strokes) : session}
                     unit={unit}
+                    itemLabel={itemLabel}
                     highlightN={activeCycle}
                     onHoverN={setHoverCycle}
                   />

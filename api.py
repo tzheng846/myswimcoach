@@ -417,7 +417,7 @@ async def process_session(
                     session_row = {
                         "athlete_id":       athlete_id,
                         "coach_id":         coach_row_id,
-                        "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "initial_phase": result.get("initial_phase", {}), "data_quality": data_quality, "phases": phases}),
+                        "metrics_json":     _clean({"session": result["session"], "cycles": result["cycles"], "strokes": result["strokes"], "initial_phase": result.get("initial_phase", {}), "data_quality": data_quality, "phases": phases}),
                         "velocity_profile":     _clean(vel.tolist()),
                         "distance_profile":     _clean(dist_dec.tolist()),
                         "acceleration_profile": _clean(accel.tolist()),  # Phase 64-02
@@ -457,6 +457,7 @@ async def process_session(
             "session_id":         session_id_saved,
             "session":            _clean(result["session"]),
             "cycles":             _clean(result["cycles"]),
+            "strokes":            _clean(result["strokes"]),   # Phase 87-01 (free/back only)
             "initial_phase":      _clean(result.get("initial_phase", {})),
             "time":               _clean(t_dec.tolist()),
             "velocity":           _clean(vel.tolist()),
@@ -1061,6 +1062,9 @@ async def put_annotations(
                 **old_mj,
                 "session":       result["session"],
                 "cycles":        result["cycles"],
+                # Phase 87-01: replaced from the coach's marks (manual["stroke_bounds"]).
+                # Rides the same **old_mj merge, so phases/go_signal_s still survive.
+                "strokes":       result["strokes"],
                 # dive/pulldown detection unchanged by recompute — carry the original
                 "initial_phase": old_mj.get("initial_phase") or result.get("initial_phase", {}),
                 "data_quality":  new_dq,

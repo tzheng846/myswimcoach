@@ -367,6 +367,37 @@ def _learned_boundaries(t, vel):
     return cycles or None
 
 
+def _segmenter_bounds(cycles):
+    """Segmenter cycle dicts → the flat boundary index list they were built from.
+
+    ⚠ DROPS _anchors_from_marks' LEADING PAD (fixed in 59-05). segment_cycles_wavelet
+    returns anchors padded with index 0, so the boundary list is [0, m0, m1, ...]. Pairing
+    indices 0,2,4 of THAT selects [0, m1, m3, ...] — every cycle landing HALF A CYCLE out of
+    phase with the arm entries. Measured on 12 freestyle sessions: boundary F1 0.000 with the
+    pad, 0.458 without it. It went unnoticed because stroke_rate_spm is blind to it — the mean
+    interval is unchanged either way, which is why 59-03's rate gate passed at 1.00.
+
+    ⚠ SHARED by _pair_boundaries (cycles) and segment_strokes (single arm strokes) so the two
+    can never diverge on that rule. Do not reimplement it in a second place.
+    """
+    bounds = [c["start_idx"] for c in cycles] + [cycles[-1]["end_idx"]]
+    if len(bounds) > 2 and bounds[0] == 0:
+        bounds = bounds[1:]
+    return bounds
+
+
+def _spans_from_bounds(bounds, vel, num_key="cycle_num"):
+    """Consecutive boundary pairs → span dicts, dropping degenerate (<2 sample) spans."""
+    out = []
+    for i in range(len(bounds) - 1):
+        a, b = int(bounds[i]), int(bounds[i + 1])
+        if b - a < 2:
+            continue              # degenerate span cannot carry per-cycle metrics
+        out.append({num_key: len(out), "start_idx": a, "end_idx": b,
+                    "peak_idx": a + int(np.argmax(vel[a:b]))})
+    return out
+
+
 def _pair_boundaries(base_segmenter, k):
     """Wrap a segmenter so every k-th boundary starts a cycle (Phase 59-03).
 
@@ -385,25 +416,12 @@ def _pair_boundaries(base_segmenter, k):
         cycles = base_segmenter(t, vel)
         if not cycles:
             return cycles
-        bounds = [c["start_idx"] for c in cycles] + [cycles[-1]["end_idx"]]
-        # ⚠ DROP _anchors_from_marks' LEADING PAD BEFORE PAIRING (fixed in 59-05).
-        # segment_cycles_wavelet returns anchors padded with index 0, so the boundary list
-        # is [0, m0, m1, ...]. Pairing indices 0,2,4 of THAT selects [0, m1, m3, ...] —
-        # every cycle landing HALF A CYCLE out of phase with the arm entries. Measured on
-        # 12 freestyle sessions: boundary F1 0.000 with the pad, 0.458 without it.
-        # It went unnoticed because stroke_rate_spm is blind to it — the mean interval is
-        # unchanged either way, which is why 59-03's rate gate passed at 1.00.
-        if len(bounds) > 2 and bounds[0] == 0:
-            bounds = bounds[1:]
-        bounds = bounds[0::k]
-        out = []
-        for i in range(len(bounds) - 1):
-            a, b = bounds[i], bounds[i + 1]
-            if b - a < 2:
-                continue          # degenerate span cannot carry per-cycle metrics
-            out.append({"cycle_num": len(out), "start_idx": a, "end_idx": b,
-                        "peak_idx": a + int(np.argmax(vel[a:b]))})
-        return out or None
+        bounds = _segmenter_bounds(cycles)[0::k]
+        return _spans_from_bounds(bounds, vel) or None
+    # Phase 87-01: expose the closure's inputs so segment_strokes can reach the UNPAIRED
+    # base segmenter without a second lookup table. No behavior change.
+    paired.base = base_segmenter
+    paired.k    = k
     return paired
 
 
@@ -471,6 +489,52 @@ def resolve_segmenter(stroke_type):
     the default while SEGMENTER_BY_STROKE is empty.
     """
     return SEGMENTER_BY_STROKE.get(stroke_type, _DEFAULT_SEGMENTER)
+
+
+# ── SINGLE-ARM STROKE SEGMENTATION (Phase 87-01) ─────────────────────────────
+#
+# ⚠ THIS SET IS PHYSIOLOGY, NOT DETECTOR BEHAVIOR — the opposite quantity to the `k` in
+# _pair_boundaries. Only freestyle and backstroke alternate arms, so only they have a
+# stroke that is smaller than a cycle. Butterfly and breaststroke carry k=2 in
+# SEGMENTER_BY_STROKE (a property of THEIR detector) yet are ONE arm entry per cycle, so a
+# strokes array there would merely duplicate cycles and be free to drift from it.
+_ALTERNATING_ARM_STROKES = ("freestyle", "backstroke")
+
+
+def segment_strokes(t, vel, stroke_type):
+    """Individual ARM STROKES (half-cycles) for the alternating-arm strokes.
+
+    Returns list[{stroke_num, start_idx, end_idx, peak_idx}] in the same slice-relative
+    convention every segmenter uses, or None for any stroke_type that is not freestyle or
+    backstroke, and when the base segmenter finds nothing.
+
+    Runs the UNPAIRED base segmenter — the same call _pair_boundaries wraps — on the same
+    slice, and takes every boundary instead of every k-th. Calling it a second time rather
+    than deriving strokes from the surviving cycles is deliberate: the segmenters are
+    deterministic, so the two agree by construction, whereas `paired` drops degenerate spans
+    AFTER pairing, so the two drop sets are not nested.
+
+    ⚠ THE AUTO-PATH A/B ASSIGNMENT IS NOT TRUSTWORTHY, MEASURED. Against the coach-mark
+    truth on 23 annotated freestyle sessions (2026-08-31), auto-derived arm asymmetry scored
+    Pearson r = -0.06 with a median error of 10.2 percentage points against a signal whose
+    median is 6.1%. The cause is PARITY, not precision: the boundaries land at 1.10x the
+    coach's mark count and match 88% of marks within 0.35 s, but one extra or missing
+    boundary flips the A/B side of every stroke after it. Coach marks
+    (annotations.annotation_to_overrides' stroke_bounds) are the only trustworthy source.
+
+    ⚠ A 1-D axial encoder CANNOT observe which arm is which. Sides are A and B, never
+    left/right — see _arm_asymmetry.
+    """
+    if stroke_type not in _ALTERNATING_ARM_STROKES:
+        return None
+    seg  = resolve_segmenter(stroke_type)
+    base = getattr(seg, "base", None)
+    if base is None:
+        return None
+    cycles = base(t, vel)
+    if not cycles:
+        return None
+    return _spans_from_bounds(_segmenter_bounds(cycles), vel, num_key="stroke_num") or None
 
 
 # ── SWIM WINDOW BY RHYTHM (Phase 59-03) ───────────────────────────────────────
@@ -1489,6 +1553,106 @@ def detect_swim_boundaries(t, vel, stroke_type=None):
 
 # ── METRICS ──────────────────────────────────────────────────────────────────
 
+_ASYM_MIN_PER_SIDE = 3
+_ASYM_KEYS = ("arm_asym_tempo_pct", "arm_asym_dps_pct", "arm_asym_peak_vel_pct",
+              "cv_stroke_interval_a", "cv_stroke_interval_b",
+              "cv_stroke_dps_a", "cv_stroke_dps_b")
+
+
+def _arm_asymmetry(strokes):
+    """Alternating-arm asymmetry + per-side consistency from a strokes list (Phase 87-01).
+
+    Side A = strokes at EVEN array positions, B = odd. ⚠ A and B are NEVER left and right:
+    a 1-D axial encoder cannot observe which arm is which. The values are SIGNED —
+    (mean_A - mean_B) / mean * 100 — so the sign is stable within a session and a caller can
+    name the slower side without claiming to know which arm it is.
+
+    All seven keys are None unless BOTH sides carry at least _ASYM_MIN_PER_SIDE finite
+    samples: a percentage off one or two strokes is noise wearing a number's clothes.
+
+    ⚠ On the AUTO path this is uncorrelated with the coach-mark truth (Pearson r = -0.06,
+    median error 10.2 percentage points against a 6.1% median signal, measured 2026-08-31 on
+    23 annotated freestyle sessions). One extra or missing boundary flips the A/B side of
+    every stroke after it — see segment_strokes.
+    """
+    out = {k: None for k in _ASYM_KEYS}
+    if not strokes:
+        return out
+
+    def sides(key):
+        vals = [s.get(key) for s in strokes]
+        a = np.array([v for v in vals[0::2] if v is not None and np.isfinite(v)], dtype=float)
+        b = np.array([v for v in vals[1::2] if v is not None and np.isfinite(v)], dtype=float)
+        return a, b
+
+    def signed_pct(a, b):
+        if len(a) < _ASYM_MIN_PER_SIDE or len(b) < _ASYM_MIN_PER_SIDE:
+            return None
+        ma, mb = float(a.mean()), float(b.mean())
+        mid = (ma + mb) / 2.0
+        if mid == 0:
+            return None
+        return (ma - mb) / mid * 100.0
+
+    def cv(x):
+        if len(x) < _ASYM_MIN_PER_SIDE or x.mean() == 0:
+            return None
+        return float(x.std() / x.mean())
+
+    dur_a, dur_b = sides("duration_s")
+    dps_a, dps_b = sides("dist_m")
+    pk_a,  pk_b  = sides("arm_peak_vel")
+
+    out["arm_asym_tempo_pct"]    = signed_pct(dur_a, dur_b)
+    out["arm_asym_dps_pct"]      = signed_pct(dps_a, dps_b)
+    out["arm_asym_peak_vel_pct"] = signed_pct(pk_a,  pk_b)
+    out["cv_stroke_interval_a"]  = cv(dur_a)
+    out["cv_stroke_interval_b"]  = cv(dur_b)
+    out["cv_stroke_dps_a"]       = cv(dps_a)
+    out["cv_stroke_dps_b"]       = cv(dps_b)
+    return out
+
+
+def _derive_item_metrics(items, t, vel, dist, fs, v95):
+    """Per-span derived metrics (duration_s .. arm_kick_vel_ratio), in place.
+
+    ⚠ EXTRACTED VERBATIM from compute_session_metrics' per-cycle loop (Phase 87-01) so
+    cycles and single-arm strokes carry an IDENTICAL field set computed by IDENTICAL code.
+    Requires extract_cycle_peaks to have run first (it reads arm_peak_vel/kick_peak_idx).
+    """
+    for cyc in items:
+        a, b      = cyc["start_idx"], cyc["end_idx"]
+        seg_t     = t[a:b]
+        seg_v     = vel[a:b]
+        duration  = float(t[b - 1] - t[a])
+
+        cyc["duration_s"]     = duration
+        cyc["dist_m"]         = float(dist[b - 1] - dist[a])
+        cyc["impulse_m"]      = float(trapezoid(np.maximum(seg_v, 0), seg_t))
+        cyc["mean_vel_ms"]    = float(np.mean(seg_v))
+        cyc["trough_vel_ms"]  = float(np.min(seg_v))  # minimum velocity at recovery
+
+        # Dead spot: |vel| < 10% of v95. v95 is session-wide but SWIM-WINDOWED since
+        # Phase 57 — it was a full-trace percentile here and in swim_metrics.ipynb.
+        dead_mask = np.abs(seg_v) < _DEAD_SPOT_THRESH * v95
+        cyc["dead_spot_s"]    = float(dead_mask.sum() / fs)
+
+        # Coast fraction: fraction of cycle below 50% of this cycle's arm-pull vel
+        coast_thresh = _COAST_FRAC_THRESH * cyc["arm_peak_vel"]
+        coast_mask   = seg_v < coast_thresh
+        cyc["coast_fraction"] = float(coast_mask.sum() / max(1, len(seg_v)))
+
+        # Arm-kick delay
+        if cyc["kick_peak_idx"] is not None:
+            cyc["arm_kick_delay_s"] = float(t[cyc["kick_peak_idx"]] - t[cyc["arm_peak_idx"]])
+            cyc["arm_kick_vel_ratio"] = (float(cyc["kick_peak_vel"]) /
+                                         float(cyc["arm_peak_vel"]))
+        else:
+            cyc["arm_kick_delay_s"]    = None
+            cyc["arm_kick_vel_ratio"]  = None
+    return items
+
+
 def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_type=None):
     """
     Top-level function: run the full breaststroke analysis pipeline.
@@ -1504,12 +1668,16 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
         swim_end_idx      – replaces detect_phases swim_end (exclusive slice end)
         cycle_bounds      – list of (start_idx, end_idx) FULL-TRACE index pairs;
                             bypasses the wavelet segmenter entirely
+        stroke_bounds     – (Phase 87-01) same shape, one entry per SINGLE ARM STROKE;
+                            bypasses segment_strokes entirely
     All indices are full-trace. Omitted keys fall back to auto-detection, so the
     default (manual=None) path is identical to the pre-Phase-47 behavior.
 
-    Returns a dict with two keys:
+    Returns a dict with:
         'session'   – single-value session-level metrics
         'cycles'    – list of per-cycle dicts (one entry per stroke)
+        'strokes'   – (Phase 87-01) list of per-ARM-STROKE dicts, same field set plus
+                      stroke_num, for freestyle/backstroke only; None everywhere else
     """
     manual = manual or {}
     fs  = _compute_fs(t)
@@ -1652,36 +1820,40 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
     extract_cycle_peaks(vel, cycles)
 
     # ── per-cycle derived metrics ─────────────────────────────────────────
-    for cyc in cycles:
-        a, b      = cyc["start_idx"], cyc["end_idx"]
-        seg_t     = t[a:b]
-        seg_v     = vel[a:b]
-        duration  = float(t[b - 1] - t[a])
+    _derive_item_metrics(cycles, t, vel, dist, fs, v95)
 
-        cyc["duration_s"]     = duration
-        cyc["dist_m"]         = float(dist[b - 1] - dist[a])
-        cyc["impulse_m"]      = float(trapezoid(np.maximum(seg_v, 0), seg_t))
-        cyc["mean_vel_ms"]    = float(np.mean(seg_v))
-        cyc["trough_vel_ms"]  = float(np.min(seg_v))  # minimum velocity at recovery
+    # ── single-arm strokes (Phase 87-01) ──────────────────────────────────
+    # A freestyle cycle is TWO arm strokes; `cycles` is already the paired product, so the
+    # per-arm view has to be segmented separately rather than re-derived from it. Coach
+    # marks win over the auto segmenter for the same reason they do for cycles — and here it
+    # matters more, because the auto A/B assignment is parity-fragile (see segment_strokes).
+    # Non-alternating strokes get None: one arm entry IS one cycle there.
+    manual_strokes = manual.get("stroke_bounds")
+    if manual_strokes:
+        strokes = []
+        for a, b in manual_strokes:
+            a = min(max(int(a), 0), len(t) - 1)
+            b = min(int(b), len(t))
+            if b - a < 2:
+                continue  # degenerate (<2 samples) — cannot support per-stroke metrics
+            strokes.append({
+                "stroke_num": len(strokes),
+                "start_idx":  a,
+                "end_idx":    b,
+                "peak_idx":   a + int(np.argmax(vel[a:b])),
+            })
+        strokes = strokes or None
+    else:
+        strokes = segment_strokes(t_seg, vel_seg, stroke_type)
+        if strokes is not None:
+            for st in strokes:
+                st["start_idx"] += ip_end
+                st["end_idx"]   += ip_end
+                st["peak_idx"]  += ip_end
 
-        # Dead spot: |vel| < 10% of v95. v95 is session-wide but SWIM-WINDOWED since
-        # Phase 57 — it was a full-trace percentile here and in swim_metrics.ipynb.
-        dead_mask = np.abs(seg_v) < _DEAD_SPOT_THRESH * v95
-        cyc["dead_spot_s"]    = float(dead_mask.sum() / fs)
-
-        # Coast fraction: fraction of cycle below 50% of this cycle's arm-pull vel
-        coast_thresh = _COAST_FRAC_THRESH * cyc["arm_peak_vel"]
-        coast_mask   = seg_v < coast_thresh
-        cyc["coast_fraction"] = float(coast_mask.sum() / max(1, len(seg_v)))
-
-        # Arm-kick delay
-        if cyc["kick_peak_idx"] is not None:
-            cyc["arm_kick_delay_s"] = float(t[cyc["kick_peak_idx"]] - t[cyc["arm_peak_idx"]])
-            cyc["arm_kick_vel_ratio"] = (float(cyc["kick_peak_vel"]) /
-                                         float(cyc["arm_peak_vel"]))
-        else:
-            cyc["arm_kick_delay_s"]    = None
-            cyc["arm_kick_vel_ratio"]  = None
+    if strokes:
+        extract_cycle_peaks(vel, strokes)
+        _derive_item_metrics(strokes, t, vel, dist, fs, v95)
 
     # ── session-level summary (ALL cycles — Phase 61-01 D5) ───────────────
     # stroke_count IS the total cycle count. Before 61-01 it was the steady-state count,
@@ -1769,7 +1941,13 @@ def compute_session_metrics(t, vel, dist, head_waist_m=0.0, manual=None, stroke_
     # boundaries (Phase 47) ARE the ground truth → True.
     session["segmentation_reliable"]   = bool(manual_bounds)
 
-    return {"session": session, "cycles": cycles, "initial_phase": initial_phase}
+    # Arm asymmetry / per-side consistency (Phase 87-01). None everywhere there are no
+    # strokes — non-alternating strokes, or too few samples on a side.
+    for _k, _v in _arm_asymmetry(strokes).items():
+        session.setdefault(_k, _v)
+
+    return {"session": session, "cycles": cycles, "strokes": strokes,
+            "initial_phase": initial_phase}
 
 
 # ── pose integration ─────────────────────────────────────────────────────

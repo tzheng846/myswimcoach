@@ -59,13 +59,20 @@ export default function CycleOverlay({
   pinnedN = null,
   excludeBreakout = false,
   label = "cycle",
+  // 87-02, both opt-in and defaulting OFF so cycles and kicks render byte-identically. `numberKey`
+  // mirrors buildBands' seam; `colorByParity` tints the pack by alternating-arm side and swaps the
+  // single combined median for two per-side ones. 83-05's all-grey pack was about not ASSERTING
+  // which stroke is odd — a classifier it had measured out. Colouring by which arm produced a trace
+  // asserts nothing; it labels a structural fact.
+  numberKey = "cycle_num",
+  colorByParity = false,
 }) {
   const [mode, setMode] = useState("seconds");
   const normalized = mode === "normalized";
 
   const model = useMemo(
-    () => buildTraces(items, velocity, { fsHz, mode, excludeBreakout }),
-    [items, velocity, fsHz, mode, excludeBreakout]
+    () => buildTraces(items, velocity, { fsHz, mode, excludeBreakout, numberKey, parity: colorByParity }),
+    [items, velocity, fsHz, mode, excludeBreakout, numberKey, colorByParity]
   );
 
   // Scale over the INSET'S window, not over the traces — the two charts must agree even when a
@@ -83,7 +90,12 @@ export default function CycleOverlay({
     return niceMax(m);
   }, [velocity, win]);
 
-  const { rows, traces, median, maxDuration } = model;
+  const { rows, traces, median, medianA, medianB, maxDuration } = model;
+
+  // Per-side medians replace the combined one in parity mode, and are drawn only as a PAIR — both
+  // null below MIN_ITEMS on either side (buildTraces enforces that), and never a silent fallback.
+  const sideMedians = colorByParity && medianA && medianB ? [["A", medianA], ["B", medianB]] : null;
+  const combinedMedian = colorByParity ? null : median;
 
   // Fewer than two traces is not a pack. Render nothing at all — no empty box, no bare axis.
   if (traces.length < 2) return null;
@@ -229,7 +241,11 @@ export default function CycleOverlay({
           className="block h-auto w-full min-w-0 flex-1"
           role="img"
           aria-label={`All ${traces.length} ${label}s of this phase drawn on one shared axis${
-            median ? ", with a median reference line" : ""
+            sideMedians
+              ? ", with a median reference line for each of the two alternating arms"
+              : combinedMedian
+                ? ", with a median reference line"
+                : ""
           }`}
         >
           {grid.map((v) => (
@@ -250,9 +266,9 @@ export default function CycleOverlay({
 
           {/* Median BENEATH the pack: it is a reference, not a member of it. Normalized only —
               a pointwise median needs a common x-grid and seconds mode has none. */}
-          {median && (
+          {combinedMedian && (
             <path
-              d={pathOf(median)}
+              d={pathOf(combinedMedian)}
               fill="none"
               stroke="var(--color-muted)"
               strokeWidth="6"
@@ -262,6 +278,21 @@ export default function CycleOverlay({
             />
           )}
 
+          {/* Two medians, one per arm, at the same weight and beneath the pack — this is the view
+              where a few percent of tempo split is SEEN rather than read off a number. */}
+          {sideMedians?.map(([side, pts]) => (
+            <path
+              key={side}
+              d={pathOf(pts)}
+              fill="none"
+              stroke={side === "A" ? "var(--color-cycle-a)" : "var(--color-cycle-b)"}
+              strokeWidth="6"
+              strokeOpacity={0.3}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+            />
+          ))}
+
           {ordered.map((t) => {
             const isActive = t.n === activeN;
             return (
@@ -269,7 +300,15 @@ export default function CycleOverlay({
                 key={t.n}
                 d={pathOf(t.points)}
                 fill="none"
-                stroke={isActive ? "var(--color-cycle-a)" : "var(--color-cycle-idle)"}
+                stroke={
+                  isActive
+                    ? "var(--color-cycle-a)"
+                    : colorByParity
+                      ? t.side === "A"
+                        ? "var(--color-cycle-a)"
+                        : "var(--color-cycle-b)"
+                      : "var(--color-cycle-idle)"
+                }
                 strokeWidth={isActive ? 3.2 : 1.8}
                 strokeOpacity={dimOthers && !isActive ? 0.45 : 1}
                 strokeLinejoin="round"

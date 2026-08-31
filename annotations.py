@@ -192,6 +192,8 @@ def annotation_to_overrides(annotation, n_samples, fs_hz=FS_HZ, stroke_type=None
     than 2 boundaries → no cycle_bounds. Marks that do not land on a boundary (the
     trailing odd arm entry of an incomplete final cycle) contribute no cycle but remain
     in the stored stroke_marks_s as ground truth.
+    stroke_bounds (Phase 87-01) is the SINGLE-ARM view — consecutive pairs of every mark —
+    and is present only when k > 1, where a stroke is smaller than a cycle.
     Pure, never raises; malformed input yields {} or a partial dict.
     """
     if not isinstance(annotation, dict) or not isinstance(n_samples, int) or n_samples < 2:
@@ -242,6 +244,25 @@ def annotation_to_overrides(annotation, n_samples, fs_hz=FS_HZ, stroke_type=None
     ]
     if bounds:
         out["cycle_bounds"] = bounds
+
+    # SINGLE ARM STROKES (Phase 87-01) — consecutive pairs of ALL marks, not marks[0::k].
+    # Emitted ONLY at k > 1: at k == 1 a stroke IS a cycle, so a second identical array is
+    # pure drift hazard.
+    # finish_s is NOT appended here for any k. The reasoning in the k > 1 comment above
+    # applies to every stroke boundary: a wall touch is not an arm entry.
+    if k > 1:
+        s_idxs = []
+        for mk in marks:
+            i = to_idx(mk)
+            if not s_idxs or i > s_idxs[-1]:
+                s_idxs.append(i)
+        s_bounds = [
+            (s_idxs[i], s_idxs[i + 1])
+            for i in range(len(s_idxs) - 1)
+            if s_idxs[i + 1] - s_idxs[i] >= 2
+        ]
+        if s_bounds:
+            out["stroke_bounds"] = s_bounds
     return out
 
 
