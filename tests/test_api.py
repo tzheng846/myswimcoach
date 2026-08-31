@@ -23,12 +23,19 @@ RESPONSE_TOP_KEYS = [
 ]
 
 
-def _post_csv(client, csv_bytes: bytes, head_waist_m: float = 0.0):
-    """Helper: POST a CSV to /process and return the Response."""
+def _post_csv(client, csv_bytes: bytes, head_waist_m: float = 0.0, go_signal_s=None):
+    """Helper: POST a CSV to /process and return the Response.
+
+    go_signal_s is added to the form ONLY when supplied, so the ~20 existing callers keep
+    posting the exact field set they always did (AC-2 depends on that being true).
+    """
+    data = {"head_waist_m": str(head_waist_m)}
+    if go_signal_s is not None:
+        data["go_signal_s"] = str(go_signal_s)
     return client.post(
         "/process",
         files={"file": ("session.csv", io.BytesIO(csv_bytes), "text/csv")},
-        data={"head_waist_m": str(head_waist_m)},
+        data=data,
         headers={"Authorization": "Bearer fake-token-mocked"},
     )
 
@@ -114,7 +121,7 @@ class TestPhaseMetricsScaffold:
             assert isinstance(phases[bucket], dict)
             assert len(phases[bucket]) > 0
         assert "go_signal_s" in phases
-        assert phases["go_signal_s"] is None  # no GO button yet
+        assert phases["go_signal_s"] is None  # the field is simply not sent on this post
 
     def test_every_planned_metric_reads_as_an_empty_slot(self, api_client, synthetic_csv_bytes):
         """A `planned` entry is a reserved slot: null value, and it says so. (75-01
@@ -152,6 +159,65 @@ class TestPhaseMetricsScaffold:
             assert key in data["data_quality"]
         assert isinstance(data["session"], dict)
         assert isinstance(data["cycles"], list)
+
+
+class TestGoSignalOnProcess:
+    """POST /process — the optional `go_signal_s` form field (Phase 84-02, the coach GO marker).
+
+    The app converts its raw press time onto the session clock against the META correlation it
+    has computed since Phase 47, so what arrives here is already in session-clock seconds.
+    """
+
+    def test_go_signal_absent_stays_none(self, api_client, synthetic_csv_bytes):
+        """AC-2 — every pre-84-02 caller omits the field, and must be unaffected."""
+        data = _post_csv(api_client, synthetic_csv_bytes).json()
+        assert data["phases"]["go_signal_s"] is None
+        assert data["phases"]["start"]["reaction_time"]["value"] is None
+
+    def test_go_signal_form_field_threads_through(self, api_client, synthetic_csv_bytes):
+        """AC-1 — the field reaches PhaseContext instead of the old hardcoded None."""
+        resp = _post_csv(api_client, synthetic_csv_bytes, go_signal_s="3.5")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["phases"]["go_signal_s"] == 3.5
+
+    @pytest.mark.parametrize("bad", ["-1.0", "nan", "inf", "-inf"])
+    def test_go_signal_bad_value_is_dropped_not_rejected(
+        self, api_client, synthetic_csv_bytes, bad,
+    ):
+        """AC-3 — the request carries the swim, which is irreplaceable; the marker is not.
+
+        ⚠ Do NOT "fix" this into a 422 to match PUT /sessions/{id}/go-signal. That endpoint is
+        allowed to reject because the request is ONLY about the GO time. Here, rejecting would
+        cost the coach the session.
+        """
+        resp = _post_csv(api_client, synthetic_csv_bytes, go_signal_s=bad)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["phases"]["go_signal_s"] is None
+        assert body["session"]["mean_vel_ms"] is not None  # the swim still processed
+
+    def test_go_signal_unparseable_is_the_one_422(self, api_client, synthetic_csv_bytes):
+        """The single AC-3 case that does NOT reach the handler: FastAPI 422s at the
+        Optional[float] coercion before any of our code runs. Pinned here so the asymmetry
+        with the test above is deliberate and visible, not a latent surprise."""
+        resp = _post_csv(api_client, synthetic_csv_bytes, go_signal_s="banana")
+        assert resp.status_code == 422
+
+    def test_reaction_time_computes_with_go_signal(self, api_client, synthetic_csv_bytes):
+        """The point of the whole plan: reaction_time stops being structurally null.
+
+        The synthetic fixture spins the wheel at a constant rate from t=0, so detect_phases
+        puts motion onset at t[0] = 0.0 s. A positive GO would therefore resolve to a negative
+        reaction time and correctly return None. GO = 0.0 is the only value this fixture can
+        carry, and it yields the degenerate-but-real 0.0 — enough to prove the value is computed
+        from the supplied marker rather than short-circuited. The honest reaction-time magnitude
+        is a device question, not a fixture one (see the plan's human-verify).
+        """
+        body = _post_csv(api_client, synthetic_csv_bytes, go_signal_s="0.0").json()
+        assert body["phases"]["go_signal_s"] == 0.0
+        entry = body["phases"]["start"]["reaction_time"]
+        assert entry["value"] is not None
+        assert entry["value"] >= 0
 
 
 # ── GET /reports/{token} (public parent report) ───────────────────────────────

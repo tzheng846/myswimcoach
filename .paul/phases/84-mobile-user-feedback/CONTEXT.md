@@ -1,6 +1,9 @@
 # Phase Context
 
-**Phase:** 84 — Mobile App User Feedback (6 reported issues)
+**Phase:** 84 — Mobile App User Feedback (6 reported issues + item 7, GO marker)
+**Amended:** 2026-08-29 — a second `/paul:discuss` round added **item 7 (GO marker /
+reaction time)** as a new section at the end of this file, with decisions D8–D13. Everything
+between here and that section is the original six-item discussion, unchanged.
 **Generated:** 2026-08-29 (`/paul:discuss`, AskUserQuestion ×1 / 4 questions, code survey first)
 **Status:** Ready for planning
 **Target repo:** ⚠ **`Desktop/swimnetics-mobile`** — a SEPARATE, user-owned git repo. PAUL docs stay
@@ -232,3 +235,147 @@ worth confirming whether that surface is inside a scroll container before assumi
 
 *Next: `/paul:plan` — item 2 likely wants its own plan (diagnostic-first), with 1+4 (native), 3, 5, 6
 grouped by verification cost.*
+
+---
+
+# Item 7 — GO marker on the live recording screen
+
+*Added 2026-08-29 (second `/paul:discuss` round, AskUserQuestion x3). Not from the original
+six-item user feedback list — it is a new requirement, folded here by user decision (D13)
+because it lands on `RecordScreen` and ships in the same EAS build as items 1 and 4.*
+
+**User ask (verbatim):** *"In the live recording page, both in video and non video, should have a
+button marked 'GO'. This button should record the time stamp of when it was pressed. This will be
+how the app calculates reaction time."*
+
+This closes **STATE item 15** — the unfinished half of Phase 75-04. `reaction_time` is
+`0/99` sessions today for exactly one reason: nothing writes a GO time.
+
+## Grounded state (read from code, 2026-08-29)
+
+### The backend half already shipped
+
+| Piece | Where | State |
+|---|---|---|
+| Storage | `PUT /sessions/{id}/go-signal` (`api.py:1151`) | ✅ writes `metrics_json.go_signal_s`, re-derives `phases`, idempotent |
+| Metric | `_compute_reaction_time` (`phase_metrics.py:612`) | ✅ `reaction_time = motion onset − go_signal_s` |
+| Anchor | `detect_phases(...)["baseline_end"]` | motion onset = **the jump off the block**, deliberately NOT `dive_start` (Phase 79 skips the jump-and-sink, which would undercount) |
+
+**Contract constraints that bind the mobile design:**
+- `go_signal_s` must be **a number ≥ 0 or null** (`api.py:1179` → 422 otherwise).
+- `rt < 0` returns `None` — *"a bad input, not a measurement."*
+- Therefore **GO must fall inside `[0, motion onset]` on the session clock.**
+
+### "Phone↔encoder clock sync is deferred" is STALE
+
+`api.py:1160` and the 75-04 CONTEXT (D13) both say the clock sync is deferred. **It is not** —
+the mobile app has computed it since Phase 47:
+
+```
+RecordScreen.js:32   META response = 8 bytes [session_start_us u32 LE][device_now_us u32 LE]
+RecordScreen.js:446  const startPhoneMs = phoneNowMs - elapsedUs / 1000;
+RecordScreen.js:447  setSessionStartPhoneMs(startPhoneMs);
+```
+
+`sessionStartPhoneMs` **is** encoder t=0 expressed on the phone clock. So:
+
+```
+go_signal_s = (goPressPhoneMs − sessionStartPhoneMs) / 1000
+```
+
+⚠ **Sequencing subtlety:** META arrives at **retrieval**, i.e. *after* the swim. The GO press
+happens mid-recording, when `sessionStartPhoneMs` is still `null`. The app must therefore stash the
+**raw `Date.now()`** at press time and convert only once META has landed.
+
+⚠ Residual error: `phoneNowMs` is taken when the META *notification arrives*, not when the device
+sampled `device_now_us` — so the correlation carries one-way BLE latency (tens of ms). Irrelevant
+next to coach thumb latency (below).
+
+### The race-start sequence is being switched off (D9)
+
+`useStartSequence` (`swimnetics-mobile/src/hooks/useStartSequence.js`) runs 3 → 2 → 1 → "take your
+marks" → random 2–3 s hold → **blare**, and `run()` resolves *at* the blare so recording starts on
+it. Both entry points do this:
+
+- plain: `RecordScreen.js:527` — `if (!startSequence) { startRecording(); return; }` then `await seq.run()` and `startRecording()`
+- video: `RecordScreen.js:618` — same, inside `onCameraReady`, then `writeCmd('START')`
+
+**User's call:** *"disable or remove auto horn for now. Unless it's connected to a speaker, which
+it's currently out of scope, no swimmers can actually hear it. It's the coach's job to send them
+off."* The phone speaker is inaudible at poolside, so the horn is a false affordance.
+
+Two consequences that make the rest of item 7 simpler:
+
+1. **The `go_signal_s < 0` problem disappears.** With the sequence on, the blare fires *before*
+   `writeCmd('START')`, so an honest GO stamp would be tens of ms **negative** — rejected by the
+   endpoint. With the sequence off, `startRecording()` fires immediately and every GO press is
+   necessarily after t=0.
+2. **GO becomes the only race anchor**, which is what the user wants.
+
+✅ The `!startSequence` code path already exists and works — disabling is a flag, not a refactor.
+
+## Decisions taken in this discussion
+
+- **D8 — GO is a SEPARATE MARKER pressed while recording is live.** Not a replacement for the Start
+  button. User's reason: *"it takes time to load up the recording screen, it makes more sense for go
+  to be a separate marker."* Coach starts recording, swimmer settles on the block, coach presses GO
+  when they send them off. Flow: stash `Date.now()` → convert against `sessionStartPhoneMs` after
+  META → send with the session.
+- **D9 — The race-start sequence is disabled.** Scope deliberately left to plan time: flip the
+  `startSequence` default to `false` vs. remove the toggle from `RecordingConfigScreen` vs. delete
+  the hook and audio assets. **Recommendation: default off, keep the code** — "for now" implies
+  reversible, and the feature becomes correct the day a poolside speaker is in scope. ⚠ `run()` and
+  `StartSequenceOverlay` must not be deleted while the toggle still exists.
+- **D10 — GO is SILENT.** No sound, no flash. It marks an external starter (the coach's own voice or
+  whistle). Follows directly from D9 — a cue nobody can hear is worse than none.
+- **D11 — GO ships on BOTH live states:** `bleState 'recording'` (plain) and `'videoRecording'`
+  (over the live camera preview, in the control bar beside Stop). Explicit in the user's ask.
+- **D12 — Send `go_signal_s` as a `/process` form field, not a follow-up `PUT`.** `POST /process`
+  already takes 7 `Form(...)` fields and the app already passes them via `uploadAsync`'s
+  `parameters` (`RecordScreen.js:257-262`). One `Form(None)` addition threads it into the
+  `PhaseContext` at `api.py:221` (currently hardcoded `go_signal_s=None`), so `reaction_time` lands
+  on the **first** compute — no recompute, no second request. ⚠ Rationale is item 2's own lesson:
+  a fire-and-forget follow-up call is exactly the silent-loss shape that makes video uploads
+  vanish (H3/H4). `PUT /go-signal` stays as the **correction** path (fix a mistimed press later
+  from the web portal).
+- **D13 — Lives in Phase 84 as item 7.** Same repo, same screen, same EAS build as items 1 and 4.
+  Phase 84 has CONTEXT but no PLAN, so it absorbs cleanly. (The alternative — a new phase framed as
+  "finish 75-04" — is bookkeeping only; it would ship in the same build regardless.)
+
+## What this metric will and will not measure
+
+⚠ **State this in the UI, not just here.** With D8+D10, the GO stamp is **the coach's thumb**, so
+the coach's own latency is inside every measurement:
+
+- Coach presses **after** shouting go → GO late → `rt` **under**counts.
+- Coach presses **before** shouting → GO early → `rt` **over**counts.
+- Coach presses **after the swimmer has already moved** → `rt < 0` → the metric silently returns
+  `None`. On a fast swimmer and a slow thumb this is a real, reachable failure — not a hypothetical.
+
+So `reaction_time` here is a **within-coach relative** measure — comparable across sessions the same
+coach marked the same way, not an absolute FINA-style block reaction. That is consistent with the
+product's within-athlete-contrast doctrine (`product_attention_allocation`), but it must not be
+presented as an absolute number.
+
+## Open questions for planning (item 7)
+
+7. **Re-press semantics.** Last press wins, or first press locks? Recommendation: last wins, with the
+   button showing the stamped elapsed time (e.g. `GO ✓ +4.2 s`) so the coach can see it landed and
+   re-tap to correct.
+8. **No press = no metric.** `go_signal_s` omitted → `reaction_time` stays `None`, same as all 99
+   stored sessions. Confirm that silence is acceptable (no nag, no blocking prompt).
+9. **Does the press survive the `videoRecording` → retrieval → upload transition?** The press is
+   mid-`recordAsync`; the ref must survive the same lifecycle that `videoStartPhoneMs` already does.
+10. **D9's exact scope** — flag flip vs toggle removal vs asset deletion (see D9).
+11. **Backfill: none possible.** No stored session has a GO time and none can be reconstructed.
+    `reaction_time` fills only for sessions recorded *after* this ships — a permanent discontinuity
+    in the metric's history. Worth a one-line note wherever it renders.
+
+## Risks (item 7)
+
+- **Metric quality is bounded by coach technique**, not by the pipeline. If reaction_time reads as
+  noise across coaches, the fix is a hardware starter signal, not more code.
+- **D9 removes a shipped feature** (Phase 41 race-start sequence). Reversible by design, but it is a
+  visible behaviour change for anyone who was using it.
+- **`/process` signature change** touches the one endpoint every recording flows through — the
+  field must be optional and the existing 7-parameter path must stay byte-compatible.

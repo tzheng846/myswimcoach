@@ -142,6 +142,7 @@ async def process_session(
     device_id: Optional[str] = Form(None),
     firmware_version: Optional[str] = Form(None),
     recording_token: Optional[str] = Form(None),
+    go_signal_s: Optional[float] = Form(None),
     _auth=Depends(require_auth),
 ):
     raw_path = None
@@ -209,16 +210,27 @@ async def process_session(
         }
 
         # ── Race-phase metrics (Phase 75-01 skeleton, 75-02 underwater window) ─
-        # go_signal_s is reserved for the future coach "GO" button (D13); no GO signal
-        # exists yet on this path. annotation_phases is None by construction — a session
+        # go_signal_s arrives as an optional form field from the app's coach "GO" marker
+        # (Phase 84-02) and is ALREADY on the session clock — the app converts its raw
+        # press time against the META correlation it has computed since Phase 47. It is
+        # None whenever the coach did not press GO, or when the session was recorded with
+        # the device's own button and pulled in via "Retrieve from Device", where no press
+        # exists. A bad marker is dropped below rather than 422'd: the request carries the
+        # swim, which is irreplaceable, and the marker is not.
+        # annotation_phases is None by construction — a session
         # being processed for the first time cannot already carry a coach annotation, so
         # every boundary here resolves from the seed or from a detector. For the same
         # reason the cycles handed over are ALWAYS the auto segmenter's, and
         # segmentation_reliable is whatever metrics.py decided (False on this path), which
         # is what marks the per-cycle metrics provisional (75-06).
+        _go = go_signal_s
+        if _go is not None and (not math.isfinite(_go) or _go < 0):
+            # A bad marker must not cost the coach the swim — drop it and process anyway.
+            print(f"/process: discarding invalid go_signal_s={_go!r}")
+            _go = None
         phases = pm.compute_phases(pm.PhaseContext(
             t=t_dec, vel=vel, dist=dist_dec, accel=accel, fs=actual_fs,
-            stroke_type=stroke_type, go_signal_s=None,
+            stroke_type=stroke_type, go_signal_s=_go,
             annotation_phases=None,
             seed_phases=annot.build_seed(result, actual_fs)["phases"],
             initial_phase=result.get("initial_phase"),
@@ -1156,8 +1168,11 @@ async def set_go_signal(
 ):
     """Set (or clear) the coach GO-signal time for a session, then recompute phase metrics so
     reaction_time (Phase 75-04) refreshes. go_signal_s is stored in metrics_json (jsonb, no
-    migration) as **session-clock seconds** — the same axis as the velocity trace; real
-    phone↔encoder clock sync is deferred (CONTEXT D13). Body: {"go_signal_s": <number ≥ 0 | null>};
+    migration) as **session-clock seconds** — the same axis as the velocity trace. This is the
+    CORRECTION path; the primary path is the optional go_signal_s form field on POST /process
+    (Phase 84-02). ⚠ The note that once stood here — "real phone↔encoder clock sync is deferred
+    (CONTEXT D13)" — was stale: the app has computed that correlation since Phase 47 off the
+    8-byte META reply. Body: {"go_signal_s": <number ≥ 0 | null>};
     null clears it. reaction_time = first encoder motion onset − go_signal_s (None if unset or
     if GO was logged after the swimmer already moved).
     """
