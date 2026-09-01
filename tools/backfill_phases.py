@@ -113,6 +113,8 @@ def main():
     with_uw = 0
     with_cycles = 0
     with_kick_bands = 0
+    with_split_20 = 0
+    with_split_rem = 0
     kickable = 0
     sources = Counter()
     for i, r in enumerate(rows, 1):
@@ -179,6 +181,14 @@ def main():
                 kickable += 1
                 if phases["kick_bands"]:
                     with_kick_bands += 1
+            # These two exist to MEASURE the _MIN_REMAINDER_M floor on the real library before
+            # it is trusted (88-01 D3, 83-03's lesson: a threshold's fire rate must be checked
+            # on real data, not just reasoned about). The remainder count should sit just under
+            # the 20 m count; a large gap means the floor is cutting real swims.
+            if phases["swim"]["splits_20m"]["value"] is not None:
+                with_split_20 += 1
+            if phases["swim"]["splits_remainder"]["value"] is not None:
+                with_split_rem += 1
 
             if write:
                 db.patch("sessions", sid, {"metrics_json": {**mj, "phases": phases}})
@@ -202,6 +212,8 @@ def main():
     print(f"Sessions with a non-null uw_duration: {with_uw} of {len(rows)}")
     print(f"Sessions with per-cycle swim metrics:  {with_cycles} of {len(rows)}")
     print(f"Sessions with underwater kick bands:   {with_kick_bands} of {kickable} non-breaststroke")
+    print(f"Sessions filling splits_20m:           {with_split_20} of {len(rows)}")
+    print(f"Sessions filling splits_remainder:     {with_split_rem} of {len(rows)}")
     print("Boundary sources:")
     for key in ("dive_start_s", "underwater_start_s", "stroke_start_s", "finish_s"):
         parts = [f"{src.split('=')[1]} {n}" for src, n in sorted(sources.items())

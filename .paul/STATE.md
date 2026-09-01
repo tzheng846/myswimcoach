@@ -8,6 +8,172 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
+- **Phase 88** (Selectable splits + unit conversion — web report card) — **🚧 IN PROGRESS, 4 of 5
+  plans closed. WAVE 1 CLOSED 2026-08-31: 88-01 and 88-02 are `PLAN ✓ → APPLY ✓ → UNIFY ✓`
+  ([88-01-SUMMARY](phases/88-splits-picker-and-units/88-01-SUMMARY.md),
+  [88-02-SUMMARY](phases/88-splits-picker-and-units/88-02-SUMMARY.md)).
+  WAVE 2 CLOSED 2026-08-31: 88-03 and 88-04 are `PLAN ✓ → APPLY ✓ → UNIFY ✓`, both human-verifies
+  APPROVED ([88-03-SUMMARY](phases/88-splits-picker-and-units/88-03-SUMMARY.md),
+  [88-04-SUMMARY](phases/88-splits-picker-and-units/88-04-SUMMARY.md)).
+  **88-05 remains `PLAN ✓ → APPLY ○ → UNIFY ○`.** Suite 563 → **566 green**;
+  backfill applied by the user across **99 of 99** sessions.
+  🔴 **PHASE NOT TRANSITIONED, NO PHASE COMMIT — the phase is 4 of 5, not 4 of 4.** 88-04's own
+  success criteria say "Phase 88 closes at 4 of 4 plans"; that line was written BEFORE 88-05 was
+  appended at the user's direction, and acting on it would repeat the plan-count trap flagged four
+  times over for phase 83. **88-05 is the remaining scope.**
+  🔴 **WAVE 2 SCOPE ADDITION — Time-to-Distance was REMOVED at 88-04's verify, on the user's
+  explicit direction** ("it's redundant when segment splits exists"). This contradicts 88-04's own
+  D1 rationale and its explicit `DO NOT CHANGE: TimeToX.js` boundary, and it lands ONE DAY after
+  88-02 re-anchored that very card — so **88-02's shipped work now has no UI**. The anchor caveat
+  block MOVED into the Segment splits section and **stayed in `page.js`** (not pushed into
+  `SplitPicker`), which is why `scratch/anchor_check.mjs` still passes **17/17 unedited**.
+  ⚠ **`web/components/portal/TimeToX.js` now has ZERO importers**, and the `markerTimeS` /
+  `markerLabel` props + their `ReferenceLine` blocks on both charts have **no caller on either
+  route**. Left in place and named, per the 88-02 D4 convention.
+  ⚠ **OWED — one-word wording question:** the user asked the line to read *"from your annotation"*;
+  it still reads *"from your marks."* (moved verbatim; `anchor_check` check 5 pins that exact
+  string). A one-word edit plus one line in the gate, awaiting confirmation.
+  ⚠ **iOS still ships its own Time-to-Distance** (`ReportCardScreen`), so web and mobile now differ
+  in what the session screen offers — on top of the ~0.4–0.5 s TimeToX disagreement 88-02 logged.
+  ⚠ **88-05 edits `VelocityChart.js` AND `page.js`, both touched by 88-04** — its PLAN must be
+  re-read against the CURRENT tree, not the version it was written against; the Time-to-Distance
+  removal changed `page.js`'s `middleSlot` shape.
+  ✅ **Wave 2 verification, all green:** `unit_check` **63/63**, `split_picker_check` **44/44**,
+  `npm run build` clean, `npx eslint .` **26 problems / 23 errors = zero new** against the
+  post-87-02 baseline, and the four gates pass **unedited** (`anchor_check` 17/17,
+  `stroke_toggle_check` 63/63, `overlay_render_check` 40/40, `marketing_render_check` 45/45).
+  🔴 **88-04's AC-2 landed exactly:** all 6 single-bin windows equal an independent
+  re-implementation of `_split_velocity` at **max |Δ| = 0.00e+0**, and the `finishS` clamp is
+  proven load-bearing — 5 m of post-touch drift manufactures a fifth bin without it (4 → 5).
+  ⚠ **88-03's three auto tasks were NOT executed this session** — found already applied in the
+  tree (as this file warned), reviewed rather than re-applied, every AC re-verified from scratch.
+  Same reconciliation-of-found-work posture as 84-02.
+  ⚠ **`scratch/stroke_toggle_check.mjs` WAS edited** despite both wave-1 plans listing it as
+  must-pass-UNEDITED. Mechanically forced (`PhaseReportCard` now imports `@/lib/unitConvert`, so the
+  harness cannot transpile it without a MAP entry), additive, still 63/63 — but a real breach.
+  ⚠ **New pattern worth reusing:** clamp a stale index-selection by DERIVING it during render, never
+  by resetting it in an effect — the effect form trips `react-hooks/set-state-in-effect`, which is
+  what forced 87-02 to ship a new error.
+  🔴 **88-01's D3 floor was measured wrong and was corrected at its own checkpoint:**
+  `_MIN_REMAINDER_M` shipped at **0.5 m, not the planned 1.0 m**. D3 assumed a 25-yard lap leaves
+  ~1.9 m past the 20 m mark; it does not — `finish_s` clamps before the wall touch and `dist_m`
+  already runs short of it, so across the 56 stored sessions that reach 20 m the tail is
+  **median 0.872 m** (p25 0.486, p75 1.839, min 0.019, max 5.206). At 1.0 m the new metric filled
+  **23 of 56 (41%)**, under the plan's own two-thirds stop condition; at 0.5 m it fills
+  **42 of 56 (75%)**. AC-5 existed to catch exactly this and did. **Second time after 83-03 that a
+  reasoned-about threshold was wrong on real data — measure before shipping is now twice-validated.**
+  ⚠ **Live DB now:** `splits_25m` on **0** of 99 rows, `splits_remainder` present on 99 and non-null
+  on 42. So `RETIRED_KEYS` matches nothing today — it was correct (it covered the window between
+  the web deploy and the backfill) but is defensive-only from here.
+  ⚠ **The new row's span varies ~10×** (0.5–5.2 m, median 0.87 m). On a typical 25-yard lap it
+  reads closer to *closing speed over ~0.9 m* than to a 5 m split, directly beneath four true 5 m
+  splits. Structurally not comparable to the rows above it; watch this in 88-04's verification.
+  ⚠ **88-02's blocking human-verify was NOT separately confirmed.** Its mechanical half is covered
+  (`scratch/anchor_check.mjs` 17/17), but the on-screen read against a real "Tony" session and a
+  real divergent session was not performed before UNIFY was directed to run. The change moves
+  numbers a coach has already read — ~0.4–0.5 s on 37 sessions, up to 12.39 s on 27 of them.
+  ⚠ **88-03 (wave 2) is PARTIALLY APPLIED in the working tree and entangled with wave 1.**
+  `web/lib/unitConvert.js`, `scratch/unit_check.mjs` (63/63 passing), the unit-conversion edits
+  inside `PhaseReportCard.js`, and one MAP line added to `scratch/stroke_toggle_check.mjs` — which
+  BOTH wave 1 plans listed as must-pass-UNEDITED. It is correct and green, so it was left rather
+  than discarded, but wave 1 cannot be committed without carrying wave 2 along, and 88-03's APPLY
+  must start by reviewing what is already there rather than assuming a clean tree.
+  ⚠ **Nothing is committed yet** — the whole of wave 1 plus partial 88-03 sits uncommitted.
+  ⚠ **Dead code deliberately left (88-02 D4):** `metrics.time_to_distance` (zero callers),
+  `compute_session_metrics`'s unused `head_waist_m` kwarg, `api.py:183/228`'s form field,
+  `tests/test_metrics.py:156`. iOS keeps its own head-waist-adjusted TimeToX, so the two surfaces
+  now disagree by ~0.4–0.5 s on Tony's sessions until a mobile phase carries it across.
+
+  *Planning record below, as written 2026-08-31 (pre-apply — read the summaries above for what
+  actually shipped):*
+  CONTEXT (`/paul:discuss`, 3 rounds) covered two user-reported defects; planning split the work
+  into **4 plans in 2 waves**, sized so the two unreported defects CONTEXT found do not ride
+  inside the two reported ones:
+  - **88-01 — splits registry** (wave 1, `depends_on: []`) — `splits_25m` retired (fills on **2 of
+    99** sessions, structurally: a waist tether tops out at ~21.9 m on a 25 yd lap) and replaced by
+    a NEW `splits_remainder` measuring 20 m → `finish_s`. Backend + display tables + tests.
+    ✅ **No new backfill tool** — verified `tools/backfill_phases.py` already performs exactly this
+    derivation and is what 75-02 / 75-06 / 83-02 used; it gains two fill counters so the new
+    `_MIN_REMAINDER_M = 1.0` floor is **measured on the real library at a `--dry-run` checkpoint
+    before `--apply`** (83-03's lesson). ✅ **No `SCHEMA_VERSION` bump** — verified the version
+    tracks the `phases` object's *shape* (2 = boundaries, 3 = provisional, 4 = kick_bands) and
+    75-06 added 23 metrics without touching it; a test pins `== 4`.
+    ⚠ Retiring a key is not enough on the client: `PhaseReportCard` renders whatever keys the
+    STORED object carries and falls back to `m.label`, so deleting the `DISPLAY` entry alone would
+    keep the dead row rendering — worse, without the `emptyNote` that explained the blank. Hence an
+    explicit `RETIRED_KEYS` skip.
+  - **88-02 — one anchor** (wave 1, `depends_on: []`, no file overlap with 88-01) — CONTEXT F5,
+    **not reported and larger than what was**: the page holds THREE origins for "0 m". Probed live,
+    `dive_start_s` and `baseline_end_s` are both present 99/99 with a 0.003 s median gap, but **27
+    of 99 differ by >0.1 s**, tail **12.39 / 12.27 / 11.62 / 8.16 s**. `TimeToX` moves onto raw
+    `dive_start_s` and drops `head_waist_m`; the existing 61-02 D7 caveat line becomes the page's
+    single statement of its anchor and that anchor's provenance, read from
+    `boundaries.sources.dive_start_s` (not `recomputed_from_annotation`, which says the *session*
+    was recomputed, not that *this boundary* came from a mark).
+    ✅ **Re-verified CONTEXT F4 directly: the backend head-waist path is already dead code** —
+    `metrics.time_to_distance` has zero callers and `compute_session_metrics` takes the kwarg and
+    never uses it. So **web-only: no recompute, no backfill, no stored change.** Python is
+    deliberately left alone (repo convention: mention dead code, do not delete it).
+    ⚠ Numbers a coach has already read WILL move — ~0.4–0.5 s from head-waist on the 37 "Tony"
+    sessions, up to 12 s from the anchor swap on the 27 divergent ones. Hence a blocking
+    human-verify rather than an autonomous apply. ⚠ iOS keeps its own head-waist-adjusted TimeToX,
+    so the two surfaces will disagree until a mobile phase carries it across.
+  - **88-03 — unit conversion** (wave 2, `depends_on: ["88-01"]` — file serialization on
+    `PhaseReportCard.js`, not an import) — reported defect 2. **Re-counted directly off `DISPLAY`
+    and CONTEXT F6 confirmed exactly: 17 `m/s` + 3 `m` + 2 `m/s²` + 1 `m/s³` = 23 of 47 metrics
+    never convert; the other 24 are correctly invariant.** New pure `web/lib/unitConvert.js` keyed
+    on the **unit string**, not a 23-key metric list. 🔴 **The load-bearing decision: the verdict is
+    computed on SI and NEVER on converted values** — conversion is a display transform applied at
+    the last moment, so "toggling units cannot change a flag" is structural rather than hoped for
+    (R6: a yards value against a metre band reads ~9% high and invents flags). ⚠ CONTEXT named one
+    display site; reading the file found **three** — the `RangeStrip` props, `metricExplain`, and
+    the `activeFlags` model that `PhaseTimeline.js:156-158` renders as "value unit vs median unit".
+    The harness's central assertion is that flag count, every status word, and every strip's band /
+    median / dot position are identical between the two renders.
+  - **88-04 — the picker** (wave 2, `depends_on: ["88-02"]` — page.js serialization + it consumes
+    88-02's hoisted anchor) — reported defect 1. Chips for each **complete** 5 m / 5 yd segment;
+    clicking selects a contiguous run (`{lo, hi}`, so contiguity is structural) and reads back
+    average velocity + elapsed time. ✅ **Open question 6 answered by NOT competing**: the picker
+    gets its own `spanS` `ReferenceArea` on both charts and never touches `onMarkerChange` — two
+    cards writing one marker is a live conflict, and a *window* is not a *point*. ✅ **Open
+    question 5 deleted rather than answered**: only complete bins are offered (the `TimeToX`
+    hide-unreachable-presets precedent), so there is no partial "20–25" label to lie — that
+    stretch is exactly what 88-01's new row reports instead. ⚠ The picker's chord arithmetic must
+    reproduce a grid split **exactly** (asserted to 1e-12), which is why its search is clamped at
+    `finish_s` the same way `_split_velocity` clamps it — otherwise post-touch drift into the wall
+    fills a bin and the two silently diverge.
+  - **88-05 — velocity trend overlay** (wave 3, `depends_on: ["88-04"]` — genuine file conflict:
+    both edit `VelocityChart.js` **and** `page.js`) — ⚠ **NOT one of the two reported defects and
+    outside CONTEXT.md's charter**; appended 2026-08-31 at the user's explicit direction after a
+    prototype (`scratch/chantee_traces.html`) built against Chantee's three 2026-08-20 butterfly
+    swims. A **grey dotted centred rolling mean drawn over the raw trace**, window set by a
+    persisted 0.00–3.00 s slider (default 1.00 s, `swimnetics.smoothWindowS` on the existing
+    `useTracePrefs` localStorage pattern). Stores nothing, adds no registry metric — it is a second
+    rendering of `velocity_profile`, which is why it is a plan and not a phase. Why it earns a
+    place: a ~90 Hz butterfly trace is a sawtooth of real surge-and-glide peaks that must not be
+    smoothed away, but at raw resolution the lap-scale story is invisible — on the prototype the
+    three Chantee swims are three near-identical sawtooth walls raw, and at ~1 s separate cleanly
+    (the dive's advantage is spent inside the first quarter of the lap; 80% and 100% are
+    indistinguishable from 3 m to 18 m). 🔴 **The one way this plan can be quietly wrong is
+    `VelocityChart`'s `MAX_POINTS = 2000` decimation** — the mean MUST be computed at the native
+    rate BEFORE the stride, or a 1.00 s label covers `1.00 × step` seconds. ⚠ **It would not
+    reproduce on the obvious test sessions**: a 20 s swim at 89.99 Hz is 1799 points, so
+    `step === 1` and nothing decimates; the trap only bites past ~22 s. A synthetic 4000-point
+    assertion in `scratch/rolling_mean_check.mjs` pins both orderings apart. ✅ **Cycle-denominated
+    windows were considered and REJECTED** (D1): "one cycle" is the more meaningful unit, but it
+    would read `mean_isi_s`, which on butterfly comes from the segmenter that found **5 cycles
+    where there should be ~12** — a cycle slider would silently inherit a 2× error. Seconds are
+    dumb and correct. ✅ Report card only (D5): `VelocityChart`'s other consumer,
+    `/app/sessions/[id]/video`, passes no prop and must render byte-identically; this also respects
+    rather than bends the `AccelerationChart.js:21-24` boundary, which forbids a second **x**-
+    windowing slider — a smoothing window is a y-domain control and cannot desync the x axes.
+    ⚠ Acceleration gets no trend (D6): smoothing a signed derivative raises a real question (mean of
+    a zero-crossing signal, or mean of its magnitude?) this plan does not answer.
+  ⚠ **Waves are 88-01 + 88-02 in parallel, then 88-03 + 88-04, then 88-05.** ⚠ 88-01 is the only
+  plan with a backend diff and the only one needing a library backfill. ⚠ R7 stands and is
+  accepted: the same metric will convert on this page and not on compare / group / parent-report
+  pages. ⚠ **88-05 widens the phase past its own CONTEXT**, which covers only the two reported
+  defects — recorded here rather than left for a future reader to notice.
 - **Phase 87-01** (Stroke-level segmentation + arm asymmetry — BACKEND) — **✅ CLOSED
   (PLAN→APPLY→UNIFY) 2026-08-31; backfill applied by the user. Loop:
   `PLAN ✓ → APPLY ✓ → UNIFY ✓`.** Summary:

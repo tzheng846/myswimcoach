@@ -2,20 +2,22 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-// Ports the iOS ReportCardScreen TimeToX — splits to a target distance,
-// adjusted by the swimmer's head–waist offset.
+// Ports the iOS ReportCardScreen TimeToX — splits to a target distance, measured from anchorS
+// (dive_start_s — see 88-02 D6/D7). The head-waist offset was retired in computation here: the
+// backend path (metrics.time_to_distance) was already dead when this was written, and only this
+// component ever applied it. The athlete field, the POST /athletes field and the athletes-page
+// editor deliberately remain writable (CONTEXT D7) — do not wire this back to them.
 const ALL_PRESETS = [5, 10, 15, 20, 25];
 const YARD_TO_M = 0.9144;
 
-function computeTimeToX(timeArr, distArr, baselineEndS, headWaistM, targetM) {
-  if (!timeArr?.length || !distArr?.length || baselineEndS == null) return null;
-  const baseIdx = timeArr.findIndex((t) => t >= baselineEndS);
+function computeTimeToX(timeArr, distArr, anchorS, targetM) {
+  if (!timeArr?.length || !distArr?.length || anchorS == null) return null;
+  const baseIdx = timeArr.findIndex((t) => t >= anchorS);
   if (baseIdx < 0) return null;
   const distBase = distArr[baseIdx];
-  const waistTarget = targetM - (headWaistM || 0);
-  if (waistTarget <= 0) return null;
+  if (targetM <= 0) return null;
   const crossIdx = distArr.findIndex(
-    (d, i) => i >= baseIdx && d != null && d >= distBase + waistTarget
+    (d, i) => i >= baseIdx && d != null && d >= distBase + targetM
   );
   if (crossIdx < 0) return null;
   return parseFloat((timeArr[crossIdx] - timeArr[baseIdx]).toFixed(2));
@@ -24,8 +26,7 @@ function computeTimeToX(timeArr, distArr, baselineEndS, headWaistM, targetM) {
 export default function TimeToX({
   timeArr,
   distArr,
-  baselineEndS,
-  headWaistM = 0,
+  anchorS,
   onMarkerChange,
   unit = "metric",
 }) {
@@ -33,21 +34,21 @@ export default function TimeToX({
   const unitSuffix = imp ? "yd" : "m";
 
   const { presets, maxReachableM } = useMemo(() => {
-    if (!timeArr?.length || !distArr?.length || baselineEndS == null) {
+    if (!timeArr?.length || !distArr?.length || anchorS == null) {
       return { presets: ALL_PRESETS, maxReachableM: null };
     }
-    const baseIdx = timeArr.findIndex((t) => t >= baselineEndS);
+    const baseIdx = timeArr.findIndex((t) => t >= anchorS);
     if (baseIdx < 0) return { presets: ALL_PRESETS, maxReachableM: null };
     const distBase = distArr[baseIdx] ?? 0;
     const distMax = distArr[distArr.length - 1] ?? 0;
-    const maxM = Math.max(0, distMax - distBase - (headWaistM || 0));
+    const maxM = Math.max(0, distMax - distBase);
     const maxInUnit = imp ? maxM / YARD_TO_M : maxM;
     const visible = ALL_PRESETS.filter((p) => p <= Math.ceil(maxInUnit) + 1);
     return {
       presets: visible.length > 0 ? visible : ALL_PRESETS,
       maxReachableM: maxM,
     };
-  }, [timeArr, distArr, baselineEndS, headWaistM, imp]);
+  }, [timeArr, distArr, anchorS, imp]);
 
   const defaultIdx = presets.findIndex((p) => p >= 10);
   const [targetVal, setTargetVal] = useState(
@@ -61,23 +62,22 @@ export default function TimeToX({
   const targetMeters = imp ? targetVal * YARD_TO_M : targetVal;
 
   const timeToX = useMemo(
-    () => computeTimeToX(timeArr, distArr, baselineEndS, headWaistM, targetMeters),
-    [timeArr, distArr, baselineEndS, headWaistM, targetMeters]
+    () => computeTimeToX(timeArr, distArr, anchorS, targetMeters),
+    [timeArr, distArr, anchorS, targetMeters]
   );
 
   const markerAbsoluteTimeS = useMemo(() => {
-    if (!timeArr?.length || !distArr?.length || baselineEndS == null) return null;
-    const baseIdx = timeArr.findIndex((t) => t >= baselineEndS);
+    if (!timeArr?.length || !distArr?.length || anchorS == null) return null;
+    const baseIdx = timeArr.findIndex((t) => t >= anchorS);
     if (baseIdx < 0) return null;
     const distBase = distArr[baseIdx];
-    const waistTarget = targetMeters - (headWaistM || 0);
-    if (waistTarget <= 0) return null;
+    if (targetMeters <= 0) return null;
     const crossIdx = distArr.findIndex(
-      (d, i) => i >= baseIdx && d != null && d >= distBase + waistTarget
+      (d, i) => i >= baseIdx && d != null && d >= distBase + targetMeters
     );
     if (crossIdx < 0) return null;
     return timeArr[crossIdx];
-  }, [timeArr, distArr, baselineEndS, headWaistM, targetMeters]);
+  }, [timeArr, distArr, anchorS, targetMeters]);
 
   useEffect(() => {
     onMarkerChange?.(markerAbsoluteTimeS, `${targetVal}${unitSuffix}`);

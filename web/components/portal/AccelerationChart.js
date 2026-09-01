@@ -10,6 +10,7 @@ import {
   CartesianGrid,
   Tooltip,
   ReferenceLine,
+  ReferenceArea,
 } from "recharts";
 
 const MAX_POINTS = 2000;
@@ -29,6 +30,10 @@ export default function AccelerationChart({
   unitLabel = "m/s²",
   markerTimeS = null,
   markerLabel = "",
+  // 88-04: same [t0, t1] window VelocityChart takes, so the two stacked traces annotate the
+  // coach's selection identically. Null default keeps the /video route byte-unchanged (AC-6).
+  spanS = null,
+  spanLabel = "",
   cycles = [],
   fsHz = 100,
   height = 220,
@@ -139,6 +144,22 @@ export default function AccelerationChart({
               strokeDasharray="3 3"
             />
           ))}
+          {/* Drawn BEFORE the marker so Time-to-Distance's line stays on top of the shading. */}
+          {spanS && (
+            <ReferenceArea
+              x1={Math.round(spanS[0] * 100) / 100}
+              x2={Math.round(spanS[1] * 100) / 100}
+              fill="#f59e0b"
+              fillOpacity={0.12}
+              stroke="none"
+              label={{
+                value: spanLabel,
+                position: "insideTop",
+                fill: "#f59e0b",
+                fontSize: 11,
+              }}
+            />
+          )}
           {markerTimeS != null && (
             <ReferenceLine
               x={Math.round(markerTimeS * 100) / 100}

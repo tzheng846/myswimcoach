@@ -846,6 +846,18 @@ def _split_by_hand(ctx, meters):
     return (ctx.dist[i_b] - ctx.dist[i_a]) / (ctx.t[i_b] - ctx.t[i_a])
 
 
+def _remainder_by_hand(ctx):
+    """Independent reimplementation of splits_remainder: mean velocity from the first sample at
+    20 m past dive_start to the LAST sample of the finish-clamped window. Same by-hand style as
+    _split_by_hand, checking the compute fn against arithmetic, not itself."""
+    i_start = int(round(ctx.annotation_phases["dive_start_s"] * ctx.fs))
+    fin_idx = int(round(ctx.annotation_phases["finish_s"] * ctx.fs))
+    i_b = min(len(ctx.dist) - 1, fin_idx)
+    rel = np.asarray(ctx.dist[i_start:i_b + 1], dtype=float) - float(ctx.dist[i_start])
+    i_a = int(np.nonzero(rel >= 20.0)[0][0]) + i_start
+    return (ctx.dist[i_b] - ctx.dist[i_a]) / (ctx.t[i_b] - ctx.t[i_a])
+
+
 class TestSplits:
     """AC-1: one scalar spec per 5 m segment (75-06 D7), None past the distance swum."""
 
@@ -868,9 +880,43 @@ class TestSplits:
         assert s["splits_5m"] == pytest.approx(_split_by_hand(ctx, 5), rel=0.02)
         assert s["splits_15m"] == pytest.approx(_split_by_hand(ctx, 15), rel=0.02)
 
-    def test_unreached_split_is_none_not_a_truncated_number(self):
-        """~20 m of distance exists, so the 20–25 m split never happened."""
-        assert self._splits(_race_ctx())["splits_25m"] is None
+    def test_retired_split_key_is_gone(self):
+        """splits_25m left the registry (88-01 D2/D3) — structurally unfillable on a 25-yard
+        tether-limited lap, replaced by splits_remainder."""
+        assert "splits_25m" not in self._splits(_race_ctx())
+
+    def test_remainder_covers_twenty_metres_to_the_finish(self):
+        """Extend the default fixture's swim phase well past 20 m (~32 m total, CONTEXT-probed
+        above) and check the chord matches hand arithmetic at the same two indices."""
+        ctx = _race_ctx(fin=25.0, dur=27.0)
+        s = self._splits(ctx)
+        assert s["splits_remainder"] is not None and 0.5 < s["splits_remainder"] < 4.0
+        assert s["splits_remainder"] == pytest.approx(_remainder_by_hand(ctx), rel=1e-9)
+
+    def test_remainder_is_none_when_the_tail_is_shorter_than_the_floor(self):
+        """Crosses 20 m and stops 0.4 m later — arithmetically fine, under _MIN_REMAINDER_M."""
+        fs = 100.0
+        n = 1021
+        t = np.arange(n) / fs
+        vel = np.full(n, 2.0)
+        dist = np.concatenate([[0.0], np.cumsum(vel[:-1] / fs)])  # dist[-1] == 20.4
+        ctx = PhaseContext(t=t, vel=vel, dist=dist, accel=np.zeros(n), fs=fs,
+                            stroke_type="freestyle",
+                            annotation_phases={"dive_start_s": 0.0, "finish_s": float(t[-1])})
+        assert dist[-1] - 20.0 < pm._MIN_REMAINDER_M
+        assert self._splits(ctx)["splits_remainder"] is None
+
+    def test_remainder_is_none_when_twenty_metres_is_never_reached(self):
+        fs = 100.0
+        n = 751
+        t = np.arange(n) / fs
+        vel = np.full(n, 2.0)
+        dist = np.concatenate([[0.0], np.cumsum(vel[:-1] / fs)])  # dist[-1] == 15.0
+        ctx = PhaseContext(t=t, vel=vel, dist=dist, accel=np.zeros(n), fs=fs,
+                            stroke_type="freestyle",
+                            annotation_phases={"dive_start_s": 0.0, "finish_s": float(t[-1])})
+        assert dist[-1] < 20.0
+        assert self._splits(ctx)["splits_remainder"] is None
 
     def test_every_split_is_none_when_dive_start_is_unresolvable(self):
         n = 300
@@ -1010,7 +1056,7 @@ class TestSeventyFiveSixRegistry:
 
     def test_per_element_keys_are_registered(self):
         expected = (
-            {f"splits_{d}m" for d in (5, 10, 15, 20, 25)}
+            {f"splits_{d}m" for d in (5, 10, 15, 20)} | {"splits_remainder"}
             | {f"phase_time_budget_{p}" for p in ("start", "underwater", "swim")}
             | {f"phase_dist_budget_{p}" for p in ("start", "underwater", "swim")}
             | {f"vel_envelope_{p}" for p in ("start", "underwater", "swim", "overall")}

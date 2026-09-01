@@ -59,6 +59,7 @@ const MAP = {
   "@/lib/cycleBands": "./cycleBands.cjs",
   "@/lib/cycleTraces": "./cycleTraces.cjs",
   "@/lib/strokeStats": "./strokeStats.cjs",
+  "@/lib/unitConvert": "./unitConvert.cjs", // 88-03 — PhaseReportCard now imports this too
   "./cycleShape": "./cycleShape.cjs",
   "@/components/portal/SessionCard": "./sessionCardStub.cjs",
   "@/components/portal/CycleCharts": "./CycleCharts.cjs",
@@ -98,7 +99,7 @@ fs.writeFileSync(
   "exports.STROKE_LABELS={freestyle:'Freestyle',backstroke:'Backstroke',butterfly:'Butterfly',breaststroke:'Breaststroke'};\n"
 );
 
-for (const f of ["phaseValence", "phaseBaseline", "cycleShape", "cycleBands", "cycleTraces", "strokeStats"])
+for (const f of ["phaseValence", "phaseBaseline", "cycleShape", "cycleBands", "cycleTraces", "strokeStats", "unitConvert"])
   compile(path.join(web, "lib", `${f}.js`), `${f}.js`);
 compile(path.join(web, "components", "portal", "CycleCharts.js"), "CycleCharts.js");
 for (const f of [

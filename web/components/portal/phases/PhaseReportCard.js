@@ -22,6 +22,7 @@ import { flagVerdict, directionOfGood } from "@/lib/phaseValence";
 import { BASELINE_LIMIT } from "@/lib/phaseBaseline";
 import { buildBands } from "@/lib/cycleBands";
 import { deriveMeans, armBalance } from "@/lib/strokeStats";
+import { displayUnit, scaleBaseline } from "@/lib/unitConvert";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
 import CycleCharts from "@/components/portal/CycleCharts";
 import { HoverExplainProvider } from "./HoverExplain";
@@ -30,6 +31,13 @@ import PhaseVelocity from "./PhaseVelocity";
 import CycleOverlay from "./CycleOverlay";
 import PhaseTimeline from "./PhaseTimeline";
 import AlertSummary from "./AlertSummary";
+
+// Keys retired from the registry (88-01 D2). The row model below renders whatever keys the
+// STORED metrics_json carries, falling back to { label: m.label, unit: m.unit } when DISPLAY has
+// no entry — so simply deleting a DISPLAY entry would keep a retired key rendering, off its
+// stored spec label and with no emptyNote, until that session is recomputed. This skip is what
+// actually removes the row; it survives the next retirement too.
+const RETIRED_KEYS = new Set(["splits_25m"]);
 
 // Short label + friendly unit + plain description, keyed by phase_metrics REGISTRY key. Wording
 // sourced from the v3 mockup. `emptyNote` overrides the "not measured this swim" pill for the two
@@ -70,10 +78,7 @@ const DISPLAY = {
   splits_10m: { label: "Split 5–10 m", unit: "m/s", desc: "Average speed across the second 5 m. Higher is better." },
   splits_15m: { label: "Split 10–15 m", unit: "m/s", desc: "Average speed across the third 5 m. Higher is better." },
   splits_20m: { label: "Split 15–20 m", unit: "m/s", desc: "Average speed across the fourth 5 m. Higher is better." },
-  // The tether is on the waist, so a 25-yard lap (22.86 m) records only ~21.9 m of travel — the
-  // missing metre is his arm plus torso at the touch. This split is therefore blank on any
-  // 25-yard swim by geometry, not by failure, and the note says so rather than showing a bare dash.
-  splits_25m: { label: "Split 20–25 m", unit: "m/s", desc: "Average speed across the fifth 5 m. Higher is better. The tether sits on his waist, so a 25-yard lap only records about 21.9 m — this split fills on longer swims.", emptyNote: "beyond this swim's distance" },
+  splits_remainder: { label: "Split 20 m to finish", unit: "m/s", desc: "Average speed from 20 m to the touch — the closing metres of the swim. Higher is better. This stretch is as long as the swim was, so read it against his own swims of the same distance.", emptyNote: "swim never reached 20 m" },
   accel_asymmetry: { label: "Speeding up vs slowing", unit: "×", desc: "Time spent accelerating against time spent decelerating. Near 1× is balanced; which way is better depends on the stroke." },
   sr_dps_coupling: { label: "Tempo vs distance", unit: "", desc: "Whether quicker strokes cost him distance. Strongly negative means tempo is being bought with reach — a coaching call, not a fault." },
   dead_spot_timing: { label: "Dead spot", unit: "s", desc: "How far into each stroke his speed bottoms out. Where it sits is a technique read rather than better or worse." },
@@ -425,12 +430,14 @@ export default function PhaseReportCard({
   // Build the per-section row model once. Each row carries everything RangeStrip needs plus the
   // verdict, so the alert line and timeline can read the same flags without recomputing.
   const model = useMemo(() => {
+    const imp = unit === "imperial";
     const sections = SECTIONS.map((s) => {
       const phaseObj = phases?.[s.phase] ?? {};
       const sourceNote = windowSourceNote(phases?.boundaries, s.win);
       const rows = [];
       for (const [key, m] of Object.entries(phaseObj)) {
         if (key.startsWith("pulldown_") && strokeType !== "breaststroke") continue;
+        if (RETIRED_KEYS.has(key)) continue;
         const disp = DISPLAY[key] ?? { label: m.label, unit: m.unit ?? "", desc: "" };
         const id = `${s.phase}.${key}`;
         const value = m?.value;
@@ -442,12 +449,14 @@ export default function PhaseReportCard({
         const provisional = m?.provisional === true;
         const verdict = flagVerdict(value, base?.band ?? null, provisional ? "neutral" : good);
         const notes = [sourceNote, provisional ? PROVISIONAL_NOTE : null];
-        rows.push({ id, key, phase: s.phase, disp, value, base, verdict, provisional, notes });
+        // 88-03 D2 — value/base/verdict stay in SI. `conv` is the only unit-aware field on the row;
+        // it is applied at render time, never fed back into flagVerdict or computeDomain.
+        rows.push({ id, key, phase: s.phase, disp, value, base, verdict, provisional, notes, conv: displayUnit(disp.unit, imp) });
       }
       return { ...s, rows };
     });
     return sections;
-  }, [phases, baseline, strokeType]);
+  }, [phases, baseline, strokeType, unit]);
 
   // Active flags (flagged AND not dismissed) drive both the alert line and the timeline hot phase.
   const activeFlags = useMemo(() => {
@@ -455,13 +464,15 @@ export default function PhaseReportCard({
     for (const s of model) {
       for (const r of s.rows) {
         if (r.verdict.flagged && !dismissed.has(r.id)) {
+          // 88-03 D3 — the timeline's flag list is a fourth display site; convert here too, or it
+          // renders SI numbers under a yd label.
           out.push({
             id: r.id,
             phase: r.phase,
             label: r.disp.label,
-            value: r.value,
-            median: r.base?.median ?? null,
-            unit: r.disp.unit,
+            value: r.value * r.conv.factor,
+            median: r.base?.median != null ? r.base.median * r.conv.factor : null,
+            unit: r.conv.unit,
             valence: r.verdict.valence,
           });
         }
@@ -730,22 +741,30 @@ export default function PhaseReportCard({
               </div>
             )}
             <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
-              {s.rows.map((r) => (
-                <RangeStrip
-                  key={r.id}
-                  label={r.disp.label}
-                  unit={r.disp.unit}
-                  value={r.value}
-                  baseline={r.base}
-                  domain={computeDomain(r.value, r.base)}
-                  verdict={r.verdict}
-                  dismissed={dismissed.has(r.id)}
-                  onDismiss={() => dismiss(r.id)}
-                  onRestore={() => restore(r.id)}
-                  emptyNote={r.disp.emptyNote}
-                  explain={metricExplain(r.disp, r.value, r.base, r.verdict, r.disp.unit, r.notes)}
-                />
-              ))}
+              {s.rows.map((r) => {
+                // 88-03 D2 — dv/db are a display-only scale of the SI value/base above; `r.verdict`
+                // passes through unchanged, so a unit toggle cannot create or clear a flag.
+                // Number.isFinite guards null/undefined through UNSCALED — `null * factor` is `0` in
+                // JS, which would turn a "not measured this swim" row into a fake zero reading.
+                const dv = Number.isFinite(r.value) ? r.value * r.conv.factor : r.value;
+                const db = scaleBaseline(r.base, r.conv.factor);
+                return (
+                  <RangeStrip
+                    key={r.id}
+                    label={r.disp.label}
+                    unit={r.conv.unit}
+                    value={dv}
+                    baseline={db}
+                    domain={computeDomain(dv, db)}
+                    verdict={r.verdict}
+                    dismissed={dismissed.has(r.id)}
+                    onDismiss={() => dismiss(r.id)}
+                    onRestore={() => restore(r.id)}
+                    emptyNote={r.disp.emptyNote}
+                    explain={metricExplain(r.disp, dv, db, r.verdict, r.conv.unit, r.notes)}
+                  />
+                );
+              })}
             </div>
             {/* Per-cycle line charts sit BENEATH the Swimming section's strips (75-06 D10): the
                 registry metrics are the phase model's content, the charts are the detail under it. */}

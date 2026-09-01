@@ -9,7 +9,7 @@ import VelocityChart from "@/components/portal/VelocityChart";
 import AccelerationChart from "@/components/portal/AccelerationChart";
 import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import useTracePrefs from "@/lib/useTracePrefs";
-import TimeToX from "@/components/portal/TimeToX";
+import SplitPicker from "@/components/portal/SplitPicker";
 import CoachChat from "@/components/portal/CoachChat";
 import PhaseReportCard from "@/components/portal/phases/PhaseReportCard";
 import { fetchPhaseBaseline } from "@/lib/phaseBaseline";
@@ -63,8 +63,11 @@ export default function ReportCardPage({ params }) {
   const [isStarred, setIsStarred] = useState(false);
   const [notes, setNotes] = useState("");
   const [unit, setUnit] = useState("metric");
-  const [markerTimeS, setMarkerTimeS] = useState(null);
-  const [markerLabel, setMarkerLabel] = useState("");
+  // 88-04: the Segment splits picker's selected window, shaded on both traces. This replaced the
+  // Time-to-Distance marker state (removed with that card at the 88-04 verify) — the charts still
+  // ACCEPT markerTimeS/markerLabel, but nothing on either route passes them any more.
+  const [spanS, setSpanS] = useState(null);
+  const [spanLabel, setSpanLabel] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   // Phase 71: the inline watch player + the Add/Manage cues are sourced from the unified camera
   // list (GET /videos: phone primary from the legacy columns + externals from session_videos). This
@@ -144,7 +147,7 @@ export default function ReportCardPage({ params }) {
         const [{ data: ath }, { data: sibs }, base] = await Promise.all([
           supabase
             .from("athletes")
-            .select("name, head_waist_m")
+            .select("name")
             .eq("id", row.athlete_id)
             .single(),
           supabase
@@ -248,9 +251,9 @@ export default function ReportCardPage({ params }) {
     }
   }, [sessionId, sessionName, data, router]);
 
-  const onMarkerChange = useCallback((tS, lbl) => {
-    setMarkerTimeS(tS);
-    setMarkerLabel(lbl);
+  const onSpanChange = useCallback((span, lbl) => {
+    setSpanS(span);
+    setSpanLabel(lbl);
   }, []);
 
   const vel = data?.velocity_profile ?? [];
@@ -297,6 +300,15 @@ export default function ReportCardPage({ params }) {
     year: "numeric",
   });
 
+  // 88-02 D6/D7: dive_start_s (raw) is now the single anchor for every distance-origin number on
+  // this page — Time-to-Distance, the Swimming section's splits, and 88-04's picker. Collapses
+  // what used to be three separate "0 m" instants (CONTEXT F5: up to 12.4 s apart on 27 of 99
+  // stored sessions). Falls back to the old baseline_end_s, and "none", only when dive_start_s
+  // itself never resolved (D9) — all 99 stored sessions currently have one, so this is
+  // theoretical today, not a live path.
+  const anchorS = phases?.boundaries?.dive_start_s ?? metrics.session?.baseline_end_s ?? null;
+  const anchorSource = phases?.boundaries?.sources?.dive_start_s ?? "none";
+
   // Velocity / Time-to-Distance / video — the still-essential non-phase cards, threaded between the
   // phase timeline and the phase strip sections (mockup order). Kept as the interim classic charts
   // (VelocityChart + AccelerationChart); the unified phase-tinted interactive trace is Phase 75-09.
@@ -325,14 +337,43 @@ export default function ReportCardPage({ params }) {
             ))}
           </div>
         </div>
+        {/* 88-05: the trend window. Sits inside the showVelocity branch so it disappears with the
+            chart it controls rather than hanging orphaned above the acceleration trace. It is a
+            y-domain control, not a second x-windowing slider — the boundary AccelerationChart.js:21-24
+            records is respected, not bent (D5). */}
+        {tracePrefs.showVelocity && (
+          <div className="mb-2 flex items-center gap-3">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-muted">
+              Trend window
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="3"
+              step="0.05"
+              value={tracePrefs.smoothWindowS}
+              onChange={(e) =>
+                tracePrefs.setSmoothWindowS(Number.parseFloat(e.target.value))
+              }
+              className="h-1 flex-1 cursor-pointer accent-accent"
+              aria-label="Velocity trend averaging window in seconds"
+            />
+            <span className="w-12 text-right font-mono text-[11px] text-subtle">
+              {tracePrefs.smoothWindowS > 0
+                ? `${tracePrefs.smoothWindowS.toFixed(2)} s`
+                : "off"}
+            </span>
+          </div>
+        )}
         {tracePrefs.showVelocity && (
           <VelocityChart
             time={time}
             velocity={vel}
             unitFactor={unitFactor}
             unitLabel={velUnit}
-            markerTimeS={markerTimeS}
-            markerLabel={markerLabel}
+            spanS={spanS}
+            spanLabel={spanLabel}
+            smoothWindowS={tracePrefs.smoothWindowS}
             cycles={metrics.cycles}
             fsHz={fsHz}
           />
@@ -344,8 +385,8 @@ export default function ReportCardPage({ params }) {
               acceleration={accel}
               unitFactor={unitFactor}
               unitLabel={accelUnit}
-              markerTimeS={markerTimeS}
-              markerLabel={markerLabel}
+              spanS={spanS}
+              spanLabel={spanLabel}
               cycles={metrics.cycles}
               fsHz={fsHz}
               color={tracePrefs.accelColor}
@@ -354,28 +395,40 @@ export default function ReportCardPage({ params }) {
         )}
       </section>
 
-      {/* Time to Distance */}
+      {/* Segment splits (Phase 88-04). Time-to-Distance stood here until the 88-04 verify, when the
+          user removed it as redundant: an arbitrary contiguous window subsumes five fixed targets.
+          This card inherits its slot, its chrome AND its anchor caveat below. */}
       <section className="mb-5 rounded-2xl border border-navy/50 bg-surface p-5 shadow-sm">
         <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted">
-          Time to Distance
+          Segment splits
         </p>
-        <TimeToX
+        <SplitPicker
           timeArr={time}
           distArr={dist}
-          baselineEndS={metrics.session?.baseline_end_s}
-          headWaistM={athlete?.head_waist_m ?? 0}
-          onMarkerChange={onMarkerChange}
+          anchorS={anchorS}
+          finishS={phases?.boundaries?.finish_s ?? durationS}
+          fsHz={fsHz}
           unit={unit}
+          onSpanChange={onSpanChange}
         />
-        {/* 61-02 D7: every split here is measured FROM this instant, and until now nothing said
-            where it came from. The chain is dive_start_s → manual.baseline_end_idx →
-            session.baseline_end_s (annotations.py → metrics.py), so an annotated session's start
-            IS the coach's own mark. When it is not, the caveat doubles as the fix. */}
-        {metrics.session?.baseline_end_s != null && (
+        {/* 61-02 D7, extended by 88-02 D6/D7: every distance-anchored number on this page is now
+            measured from this one instant, and this line is its single statement — for the splits
+            and 88-04's picker as well as for this card. anchorSource reads
+            boundaries.sources.dive_start_s (phase_metrics.resolve_boundaries' per-BOUNDARY
+            provenance), not data_quality.recomputed_from_annotation, which says the SESSION was
+            recomputed, not that dive_start_s itself came from a mark (D8) — a boundary can be
+            "detected" on an otherwise-annotated session.
+            ⚠ It stays HERE, in page.js, rather than moving inside SplitPicker: page.js owns the
+            anchor, and scratch/anchor_check.mjs check 5 is a source-text assertion against this
+            file. Pushing the provenance wording into the card would put a second copy of the
+            anchor-source rule in the one place nobody looks — the defect 88-02 removed. */}
+        {anchorS != null && (
           <p className="mt-3 border-t border-navy/30 pt-2.5 text-center text-[11px] leading-relaxed text-muted">
-            Start: {metrics.session.baseline_end_s.toFixed(2)} s —{" "}
-            {metrics.data_quality?.recomputed_from_annotation ? (
-              "from your annotation"
+            Start: {anchorS.toFixed(2)} s —{" "}
+            {anchorSource === "none" ? (
+              "no dive detected on this session — measured from the older start estimate."
+            ) : anchorSource === "manual" ? (
+              "from your marks."
             ) : (
               <>
                 auto-detected.{" "}

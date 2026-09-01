@@ -40,6 +40,17 @@ SCHEMA_VERSION = 4  # 2 (75-02): added the resolved `boundaries` object.
 # trust gate (75-02 P3) — a wide-but-wrong window is still computed and reported.
 _MIN_UW_DURATION_S = 0.5
 
+# Distance floor for splits_remainder (88-01 D3): a swim that crosses 20 m and stops within
+# this many metres is arithmetically fine but physically meaningless — not sample-starved
+# (~0.5 m at race speed is ~26 samples at 89.5 Hz), just too short a tail to mean anything.
+# ⚠ MEASURED, not reasoned: D3 first picked 1.0 m on the premise that a 25-yard lap leaves
+# ~1.9 m past the 20 m mark. It does not. finish_s clamps before the wall touch and dist_m
+# already runs short of it (tether on the waist), so across the 56 stored sessions that reach
+# 20 m the tail is MEDIAN 0.872 m (p25 0.486, p75 1.839) — 1.0 m sat above the median and filled
+# only 23 of 56, failing the plan's own two-thirds stop condition. 0.5 m fills 42 of 56 and is
+# about half a torso: below it the chord is measuring the touch itself, not a stretch of swimming.
+_MIN_REMAINDER_M = 0.5
+
 
 @dataclass(frozen=True)
 class MetricSpec:
@@ -764,10 +775,12 @@ def _compute_breakout_vs_steady(ctx):
     return float(bo) / steady
 
 
-def _split_velocity(ctx, meters):
-    """Mean velocity over the 5 m segment ENDING at `meters`, measured from dive_start as the
-    0 m anchor. None when the swim never reached that distance — which is the normal case for
-    the 20/25 m splits on a short trial, not an error."""
+def _dive_relative(ctx):
+    """Shared anchor block for every dive-relative distance metric (the fixed splits and
+    splits_remainder — 88-01 D5): resolve dive_start_s, its index, the 0 m origin (d0), and the
+    finish-clamped array of distance-since-dive-start. Returns (i_start, rel, end), or None when
+    dive_start_s or d0 can't be resolved. Extracted verbatim from _split_velocity so there is
+    exactly one "where is 0 m" rule for these metrics (CONTEXT F5 is three of them on the page)."""
     b = _bounds(ctx)
     i_start = _idx(ctx, b.get("dive_start_s"))
     if i_start is None or len(ctx.dist) <= i_start:
@@ -778,6 +791,17 @@ def _split_velocity(ctx, meters):
     fin_idx = _idx(ctx, _finish_s(ctx))
     end = len(ctx.dist) if fin_idx is None else min(len(ctx.dist), fin_idx + 1)
     rel = np.asarray(ctx.dist[i_start:end], dtype=float) - d0
+    return i_start, rel, end
+
+
+def _split_velocity(ctx, meters):
+    """Mean velocity over the 5 m segment ENDING at `meters`, measured from dive_start as the
+    0 m anchor. None when the swim never reached that distance — which is the normal case for
+    the 20/25 m splits on a short trial, not an error."""
+    anchor = _dive_relative(ctx)
+    if anchor is None:
+        return None
+    i_start, rel, end = anchor
 
     def _first_at(target):
         hits = np.nonzero(np.isfinite(rel) & (rel >= target))[0]
@@ -789,6 +813,34 @@ def _split_velocity(ctx, meters):
     dt = float(ctx.t[i_b]) - float(ctx.t[i_a])
     dd = float(ctx.dist[i_b]) - float(ctx.dist[i_a])
     if not (np.isfinite(dt) and np.isfinite(dd)) or dt <= 0:
+        return None
+    return dd / dt
+
+
+def _remainder_velocity(ctx):
+    """Mean velocity from the first sample at 20 m past dive_start to the finish sample —
+    the closing stretch a 25-yard tether-limited lap actually has, in place of the unreachable
+    20-25 m bin (CONTEXT F2). Same chord convention as the fixed bins (delta-distance over
+    delta-time, D4), not a sample mean of ctx.vel — so a coach reading this row directly beneath
+    four chord rows is reading the same kind of number, and 88-04's picker can reproduce it
+    exactly. None when the swim never reaches 20 m, or when the tail past 20 m is under
+    _MIN_REMAINDER_M (D3) — arithmetically fine but too short to mean anything."""
+    anchor = _dive_relative(ctx)
+    if anchor is None:
+        return None
+    i_start, rel, end = anchor
+
+    def _first_at(target):
+        hits = np.nonzero(np.isfinite(rel) & (rel >= target))[0]
+        return int(hits[0]) + i_start if len(hits) else None
+
+    i_a = _first_at(20.0)
+    i_b = i_start + len(rel) - 1
+    if i_a is None or i_b <= i_a:
+        return None
+    dt = float(ctx.t[i_b]) - float(ctx.t[i_a])
+    dd = float(ctx.dist[i_b]) - float(ctx.dist[i_a])
+    if not (np.isfinite(dt) and np.isfinite(dd)) or dt <= 0 or dd < _MIN_REMAINDER_M:
         return None
     return dd / dt
 
@@ -1053,8 +1105,8 @@ REGISTRY: tuple[MetricSpec, ...] = (
                status="implemented", compute=_make_split(15)),
     MetricSpec("splits_20m", "swim", "Split 15–20 m", "m/s", "low",
                status="implemented", compute=_make_split(20)),
-    MetricSpec("splits_25m", "swim", "Split 20–25 m", "m/s", "low",
-               status="implemented", compute=_make_split(25)),
+    MetricSpec("splits_remainder", "swim", "Split 20 m to finish", "m/s", "low",
+               status="implemented", compute=_remainder_velocity),
     MetricSpec("accel_asymmetry", "swim", "Acceleration asymmetry", "ratio", "medium",
                status="implemented", compute=_compute_accel_asymmetry),
     # The two Layer-B specs: they read ctx.cycles, so they inherit stroke-cycle segmentation

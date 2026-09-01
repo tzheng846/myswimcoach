@@ -48,7 +48,7 @@ export const DIRECTION_OF_GOOD = {
   splits_10m: "up",
   splits_15m: "up",
   splits_20m: "up",
-  splits_25m: "up",
+  splits_remainder: "up",
   sr_dps_coupling: "neutral",
   dead_spot_timing: "neutral",
   accel_asymmetry: "neutral",
