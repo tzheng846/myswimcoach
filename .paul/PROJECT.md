@@ -96,6 +96,35 @@ Swim academies and competitive programs. Coach or operator runs the device; swim
   annotate, not a finding. Backstroke rides freestyle's code path and has **0 annotated sessions**,
   so nothing about it is validated.
 
+- ✓ **A coach can pick their own split, read every number in their own units, and see the lap-scale
+  trend (Phase 88, 2026-09-01).** Two reported defects, and two larger ones found while fixing them.
+  (1) **Splits are selectable**: the report card's five fixed 5 m rows are joined by a chip picker
+  that reads back average velocity and elapsed time over any **contiguous** run of complete 5 m /
+  5 yd segments on this swim — only complete bins are offered, so no label can describe a stretch it
+  does not cover. The structurally-dead `splits_25m` row (a waist tether tops out at ~21.9 m on a
+  25 yd lap, so it filled on 2 of 99 sessions) is retired for `splits_remainder`, 20 m → the finish.
+  ⚠ Its span varies ~10× — median 0.87 m on a 25 yd lap — so it reads closer to *closing speed* than
+  to a fifth 5 m split, directly beneath four true ones.
+  (2) **The unit toggle now converts everything.** 23 of 47 registry metrics never converted; the
+  fix is keyed on the **unit string** rather than a metric list, and 🔴 **the verdict is computed on
+  SI and never on converted values** — so switching units structurally *cannot* invent or erase a
+  flag, rather than merely being expected not to.
+  (3) **NOT REPORTED and larger than what was: the page held THREE different origins for "0 m."**
+  Probed live, they differ by more than 0.1 s on **27 of 99 stored sessions**, tail 12.39 s. Every
+  distance-anchored number now measures from one anchor (raw `dive_start_s`), stated once on the
+  page along with where that boundary came from. ⚠ This **moved numbers a coach had already read**
+  (~0.4–0.5 s on the 37 sessions of the one athlete with a head-waist offset), and **iOS still
+  carries the old head-waist-adjusted Time-to-Distance**, so the two surfaces disagree until a
+  mobile phase carries it across.
+  (4) A **velocity trend overlay** — a grey dotted rolling mean on an adjustable 0–3 s window — was
+  added at the user's direction outside the phase's charter. A ~90 Hz butterfly trace is a sawtooth
+  of real surge-and-glide peaks that must not be smoothed away, but raw it hides the lap-scale story
+  the coach is reading for. It stores nothing and adds no metric: it is a second rendering of the
+  velocity profile.
+  ⚠ **The unit conversion is this page only** — the same metric still shows unconverted on compare,
+  group and parent-report surfaces (accepted, R7). ⚠ **Time-to-Distance was deleted** mid-phase as
+  redundant against the new picker, one day after it had been re-anchored.
+
 ### Nice to Have
 - PDF report generation (server-side, emailed to coach)
 - Session compare in iOS app (✓ shipped on web portal instead — Phase 23)
@@ -160,4 +189,4 @@ known drift (Railway pre-Phase-24, committed SQL ≠ live DB, git coverage gaps)
 *Requirements & product intent above are the durable spec. **Current status / in-flight work: see
 [STATE.md](STATE.md).** The per-phase change log was archived 2026-08-21 →
 [.paul/archive/PROJECT-changelog-2026-08-20.md](archive/PROJECT-changelog-2026-08-20.md).*
-*Created: 2026-05-17 · Docs restructured 2026-08-21 · Last updated 2026-08-31 after Phase 87.*
+*Created: 2026-05-17 · Docs restructured 2026-08-21 · Last updated 2026-09-01 after Phase 88.*

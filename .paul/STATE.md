@@ -8,19 +8,63 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
-- **Phase 88** (Selectable splits + unit conversion — web report card) — **🚧 IN PROGRESS, 4 of 5
-  plans closed. WAVE 1 CLOSED 2026-08-31: 88-01 and 88-02 are `PLAN ✓ → APPLY ✓ → UNIFY ✓`
+- **Phase 89** (Account model rework) — **📋 NEXT. CONTEXT.md exists
+  ([89-account-model-rework/CONTEXT.md](phases/89-account-model-rework/CONTEXT.md), untracked), no
+  plans written.** Phase 90 (Team leaderboards) also has a CONTEXT and no plans. **Next action:
+  `/paul:plan` for Phase 89.**
+
+- **Phase 88** (Selectable splits + unit conversion — web report card) — **✅ COMPLETE 2026-09-01,
+  5 of 5 plans, every loop closed. Code shipped in `e2c5814` (pushed check owed).**
+  Loop: `PLAN ✓ → APPLY ✓ → UNIFY ✓` on all five.
+  **88-05 CLOSED 2026-09-01** ([88-05-SUMMARY](phases/88-splits-picker-and-units/88-05-SUMMARY.md))
+  — the velocity trend overlay. Its APPLY **ran in an unrecorded session and was committed without
+  a SUMMARY**, discovered when the user asked whether the phase had been approved; UNIFY therefore
+  **re-derived every claim from the diff and by re-running the gates from a clean tree**, the same
+  reconciliation-of-found-work posture as 84-02 and 88-03. Re-verified at close: `rolling_mean_check`
+  **39/39**, `pytest` **566 passed**, `next build` clean (20 routes), `npx eslint .` **26 problems /
+  23 errors = zero new**, and all six standing harnesses green — `anchor_check` 17/17,
+  `stroke_toggle_check` 63/63, `overlay_render_check` 40/40, `marketing_render_check` 45/45,
+  `unit_check` 63/63, `split_picker_check` 44/44. `web/` and `scratch/` were clean against `HEAD`,
+  so nothing was quietly fixed up during UNIFY.
+  🔴 **88-05's blocking human-verify was NEVER PERFORMED.** The commit message says so itself
+  ("deferred at the user's direction"); the user approved it **retroactively on 2026-09-01, without
+  looking at the chart**. AC-2, AC-6 and AC-7 are proven mechanically (the decimation trap is pinned
+  by a synthetic 4000-point assertion plus source-text checks that `rollingMean` is called *before*
+  the stride; `/video` is not in the commit at all and `AccelerationChart` has zero references to
+  it). **AC-1, AC-3, AC-4 and AC-5 have no on-screen evidence** — recharts emits an empty wrapper
+  under `renderToStaticMarkup`, which the harness flags in its own output. The cheapest close:
+  `cd web && npm run dev`, open a Chantee 2026-08-20 butterfly session, drag the slider 0 → 1 → 3 s,
+  flip metric/imperial, and open `/video` to confirm no dotted line.
+  ⚠ **88-05's human-verify step 8 was impossible as written** — it asks to confirm "the
+  Time-to-Distance marker still draws", but 88-04's verify **deleted that card**. 88-05 was planned
+  against a pre-88-04 tree. `markerTimeS` / `markerLabel` survive on both charts with no caller on
+  either route.
+  ⚠ **Observation carried forward:** `VelocityChart`'s strided loop skips indices where raw
+  velocity is null *before* pushing a point, so the trend line inherits the raw trace's dropout
+  gaps even though `rollingMean` computed a valid mean there. The mean at every **plotted** point is
+  correct — this is a rendering consequence, not a bug in the library.
+  ⚠ **STILL OWED after the phase close:** (a) 88-05's visual check above; (b) **88-02's blocking
+  human-verify**, never separately confirmed, on a change that moves numbers a coach has already
+  read (~0.4–0.5 s on 37 "Tony" sessions, up to 12.39 s on 27 divergent ones); (c) the **one-word
+  wording fix** — the caveat line should read *"from your annotation"*, it still reads *"from your
+  marks."*, and `anchor_check` check 5 pins that exact string, so it is a one-word edit **plus** one
+  line in the gate.
+
+  *Historical record below, as written 2026-08-31 while the phase was in flight:*
+  WAVE 1 CLOSED 2026-08-31: 88-01 and 88-02 are `PLAN ✓ → APPLY ✓ → UNIFY ✓`
   ([88-01-SUMMARY](phases/88-splits-picker-and-units/88-01-SUMMARY.md),
   [88-02-SUMMARY](phases/88-splits-picker-and-units/88-02-SUMMARY.md)).
   WAVE 2 CLOSED 2026-08-31: 88-03 and 88-04 are `PLAN ✓ → APPLY ✓ → UNIFY ✓`, both human-verifies
   APPROVED ([88-03-SUMMARY](phases/88-splits-picker-and-units/88-03-SUMMARY.md),
   [88-04-SUMMARY](phases/88-splits-picker-and-units/88-04-SUMMARY.md)).
-  **88-05 remains `PLAN ✓ → APPLY ○ → UNIFY ○`.** Suite 563 → **566 green**;
+  ~~**88-05 remains `PLAN ✓ → APPLY ○ → UNIFY ○`.**~~ → **RESOLVED 2026-09-01: applied,
+  committed in `e2c5814`, unified.** Suite 563 → **566 green**;
   backfill applied by the user across **99 of 99** sessions.
-  🔴 **PHASE NOT TRANSITIONED, NO PHASE COMMIT — the phase is 4 of 5, not 4 of 4.** 88-04's own
-  success criteria say "Phase 88 closes at 4 of 4 plans"; that line was written BEFORE 88-05 was
-  appended at the user's direction, and acting on it would repeat the plan-count trap flagged four
-  times over for phase 83. **88-05 is the remaining scope.**
+  ~~🔴 **PHASE NOT TRANSITIONED, NO PHASE COMMIT — the phase is 4 of 5, not 4 of 4.**~~ →
+  **RESOLVED 2026-09-01 at 5 of 5.** The warning held: 88-04's success criteria said "Phase 88
+  closes at 4 of 4 plans", written BEFORE 88-05 was appended at the user's direction, and acting on
+  it would have repeated the plan-count trap flagged four times over for phase 83. The phase was
+  held open until 88-05's loop actually closed.
   🔴 **WAVE 2 SCOPE ADDITION — Time-to-Distance was REMOVED at 88-04's verify, on the user's
   explicit direction** ("it's redundant when segment splits exists"). This contradicts 88-04's own
   D1 rationale and its explicit `DO NOT CHANGE: TimeToX.js` boundary, and it lands ONE DAY after
@@ -78,7 +122,8 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   BOTH wave 1 plans listed as must-pass-UNEDITED. It is correct and green, so it was left rather
   than discarded, but wave 1 cannot be committed without carrying wave 2 along, and 88-03's APPLY
   must start by reviewing what is already there rather than assuming a clean tree.
-  ⚠ **Nothing is committed yet** — the whole of wave 1 plus partial 88-03 sits uncommitted.
+  ~~⚠ **Nothing is committed yet**~~ → **RESOLVED: all three waves committed together in
+  `e2c5814` (2026-08-31 19:01 -0700), 33 files.**
   ⚠ **Dead code deliberately left (88-02 D4):** `metrics.time_to_distance` (zero callers),
   `compute_session_metrics`'s unused `head_waist_m` kwarg, `api.py:183/228`'s form field,
   `tests/test_metrics.py:156`. iOS keeps its own head-waist-adjusted TimeToX, so the two surfaces
