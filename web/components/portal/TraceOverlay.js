@@ -104,6 +104,14 @@ export default function TraceOverlay({
   accelColor = "#22d3ee", // acceleration trace colour
   showVelocity = true,
   showAcceleration = false,
+  // Display units (2026-09-01). The page owns the metric/imperial choice; this strip used to
+  // hardcode "m/s" / "m/s²" and print raw SI, so the toggle appeared to do nothing over the video.
+  // ⚠ The FACTOR is applied to the READOUT ONLY, never to the geometry: computeGeom scales each
+  // band to its own min/max, so multiplying the path by a constant would redraw the identical
+  // shape for nothing — and would invalidate the once-computed path this component exists to keep.
+  unitFactor = 1,
+  velUnit = "m/s",
+  accelUnit = "m/s²",
 }) {
   // Per-band DOM handles, populated by callback refs. A ref (not state) because the rAF loop writes
   // to them every frame and must never trigger React; keyed by band so a dynamic 1-or-2 band set
@@ -159,9 +167,9 @@ export default function TraceOverlay({
     const visibleBands = () => {
       const list = [];
       if (bandDom.current.vel.svg)
-        list.push({ dom: bandDom.current.vel, geom: geomV, values: velocity, unit: "m/s" });
+        list.push({ dom: bandDom.current.vel, geom: geomV, values: velocity, unit: velUnit });
       if (bandDom.current.accel.svg)
-        list.push({ dom: bandDom.current.accel, geom: geomA, values: acceleration, unit: "m/s²" });
+        list.push({ dom: bandDom.current.accel, geom: geomA, values: acceleration, unit: accelUnit });
       return list;
     };
 
@@ -228,7 +236,9 @@ export default function TraceOverlay({
           const i = Math.round(drawT * fsHz);
           const val = i >= 0 && i < b.values.length ? b.values[i] : null;
           ro.textContent =
-            val == null || Number.isNaN(val) ? "—" : `${val.toFixed(2)} ${b.unit}`;
+            val == null || Number.isNaN(val)
+              ? "—"
+              : `${(val * unitFactor).toFixed(2)} ${b.unit}`;
         }
 
         // Stroke-mark triangles: same x-mapping as the trace, read from the DOM so a changed cycle
@@ -263,6 +273,9 @@ export default function TraceOverlay({
     onSeek,
     geomV,
     geomA,
+    unitFactor,
+    velUnit,
+    accelUnit,
   ]);
 
   // Drag-scrub: press and slide to move the video continuously (2026-08-14). A plain click is just
@@ -421,8 +434,8 @@ export default function TraceOverlay({
 
   return (
     <>
-      {showVel && renderBand("vel", geomV, lineColor, "m/s", false)}
-      {showAccel && renderBand("accel", geomA, accelColor, "m/s²", true)}
+      {showVel && renderBand("vel", geomV, lineColor, velUnit, false)}
+      {showAccel && renderBand("accel", geomA, accelColor, accelUnit, true)}
     </>
   );
 }

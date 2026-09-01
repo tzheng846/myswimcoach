@@ -39,6 +39,11 @@ export default function VideoTracePanel({
   onToggleAcceleration, // (bool) => void
   onVelColor, // (hex) => void
   onAccelColor, // (hex) => void
+  // Display units (2026-09-01) — forwarded untouched to TraceOverlay's readouts. The panel itself
+  // shows no numbers, so it neither converts nor labels anything.
+  unitFactor = 1,
+  velUnit = "m/s",
+  accelUnit = "m/s²",
   readOnly = false, // watch-only (report card): video + trace + playback, but no manual sync controls
 }) {
   const stageRef = useRef(null);
@@ -187,6 +192,9 @@ export default function VideoTracePanel({
             accelColor={accelColor}
             showVelocity={showVelocity}
             showAcceleration={showAcceleration}
+            unitFactor={unitFactor}
+            velUnit={velUnit}
+            accelUnit={accelUnit}
           />
         }
       />

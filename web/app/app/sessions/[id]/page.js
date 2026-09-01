@@ -9,6 +9,7 @@ import VelocityChart from "@/components/portal/VelocityChart";
 import AccelerationChart from "@/components/portal/AccelerationChart";
 import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import useTracePrefs from "@/lib/useTracePrefs";
+import useUnitPref from "@/lib/useUnitPref";
 import SplitPicker from "@/components/portal/SplitPicker";
 import CoachChat from "@/components/portal/CoachChat";
 import PhaseReportCard from "@/components/portal/phases/PhaseReportCard";
@@ -62,7 +63,6 @@ export default function ReportCardPage({ params }) {
   const [editingName, setEditingName] = useState(false);
   const [isStarred, setIsStarred] = useState(false);
   const [notes, setNotes] = useState("");
-  const [unit, setUnit] = useState("metric");
   // 88-04: the Segment splits picker's selected window, shaded on both traces. This replaced the
   // Time-to-Distance marker state (removed with that card at the 88-04 verify) — the charts still
   // ACCEPT markerTimeS/markerLabel, but nothing on either route passes them any more.
@@ -83,32 +83,9 @@ export default function ReportCardPage({ params }) {
   // component state cannot survive it — the coach had to re-pick yards on each session while
   // comparing a series, which is exactly when they are comparing them. Persisted rather than
   // URL-encoded because it is a standing preference, not a property of the session being viewed.
-  // Read in an effect, not a lazy initializer: localStorage does not exist during SSR and reading
-  // it during render would desync hydration.
-  useEffect(() => {
-    try {
-      const u = window.localStorage.getItem("swimnetics.unit");
-      if (u === "metric" || u === "imperial") setUnit(u);
-    } catch {
-      // Private mode / storage disabled — defaults are fine.
-    }
-  }, []);
-
-  const persist = useCallback((key, value) => {
-    try {
-      window.localStorage.setItem(key, value);
-    } catch {
-      // Non-fatal: the toggle still works for this page view.
-    }
-  }, []);
-
-  const chooseUnit = useCallback(
-    (u) => {
-      setUnit(u);
-      persist("swimnetics.unit", u);
-    },
-    [persist]
-  );
+  // 2026-09-01: lifted into useUnitPref so the /video route reads the same choice — the toggle set
+  // here now also reaches the video overlay's readout, which is what made it look broken.
+  const { unit, setUnit, unitFactor, velUnit, accelUnit } = useUnitPref();
 
   // Sequence guard: load() can now be triggered from three places, so a slow earlier
   // response must not overwrite a newer one.
@@ -291,9 +268,6 @@ export default function ReportCardPage({ params }) {
   const strokeType = data.stroke_type;
   const strokeLabel = STROKE_LABELS[strokeType] ?? strokeType;
   const durationS = time.length ? time[time.length - 1] : null;
-  const unitFactor = unit === "imperial" ? 1.09361 : 1;
-  const velUnit = unit === "imperial" ? "yd/s" : "m/s";
-  const accelUnit = unit === "imperial" ? "yd/s²" : "m/s²";
   const date = new Date(data.created_at).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -325,7 +299,7 @@ export default function ReportCardPage({ params }) {
             {["metric", "imperial"].map((u) => (
               <button
                 key={u}
-                onClick={() => chooseUnit(u)}
+                onClick={() => setUnit(u)}
                 className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${
                   unit === u
                     ? "border-accent bg-accent text-white"
@@ -343,26 +317,42 @@ export default function ReportCardPage({ params }) {
             records is respected, not bent (D5). */}
         {tracePrefs.showVelocity && (
           <div className="mb-2 flex items-center gap-3">
-            <span className="text-[11px] font-semibold uppercase tracking-widest text-muted">
-              Trend window
-            </span>
-            <input
-              type="range"
-              min="0"
-              max="3"
-              step="0.05"
-              value={tracePrefs.smoothWindowS}
-              onChange={(e) =>
-                tracePrefs.setSmoothWindowS(Number.parseFloat(e.target.value))
-              }
-              className="h-1 flex-1 cursor-pointer accent-accent"
-              aria-label="Velocity trend averaging window in seconds"
-            />
-            <span className="w-12 text-right font-mono text-[11px] text-subtle">
-              {tracePrefs.smoothWindowS > 0
-                ? `${tracePrefs.smoothWindowS.toFixed(2)} s`
-                : "off"}
-            </span>
+            {/* 2026-09-01: the trend is a SWITCH, with the window behind it. Dragging to 0.00 s
+                also hides the line, but it forgets the window the coach chose — this comes back
+                on at whatever they had set, which is the point of a toggle. Same pill chrome as
+                the m/yd buttons above so the two controls read as one row. */}
+            <button
+              onClick={() => tracePrefs.setShowTrend(!tracePrefs.showTrend)}
+              aria-pressed={tracePrefs.showTrend}
+              className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest transition-colors ${
+                tracePrefs.showTrend
+                  ? "border-accent bg-accent text-white"
+                  : "border-surface-3 bg-surface-2 text-subtle"
+              }`}
+            >
+              Trend
+            </button>
+            {tracePrefs.showTrend && (
+              <>
+                <input
+                  type="range"
+                  min="0"
+                  max="3"
+                  step="0.05"
+                  value={tracePrefs.smoothWindowS}
+                  onChange={(e) =>
+                    tracePrefs.setSmoothWindowS(Number.parseFloat(e.target.value))
+                  }
+                  className="h-1 flex-1 cursor-pointer accent-accent"
+                  aria-label="Velocity trend averaging window in seconds"
+                />
+                <span className="w-12 text-right font-mono text-[11px] text-subtle">
+                  {tracePrefs.smoothWindowS > 0
+                    ? `${tracePrefs.smoothWindowS.toFixed(2)} s`
+                    : "off"}
+                </span>
+              </>
+            )}
           </div>
         )}
         {tracePrefs.showVelocity && (
@@ -373,7 +363,9 @@ export default function ReportCardPage({ params }) {
             unitLabel={velUnit}
             spanS={spanS}
             spanLabel={spanLabel}
-            smoothWindowS={tracePrefs.smoothWindowS}
+            smoothWindowS={
+              tracePrefs.showTrend ? tracePrefs.smoothWindowS : 0
+            }
             cycles={metrics.cycles}
             fsHz={fsHz}
           />
@@ -428,7 +420,7 @@ export default function ReportCardPage({ params }) {
             {anchorSource === "none" ? (
               "no dive detected on this session — measured from the older start estimate."
             ) : anchorSource === "manual" ? (
-              "from your marks."
+              "from your annotation."
             ) : (
               <>
                 auto-detected.{" "}
@@ -474,6 +466,9 @@ export default function ReportCardPage({ params }) {
             onToggleAcceleration={tracePrefs.setShowAcceleration}
             onVelColor={tracePrefs.setVelColor}
             onAccelColor={tracePrefs.setAccelColor}
+            unitFactor={unitFactor}
+            velUnit={velUnit}
+            accelUnit={accelUnit}
           />
         ) : (
           <p className="text-sm text-muted">No video attached yet.</p>

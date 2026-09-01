@@ -7,6 +7,7 @@ import VideoTracePanel from "@/components/portal/VideoTracePanel";
 import VelocityChart from "@/components/portal/VelocityChart";
 import AccelerationChart from "@/components/portal/AccelerationChart";
 import useTracePrefs from "@/lib/useTracePrefs";
+import useUnitPref from "@/lib/useUnitPref";
 
 // Read-only video + velocity view (61-03 D1). Deliberately NOT the annotate page: no marks, no
 // phase boundaries, no Save. As of Phase 64 this route and the report card share the SAME
@@ -23,6 +24,9 @@ export default function SessionVideoPage({ params }) {
   const seekRef = useRef(null);
   // Trace display prefs (Phase 64-03), shared/persisted with the report card.
   const tracePrefs = useTracePrefs();
+  // 2026-09-01: and so is metric/imperial. This route carries no toggle of its own — the choice is
+  // made on the report card and followed here, the same way the trace colours already are.
+  const { unitFactor, velUnit, accelUnit } = useUnitPref();
 
   useEffect(() => {
     let alive = true;
@@ -133,6 +137,9 @@ export default function SessionVideoPage({ params }) {
           onToggleAcceleration={tracePrefs.setShowAcceleration}
           onVelColor={tracePrefs.setVelColor}
           onAccelColor={tracePrefs.setAccelColor}
+          unitFactor={unitFactor}
+          velUnit={velUnit}
+          accelUnit={accelUnit}
         />
 
         <div>
@@ -143,6 +150,8 @@ export default function SessionVideoPage({ params }) {
             <VelocityChart
               time={time}
               velocity={vel}
+              unitFactor={unitFactor}
+              unitLabel={velUnit}
               cycles={cycles}
               fsHz={fsHz}
               onClick={onChartClick}
@@ -153,6 +162,8 @@ export default function SessionVideoPage({ params }) {
               <AccelerationChart
                 time={time}
                 acceleration={accel}
+                unitFactor={unitFactor}
+                unitLabel={accelUnit}
                 cycles={cycles}
                 fsHz={fsHz}
                 color={tracePrefs.accelColor}

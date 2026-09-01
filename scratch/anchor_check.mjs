@@ -184,8 +184,8 @@ function expectedSeconds(timeArr, distArr, anchorS, targetM) {
     pageText.includes("no dive detected on this session — measured from the older start estimate.")
   );
   check(
-    '"manual" source renders "from your marks."',
-    pageText.includes('"from your marks."') || pageText.includes("from your marks.")
+    '"manual" source renders "from your annotation."',
+    pageText.includes('"from your annotation."') && !pageText.includes("from your marks.")
   );
   check(
     '"detected"/"auto" fall into the same auto-detected branch',

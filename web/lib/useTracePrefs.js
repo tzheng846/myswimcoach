@@ -19,12 +19,17 @@ const KEYS = {
   // Phase 88-05: the velocity trend overlay's averaging window, in seconds. Lives here rather
   // than in the page so it carries across sessions and reloads (AC-4).
   smoothWindowS: "swimnetics.smoothWindowS",
+  // 2026-09-01: the trend line's on/off switch, separate from its window. Dragging the slider to
+  // 0.00 s still turns it off, but that DISCARDS the window the coach picked — a switch has to be
+  // able to come back on at 1.40 s, not at the default.
+  showTrend: "swimnetics.showTrend",
 };
 
 export const DEFAULT_VEL_COLOR = "#ff453a"; // red — a blue line on blue water is invisible
 export const DEFAULT_ACCEL_COLOR = "#22d3ee"; // cyan — distinct from velocity's red
 export const DEFAULT_SMOOTH_WINDOW_S = 1.0; // 88-05 D2 — default-on; 0 is a reachable "off"
 export const MAX_SMOOTH_WINDOW_S = 3.0;
+export const DEFAULT_SHOW_TREND = true; // unchanged behaviour for anyone who never touches it
 
 // Module-level so it needs no dependency in the callbacks below.
 function persist(key, value) {
@@ -41,6 +46,7 @@ export default function useTracePrefs() {
   const [velColor, setVelColor] = useState(DEFAULT_VEL_COLOR);
   const [accelColor, setAccelColor] = useState(DEFAULT_ACCEL_COLOR);
   const [smoothWindowS, setSmoothWindowS] = useState(DEFAULT_SMOOTH_WINDOW_S);
+  const [showTrend, setShowTrend] = useState(DEFAULT_SHOW_TREND);
 
   useEffect(() => {
     try {
@@ -49,12 +55,14 @@ export default function useTracePrefs() {
       const vc = window.localStorage.getItem(KEYS.velColor);
       const ac = window.localStorage.getItem(KEYS.accelColor);
       const sw = Number.parseFloat(window.localStorage.getItem(KEYS.smoothWindowS));
+      const st = window.localStorage.getItem(KEYS.showTrend);
       if (sv === "0" || sv === "1") setShowVelocity(sv === "1");
       if (sa === "0" || sa === "1") setShowAcceleration(sa === "1");
       if (vc) setVelColor(vc);
       if (ac) setAccelColor(ac);
       // Anything out of range or unparseable leaves the default in place (AC-4).
       if (Number.isFinite(sw) && sw >= 0 && sw <= MAX_SMOOTH_WINDOW_S) setSmoothWindowS(sw);
+      if (st === "0" || st === "1") setShowTrend(st === "1");
     } catch {
       // private mode / storage disabled — defaults are fine
     }
@@ -76,6 +84,10 @@ export default function useTracePrefs() {
     setAccelColor(c);
     persist(KEYS.accelColor, c);
   }, []);
+  const chooseShowTrend = useCallback((b) => {
+    setShowTrend(b);
+    persist(KEYS.showTrend, b ? "1" : "0");
+  }, []);
   const chooseSmoothWindowS = useCallback((s) => {
     setSmoothWindowS(s);
     persist(KEYS.smoothWindowS, String(s));
@@ -87,10 +99,12 @@ export default function useTracePrefs() {
     velColor,
     accelColor,
     smoothWindowS,
+    showTrend,
     setShowVelocity: chooseShowVelocity,
     setShowAcceleration: chooseShowAcceleration,
     setVelColor: chooseVelColor,
     setAccelColor: chooseAccelColor,
     setSmoothWindowS: chooseSmoothWindowS,
+    setShowTrend: chooseShowTrend,
   };
 }

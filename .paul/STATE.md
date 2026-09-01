@@ -74,9 +74,9 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   ⚠ **`web/components/portal/TimeToX.js` now has ZERO importers**, and the `markerTimeS` /
   `markerLabel` props + their `ReferenceLine` blocks on both charts have **no caller on either
   route**. Left in place and named, per the 88-02 D4 convention.
-  ⚠ **OWED — one-word wording question:** the user asked the line to read *"from your annotation"*;
-  it still reads *"from your marks."* (moved verbatim; `anchor_check` check 5 pins that exact
-  string). A one-word edit plus one line in the gate, awaiting confirmation.
+  ~~⚠ **OWED — one-word wording question:** the line should read *"from your annotation"*.~~ →
+  **DONE 2026-09-01** in the follow-up below; `anchor_check` check 5 rewritten to pin the new
+  string AND assert the old one is gone.
   ⚠ **iOS still ships its own Time-to-Distance** (`ReportCardScreen`), so web and mobile now differ
   in what the session screen offers — on top of the ~0.4–0.5 s TimeToX disagreement 88-02 logged.
   ⚠ **88-05 edits `VelocityChart.js` AND `page.js`, both touched by 88-04** — its PLAN must be
@@ -95,6 +95,18 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   ⚠ **`scratch/stroke_toggle_check.mjs` WAS edited** despite both wave-1 plans listing it as
   must-pass-UNEDITED. Mechanically forced (`PhaseReportCard` now imports `@/lib/unitConvert`, so the
   harness cannot transpile it without a MAP entry), additive, still 63/63 — but a real breach.
+  ✅ **POST-PHASE FOLLOW-UP 2026-09-01 (3 user-reported items, one commit, gated by
+  `scratch/trend_toggle_check.mjs` 39/39):**
+  (1) the caveat wording, above;
+  (2) 🔴 **the metric/imperial toggle never reached the video** — `TraceOverlay` hardcoded `"m/s"` /
+  `"m/s²"` and printed raw SI in its rAF readout, and `/video` never hydrated `swimnetics.unit` at
+  all. The unit pref is now `web/lib/useUnitPref.js`, read by BOTH routes; the factor is applied to
+  the READOUT ONLY (the band self-scales to its own min/max, so the drawn path is byte-identical in
+  either unit — pinned);
+  (3) the velocity trend is now a **switch** (`swimnetics.showTrend`, default on) with the window
+  behind it, because the slider's 0.00 s "off" discarded the window the coach had chosen.
+  ⚠ **Still unverified on screen** — the portal is Supabase-auth-gated, so these are render- and
+  source-gated only, exactly like 88-05's. Same ~2-minute check closes both.
   ⚠ **New pattern worth reusing:** clamp a stale index-selection by DERIVING it during render, never
   by resetting it in an effect — the effect form trips `react-hooks/set-state-in-effect`, which is
   what forced 87-02 to ship a new error.
