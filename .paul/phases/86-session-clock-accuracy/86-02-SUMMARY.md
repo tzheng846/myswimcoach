@@ -46,8 +46,10 @@ Every claim below was re-established from the diff or by running the gate named 
 tree that was clean against `HEAD` for all tracked files (only untracked files existed in
 `myswimcoach`, so nothing was quietly fixed up during this reconciliation).
 
-Three things STATE.md and ROADMAP.md asserted as blockers were checked rather than believed, and
-**all three were already satisfied**:
+Three things the **ROADMAP row for Phase 86** still asserted as blockers were checked rather than
+believed, and **all three were already satisfied**. (STATE.md's own owed-item 27 had already been
+self-corrected on 2026-08-31 and was accurate; the ROADMAP row was never updated to match, which is
+exactly the drift this reconciliation exists to catch.)
 
 | Asserted blocker | Checked how | Actual state |
 |---|---|---|

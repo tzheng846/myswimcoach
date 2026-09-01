@@ -994,9 +994,25 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
   (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
   item 9 (annotate the backlog fast).
-- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 86-01 LOOP CLOSED
-  (PLAN ✓ → APPLY ✓ → UNIFY ✓) 2026-08-31; 86-02 PLAN created 2026-08-31
-  (PLAN ✓ → APPLY ○ → UNIFY ○).** Suite **505 → 520**
+- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 2 of 3 plans closed.
+  86-01 LOOP CLOSED 2026-08-31; 86-02 LOOP CLOSED 2026-09-01 (PLAN ✓ → APPLY ✓ → UNIFY ✓),
+  committed `828ee49` (backend repo: plan + summary + harness) and `1aa45cb` (swimnetics-mobile:
+  `sessionClock.js` + `RecordScreen.js`).**
+  ⚠ **86-02's APPLY also ran in an unrecorded session** and was left uncommitted with **no SUMMARY** —
+  found on disk 2026-09-01, the third instance of this pattern after 84-02 and 88-05. Closed with the
+  same reconciliation posture: every claim re-derived from the diff and by re-running the gates.
+  Re-verified at close: `session_clock_check` **45/45**, `pytest` **566 passed** (unchanged from
+  Phase 88's close — `git status` showed **no modified tracked files**, so `api.py`, `web/` and every
+  other standing-harness input are provably untouched; the other six harnesses were deliberately NOT
+  re-run for that reason). Live `GET /time` → 200; live `sessions` select → all three `patch_14`
+  columns present and `null`. → [86-02-SUMMARY](phases/86-session-clock-accuracy/86-02-SUMMARY.md)
+  🔴 **AC-7 (device verify) is the only unmet AC and is BUILD-GATED** — it needs an EAS build and
+  rides Phase 84's owed batch. Nothing in 86-02 has run on a phone. Every accuracy figure in this
+  phase remains an **estimate** until 86-03.
+  ⚠ **Tooling trap found while closing, will recur:** `.venv/Scripts/python.exe` has **no pytest**,
+  and `python -m pytest … | tail` still exits **0** when the module is missing — the suite silently
+  does not run. Use the conda interpreter (`C:\Users\TonyZheng\miniconda3\python.exe`, pytest 9.0.2).
+  Suite **505 → 520** at 86-01
   (+15, zero pre-existing failures — +15 is exactly the new-test count, so nothing pre-existing was
   altered). ✅ **`patch_14` APPLIED by the user 2026-08-31** — the three columns are live.
   ✅ **86-01 COMMITTED `861040b` and PUSHED to `main` 2026-08-31; Railway deploy VERIFIED live** —
@@ -1042,8 +1058,9 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   ⚠ **UNIFY reconciled from the TREE, not from execution memory** — APPLY ran in a cut-off prior
   session. Every claim was re-verified: full `git diff`, `pytest tests/`, a live `TestClient` call on
   `/time` (200, 3 ms off the host clock, no auth header), `python -c "import api"`.
-  ⚠ **Phase 86 stays 🚧 — NOT transitioned, NO phase commit.** Plan/summary counts are now equal
-  (1/1), which is exactly the heuristic that wrongly called 83-01 and 83-02 done. **86-01 is 1 of 3.**
+  ⚠ **Phase 86 stays 🚧 — NOT transitioned, NO phase commit. 2 of 3 plans.** Plan/summary counts are
+  equal (2/2), which is exactly the heuristic that wrongly called 83-01 and 83-02 done. **86-03 (the
+  tap test) is not written**, and 86-02's AC-7 is unmet, so the phase cannot close on counts alone.
   New phase, not in ROADMAP's 1–85 index and not derived from
   any owed item; it comes out of the SwimClips integration conversation but the first two plans are
   **useful with or without that partnership** — they fix a live bug in the shipped video overlay.
