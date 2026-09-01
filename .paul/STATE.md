@@ -8,10 +8,77 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
-- **Phase 89** (Account model rework) — **📋 NEXT. CONTEXT.md exists
+- **Phase 90** (Team leaderboards) — **🚧 PLANNING. 3 plans created 2026-09-01, none applied.**
+  Loop: `PLAN ✓ → APPLY ○ → UNIFY ○` on all three. **Next action: `/paul:apply
+  .paul/phases/90-team-leaderboards/90-01-PLAN.md`.**
+  CONTEXT: [90/CONTEXT.md](phases/90-team-leaderboards/CONTEXT.md) (2 discuss rounds, 8 decisions).
+  Waves are strictly serial — 90-01 → 90-02 → 90-03 — because 02 imports 01's catalog and select
+  string, and 03 rewrites the `page.js` 02 creates.
+  - **90-01 — ranking core** (wave 1, `depends_on: []`, autonomous). New pure
+    `web/lib/leaderboard.js` + `scratch/leaderboard_check.mjs`: the 8-metric catalog, the 15 m
+    guard, the derived lap time, the last-N mean, and `rankBoard` with a stable tie-break. No React,
+    no Supabase — the harness imports the module directly (verified: `import("…/rollingMean.js")`
+    resolves under bare node today), so it needs neither `typescript` staging nor a dev server.
+    See [90-01-PLAN.md](phases/90-team-leaderboards/90-01-PLAN.md).
+  - **90-02 — data layer + route** (wave 2, `depends_on: ["90-01"]`, autonomous). One
+    `fetchLeaderboard()` in `web/lib/leaderboardData.js` — **the single seam Phase 89 D1 will
+    rewrite** (CONTEXT R4) — plus `/app/leaderboard` with stroke tabs, the caveat block and one nav
+    entry. Deliberately a horizontal cut against `plan-format.md`'s advice, and the reason is
+    stated in the plan: what is most likely wrong here is *which swims are in the page*, and that is
+    verifiable before any board exists.
+    See [90-02-PLAN.md](phases/90-team-leaderboards/90-02-PLAN.md).
+  - **90-03 — the boards** (wave 3, `depends_on: ["90-02"]`, **not autonomous**). Eight boards per
+    stroke, top-5 with show-all, the `swimnetics.unit` toggle reused from 88-03, and a blocking
+    human-verify. Its load-bearing assertion: a metric render and an imperial render must produce
+    the **same sequence of names and ranks** — structural, because `rankBoard` runs on SI and
+    `displayUnit` is applied at format time (88-03 D2).
+    See [90-03-PLAN.md](phases/90-team-leaderboards/90-03-PLAN.md).
+  🔴 **PLANNING FOUND A DEFECT CONTEXT MISSED, and it is the phase's biggest single finding:
+  `metrics_json.session.lap_time_s` IS NOT A LAP TIME.** [metrics.py:1870](../metrics.py) computes
+  it as `float(t[-1])` — the **duration of the recording**. Measured across the 84 eligible
+  sessions it disagrees with `finish_s − dive_start_s` on **84 of 84**, median **5.75 s**, max
+  **28.29 s**, and **19 of 84 read exactly 39.0 s** (the firmware's fixed record length). Ranking on
+  it ranks who stopped recording soonest. `finish_s − dive_start_s` is present on **84/84** (median
+  15.1 s, range 4.8–21.9) and uses the same anchor 88-02 hoisted, so 90-01 derives it under the key
+  `elapsed_s` and the string `lap_time_s` is banned from the module by a harness check.
+  ⚠ **This defect is WIDER than this phase** — the same field is what `web/lib/reportMetrics.js`
+  labels "Lap Time" on the **parent report card**, and it also feeds `GroupCompare`,
+  `windowMetrics.js` and `api.py:1678`. Routed around here, not fixed. **New owed item 30.**
+  ⚠ **The last-N window rides on owed item 22.** D4 means "the athlete's last 5 swims", and the only
+  ordering key that exists across all 99 sessions is `recorded_at` — which stores **upload** time,
+  not swim time. Fine while upload follows the swim by minutes; wrong for a late queued upload.
+  `session_start_utc_ms` (86-01) is the correct field and exists only for sessions recorded after
+  Phase 86 ships, so it cannot order the library yet. Stated in the plans, not silently assumed.
+  ⚠ **CONTEXT R6 is CORRECTED by planning:** it claims *"avg speed, top speed and lap time are the
+  only three with no detector dependence at all."* Wrong on all three — `mean_vel_ms` and
+  `max_vel_ms` are computed over `vel[b_end:swim_end]` ([metrics.py:1763](../metrics.py)), both
+  detector-resolved, and the derived lap time needs two boundaries. **All eight metrics are
+  boundary-dependent.** What survives, and what F4 was actually about, is **cycle-independence**:
+  none of the eight reads `ctx.cycles`.
+  ⚠ **CONTEXT F6 is CORRECTED by planning:** "every one of the eight has a value for every athlete
+  in every stroke" fails on exactly one live cell — **Dane has no `splits_20m` on either of his two
+  eligible breaststroke swims**. So the unranked-row branch is live on real data on day one, which
+  is why 90-03 AC-3 exists rather than being a hypothetical.
+  ⚠ **CONTEXT F5's census is pre-guard.** Under D5's `total_dist_m >= 15` the eligible board is
+  **freestyle 7 ath / 42 sw · butterfly 4 / 28 · breaststroke 5 / 12 · backstroke 2 / 2** — the
+  guard removes an entire athlete ("Test", 3 bench sessions at 0.00–0.59 m) from breaststroke, and
+  **deletes `udk` as a board** (all 5 udk sessions are Leo's, all under 15 m).
+  ✅ **CONTEXT open question 5 answered by measurement, not assumption:** a **deep scalar** PostgREST
+  select of exactly the 9 needed values costs **47 KB / 99 rows / 0.76 s**, against 503 KB for the
+  scoped phase objects and 1.5 MB for the full `metrics_json`. One query, no pagination. Also
+  measured: `recorded_at` is non-null on **99/99**, so it is safe as the newest-first ordering key.
+  ✅ Boundary provenance on the 84 eligible: `dive_start_s` manual 41 / detected 20 / auto 23;
+  `finish_s` detected 43 / manual 41.
+  ⚠ **R1 has teeth and planning did not remove them.** Among eligible sessions `finish_s −
+  dive_start_s` spans 4.8–21.9 s and one session implies **4.35 m/s** — a detector failure the
+  guard does not catch. The page states the 25 yd assumption; nothing can check it.
+  Read-only probes (uncommitted): `scratch/_lb_payload.py`, `_lb_payload2.py`, `_lb_cov.py`,
+  `_lb_edge.py`, `_lb_lap.py`, `_lb_lap2.py`, on top of the discuss-phase `_lb_probe*.py`.
+
+- **Phase 89** (Account model rework) — **📋 NEXT AFTER 90. CONTEXT.md exists
   ([89-account-model-rework/CONTEXT.md](phases/89-account-model-rework/CONTEXT.md), untracked), no
-  plans written.** Phase 90 (Team leaderboards) also has a CONTEXT and no plans. **Next action:
-  `/paul:plan` for Phase 89.**
+  plans written.** ⚠ Its D1 deletes `athletes.team_id NOT NULL` for a membership table, which
+  rewrites Phase 90's roster read — kept to one function (90-02 AC-1) so the cost stays small.
 
 - **Phase 88** (Selectable splits + unit conversion — web report card) — **✅ COMPLETE 2026-09-01,
   5 of 5 plans, every loop closed. Code shipped in `e2c5814` (pushed check owed).**
@@ -994,8 +1061,10 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
   (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
   item 9 (annotate the backlog fast).
-- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 2 of 3 plans closed.
+- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 2 of 3 plans closed, 3 of 3 PLANNED.
   86-01 LOOP CLOSED 2026-08-31; 86-02 LOOP CLOSED 2026-09-01 (PLAN ✓ → APPLY ✓ → UNIFY ✓),
+  **86-03 PLANNED 2026-09-01** (PLAN ✓ → APPLY ○ → UNIFY ○) — the tap test, the phase's only
+  measurement, `autonomous: false` and BUILD-GATED at its human-action checkpoint.
   committed `828ee49` (backend repo: plan + summary + harness) and `1aa45cb` (swimnetics-mobile:
   `sessionClock.js` + `RecordScreen.js`).**
   ⚠ **86-02's APPLY also ran in an unrecorded session** and was left uncommitted with **no SUMMARY** —
@@ -1018,7 +1087,29 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   ✅ **86-01 COMMITTED `861040b` and PUSHED to `main` 2026-08-31; Railway deploy VERIFIED live** —
   `GET /time` went 404 → 200 across the rollout and the deployed `/openapi.json` carries all three
   form fields plus `/time` with no security requirement. **Item 27's deploy-ordering gate is now
-  SATISFIED: the backend is live BEFORE any 86-02 build exists.** 86-03 not written.
+  SATISFIED: the backend is live BEFORE any 86-02 build exists.**
+  🔴 **86-03's PLANNING FOUND THAT PHASE 86's STATED MOTIVATION IS WRONG ABOUT THE OVERLAY.**
+  86-01 and 86-02 both justify themselves as fixing "a live bug in the shipped video overlay."
+  **The shipped overlay does not use the mapping 86-02 corrected.** `VideoOverlayScreen.js:69`
+  computes `endAnchoredOriginS = deviceDurationS − videoDurationS` — a difference of two
+  **durations**, in which `sessionStartPhoneMs` cancels exactly — and that is what is persisted to
+  `sessions.video_origin_s` and read back by both the iOS overlay and the web annotate page. Its own
+  header comment records that the start-anchored predecessor was dropped in Phase 60 because camera
+  warm-up put it **~2 s off**, 25–100× larger than the error this phase chases. What 86-02 genuinely
+  changed is narrower and still real: **`session_start_utc_ms`** (the absolute export for an external
+  video system, which has no end-anchor because its camera is not stopped by our tap) and 84-02's
+  **`go_signal_s`**. ⚠ `RecordScreen.js:769` still carries the stale comment
+  `video_origin_s = (sessionStartPhoneMs − videoStartPhoneMs)/1000`, which is how the mistaken framing
+  survived into two plans — NOT fixed by 86-03, which must not edit the app it measures.
+  → [86-03-PLAN](phases/86-session-clock-accuracy/86-03-PLAN.md). **86-03 redirects the tap test
+  accordingly:** its primary target is the **end-anchored playback origin** (the number a coach
+  actually sees, never validated, independent of 86-02); differencing the two origins on one rep
+  gives the **first real measurement of camera warm-up**; and it **bounds rather than isolates**
+  `rtt/2`, which the plan pre-registers rather than discovering afterwards. Instrument = new
+  `scratch/tap_test.py` reading the **raw** 270 Hz CSV (not the processed trace) plus ffmpeg audio
+  onset cross-checked against ffprobe frame timestamps; bars pre-registered in a committed
+  `TAP-TEST-PROTOCOL.md` BEFORE the run. ✅ **Needs no pool, no swimmer, no water** — the wheel on a
+  desk is enough; the only gate is the EAS build.
   **86-02 = the mobile half, and the only thing that can ever fill 86-01's columns.** Replaces the
   one-shot META with a **burst of 10 timed round trips**, keeps the **minimum** RTT (Cristian's — the
   least-congested sample), and corrects `sessionStartPhoneMs` by `minRTT/2`. That correction is the
@@ -1059,8 +1150,9 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   session. Every claim was re-verified: full `git diff`, `pytest tests/`, a live `TestClient` call on
   `/time` (200, 3 ms off the host clock, no auth header), `python -c "import api"`.
   ⚠ **Phase 86 stays 🚧 — NOT transitioned, NO phase commit. 2 of 3 plans.** Plan/summary counts are
-  equal (2/2), which is exactly the heuristic that wrongly called 83-01 and 83-02 done. **86-03 (the
-  tap test) is not written**, and 86-02's AC-7 is unmet, so the phase cannot close on counts alone.
+  equal (2/2), which is exactly the heuristic that wrongly called 83-01 and 83-02 done. **86-03 is now
+  written but not applied**, and 86-02's AC-7 is unmet, so the phase cannot close on counts alone.
+  Both 86-03 and AC-7 ride the SAME owed EAS build as Phase 84's device-verify batch.
   New phase, not in ROADMAP's 1–85 index and not derived from
   any owed item; it comes out of the SwimClips integration conversation but the first two plans are
   **useful with or without that partnership** — they fix a live bug in the shipped video overlay.
@@ -1516,6 +1608,24 @@ stroke array and its seven asymmetry keys — the same silent-drop shape as item
 the toggle simply does not appear for them. Phase 87 is committed locally and **not pushed**;
 push once, which auto-deploys both, then confirm on a freshly-uploaded freestyle session that the
 toggle appears. ⚠ Do **not** push the frontend alone.
+
+**30. 🔴 `lap_time_s` IS THE RECORDING DURATION, NOT A LAP TIME — and it is on the parent report
+card (found 2026-09-01, Phase 90 planning).** [metrics.py:1870](../metrics.py) computes
+`"lap_time_s": float(t[-1])` — the last timestamp of the trace. Measured across the 84 sessions that
+clear Phase 90's 15 m guard: it disagrees with `finish_s − dive_start_s` on **84 of 84**, median
+**5.75 s**, max **28.29 s**, and **19 of 84 read exactly 39.0 s** — the firmware's fixed record
+length, not a swim. Where it surfaces today: `web/lib/reportMetrics.js` labels it **"Lap Time"** on
+the tokenized **parent report** (`/report/[token]`), `GroupCompare` ranks A/B experiments on it,
+`windowMetrics.js` re-derives a windowed version from it, and `api.py:1678` reads it. ⚠ Measured, not
+inferred: **all 6 rows in the live `reports` table name `lap_time_s` in their `config_json`**, so
+every parent report that exists carries this field. **Phase 90 routes around it** — 90-01 derives
+`elapsed_s = finish_s − dive_start_s` (present on 84/84, median 15.1 s) and bans the string
+`lap_time_s` from its module — but every other surface still shows the stored field. Options: rename
+it honestly (`recording_duration_s`) and add a real `elapsed_s` to the registry with a backfill;
+correct it in place and accept the library-wide comparability break (the 57 / 59-03 / 61-01 / 65 /
+76-77 / 79 pattern); or fix the display surfaces web-only, the 88-02 precedent. ⚠ Whichever is
+chosen, the parent-report surface is the one with a real audience and should not wait for the
+backend decision.
 
 ## Recent arc (compressed)
 - **75-01** skeleton — `MetricSpec` registry (37 specs) + `metrics_json.phases` jsonb + `POST /sessions/{id}/recompute` backfill seam.
