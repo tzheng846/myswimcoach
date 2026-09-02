@@ -15,8 +15,9 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   `autonomous: true`, everything runs off the 8 sessions already in `scratch/taptest/`.
   🔴 **The 2026-09-01 draft was aimed at the wrong domain and was replaced, not amended** —
   see the Phase 86 entry below for what changed and why.
-  **Next action: `/paul:apply .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`.**
-  ⚠ 90-02 was applied first (2026-09-01) and now owes a UNIFY — see Phase 90 below.
+  **Next action: `/paul:apply .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`**, or
+  `/paul:plan .paul/phases/90-team-leaderboards/90-03-PLAN.md` — 90-03 is already written and is
+  now the only plan left in Phase 90.
 - **✅ 86-03 LOOP CLOSED 2026-09-01** (`PLAN ✓ → APPLY ✓ → UNIFY ✓`). Its device run happened and was
   **VOID** under its own pre-registered B3 bar; 86-02's AC-7 passed in the process, which closes
   86-02. 🔴 **PHASE 86 IS NOT TRANSITIONED AND HAS NO PHASE COMMIT — 3 of 3 plans had SUMMARYs, and
@@ -25,13 +26,14 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   end-anchored residual a coach sees) unmeasured. **Closing it on counts would bank a void run as a
   finished measurement.** ~~A successor plan (86-04) is owed~~ → **WRITTEN 2026-09-01, see above.**
   The phase is now **3 of 4 closed, 4 planned**, so the count heuristic no longer reads done either.
-- **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 1 of 3 plans closed, 90-02 APPLIED
-  2026-09-01 and awaiting UNIFY.** Loop: 90-01
+- **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 2 of 3 plans closed. NOT
+  TRANSITIONED — 90-03 is written but unapplied, so the phase is genuinely 2/3, not a count
+  ambiguity.** Loop: 90-01
   `PLAN ✓ → APPLY ✓ → UNIFY ✓` (closed 2026-09-01, [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md));
-  90-02 `PLAN ✓ → APPLY ✓ → UNIFY ○`
-  ([90-02-SUMMARY.md](phases/90-team-leaderboards/90-02-SUMMARY.md), 3/3 tasks, 6/6 AC);
-  90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:unify
-  .paul/phases/90-team-leaderboards/90-02-PLAN.md`.**
+  90-02 ✅ **LOOP CLOSED 2026-09-02** `PLAN ✓ → APPLY ✓ → UNIFY ✓`
+  ([90-02-SUMMARY.md](phases/90-team-leaderboards/90-02-SUMMARY.md));
+  90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:apply
+  .paul/phases/90-team-leaderboards/90-03-PLAN.md`.**
   CONTEXT: [90/CONTEXT.md](phases/90-team-leaderboards/CONTEXT.md) (2 discuss rounds, 8 decisions).
   Waves are strictly serial — 90-01 → 90-02 → 90-03 — because 02 imports 01's catalog and select
   string, and 03 rewrites the `page.js` 02 creates.
@@ -50,6 +52,35 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
     string or a catalog entry.
     See [90-01-PLAN.md](phases/90-team-leaderboards/90-01-PLAN.md) ·
     [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md).
+  - **90-02 — data layer + route** ✅ **LOOP CLOSED 2026-09-02** (wave 2, autonomous, 3/3 tasks,
+    **6/6 AC**). New `web/lib/leaderboardData.js` (one export, `fetchLeaderboard()`, both queries,
+    the Phase-89 seam comment on the function) + `web/app/app/leaderboard/page.js` + one `navLinks`
+    entry + `scratch/_lb_expect.py`. `npm run build` clean at **21 routes** (was 20), eslint
+    **26 problems / 23 errors = zero new**, and **all eight** standing harnesses green *unedited*
+    (`leaderboard_check` 63/63, `anchor_check` 17/17, `stroke_toggle_check` 63/63,
+    `overlay_render_check` 40/40, `marketing_render_check` 45/45, `unit_check` 63/63,
+    `split_picker_check` 44/44, `trend_toggle_check` 39/39).
+    ✅ **The stroke census holds exactly:** `_lb_expect.py` prints **freestyle 7 ath / 42 sw ·
+    butterfly 4 / 28 · breaststroke 5 / 12 · backstroke 2 / 2**, four blocks summing to 84, and
+    **no udk block** — all five udk sessions measure 9.87–13.48 m and the guard removes every one.
+    Breaststroke reads **4 of 5** on Split 15–20 m, so CONTEXT F6's live counter-example is
+    confirmed on real data, not hypothesised.
+    ⚠ **The library grew to 108 sessions during Phase 86** — the plan measured 99. The 9 new rows
+    are 86-03's tap-test bench runs (2026-09-01 22:04–22:15 local, 0.0008–0.095 m), **all under the
+    guard, so eligible is still exactly 84 and every stroke count is unchanged.** Only the
+    denominator moved: because AC-4 requires the caveat to be computed, the page reads "24 of 108
+    excluded", not the plan's 15 of 99. That is the AC working.
+    ⚠ **Deviation:** the plan said to reuse `GroupCompare.js`'s `STROKE_LABELS`, but that copy is
+    module-local; an identical map is **exported** from `SessionCard.js` and already imported by two
+    other files, so that one was imported instead. `web/lib/leaderboard.js` was therefore never
+    edited and the boundary's sanctioned exception went unused. `GroupCompare.js` keeps its private
+    duplicate — deduplicating it would touch a file AC-5 forbids changing.
+    ⚠ **AC-3/AC-4/AC-6 are verified by the build plus an independent server-side census, NOT by a
+    rendered page.** The route sits behind the portal auth gate and this plan shipped no render
+    harness by design. **90-03's blocking human-verify is the first human sighting of these tabs,
+    and it should diff the on-screen counts against `scratch/_lb_expect.py`.**
+    See [90-02-PLAN.md](phases/90-team-leaderboards/90-02-PLAN.md) ·
+    [90-02-SUMMARY.md](phases/90-team-leaderboards/90-02-SUMMARY.md).
   - **90-02 — data layer + route** (wave 2, `depends_on: ["90-01"]`, autonomous). One
     `fetchLeaderboard()` in `web/lib/leaderboardData.js` — **the single seam Phase 89 D1 will
     rewrite** (CONTEXT R4) — plus `/app/leaderboard` with stroke tabs, the caveat block and one nav

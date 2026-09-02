@@ -11,6 +11,7 @@ const navLinks = [
   { href: "/app/sessions", label: "Sessions" },
   { href: "/app/match", label: "Match videos" },
   { href: "/app/compare", label: "Compare" },
+  { href: "/app/leaderboard", label: "Leaderboard" },
   { href: "/app/reports", label: "Reports" },
 ];
 
