@@ -8,13 +8,15 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
-- **📋 86-04 PLAN CREATED 2026-09-01, awaiting approval** (`PLAN ✓ → APPLY ○ → UNIFY ○`) —
+- **📋 86-04 PLAN CREATED 2026-09-01, REWRITTEN 2026-09-02, awaiting approval**
+  (`PLAN ✓ → APPLY ○ → UNIFY ○`) —
   [86-04-PLAN.md](phases/86-session-clock-accuracy/86-04-PLAN.md). **Repairs the instrument that
   voided 86-03; produces NO B1 measurement and spends no device time or EAS build.** 3 auto tasks,
   `autonomous: true`, everything runs off the 8 sessions already in `scratch/taptest/`.
-  **Next action: `/paul:apply .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`**, or
-  `/paul:apply .paul/phases/90-team-leaderboards/90-02-PLAN.md` if leaderboards are the priority
-  (90 was mid-phase when 86-03 was resumed).
+  🔴 **The 2026-09-01 draft was aimed at the wrong domain and was replaced, not amended** —
+  see the Phase 86 entry below for what changed and why.
+  **Next action: `/paul:apply .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`.**
+  ⚠ 90-02 was applied first (2026-09-01) and now owes a UNIFY — see Phase 90 below.
 - **✅ 86-03 LOOP CLOSED 2026-09-01** (`PLAN ✓ → APPLY ✓ → UNIFY ✓`). Its device run happened and was
   **VOID** under its own pre-registered B3 bar; 86-02's AC-7 passed in the process, which closes
   86-02. 🔴 **PHASE 86 IS NOT TRANSITIONED AND HAS NO PHASE COMMIT — 3 of 3 plans had SUMMARYs, and
@@ -23,9 +25,12 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   end-anchored residual a coach sees) unmeasured. **Closing it on counts would bank a void run as a
   finished measurement.** ~~A successor plan (86-04) is owed~~ → **WRITTEN 2026-09-01, see above.**
   The phase is now **3 of 4 closed, 4 planned**, so the count heuristic no longer reads done either.
-- **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 1 of 3 plans closed.** Loop: 90-01
+- **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 1 of 3 plans closed, 90-02 APPLIED
+  2026-09-01 and awaiting UNIFY.** Loop: 90-01
   `PLAN ✓ → APPLY ✓ → UNIFY ✓` (closed 2026-09-01, [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md));
-  90-02 and 90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:apply
+  90-02 `PLAN ✓ → APPLY ✓ → UNIFY ○`
+  ([90-02-SUMMARY.md](phases/90-team-leaderboards/90-02-SUMMARY.md), 3/3 tasks, 6/6 AC);
+  90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:unify
   .paul/phases/90-team-leaderboards/90-02-PLAN.md`.**
   CONTEXT: [90/CONTEXT.md](phases/90-team-leaderboards/CONTEXT.md) (2 discuss rounds, 8 decisions).
   Waves are strictly serial — 90-01 → 90-02 → 90-03 — because 02 imports 01's catalog and select
@@ -1088,30 +1093,47 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   item 9 (annotate the backlog fast).
 - **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 3 of 4 plans
   CLOSED, 4 planned. 86-04 PLANNED 2026-09-01 (`PLAN ✓ → APPLY ○ → UNIFY ○`).**
-  - **86-04 — repair the instrument, re-register the run** (wave 4, `depends_on: ["86-03"]`,
-    **autonomous: true**). 3 auto tasks, **zero device time and zero EAS builds** — everything runs
-    off the 8 sessions already in `scratch/taptest/`. (1) Add `--measure-ringdown` and measure the
-    wheel's ring-down from the 8 raw CSVs; (2) set `REFRACTORY_S` from that measurement, add an
-    **encoder-side** ambiguity + contention rejection so a mispair is rejected instead of laundered,
-    and pin the whole repair with a fixture that reproduces 86-03's defect **both ways** (old
-    constants launder it, new ones do not); (3) re-analyse the void run as an in-sample diagnostic
-    and append a `## 10. Confirmatory run (86-05)` registration to the protocol.
-    🔴 **THE REFRACTORY CONSTANT IS CHOSEN BY A RULE WRITTEN INTO THE PLAN BEFORE THE NUMBER EXISTS**
-    (`R = max short gap`, `L = min long gap`, valley criterion `L > 2R` at classifiers 1.0/1.5/2.0 s,
-    then `REFRACTORY_S = ceil(1.5R/0.05)·0.05` with `REFRACTORY_S < L/2`), and Task 1 commits the
-    measurement **before** Task 2 moves the constant. **If the valley criterion fails, no constant is
-    chosen and that is the plan's result** — ring-down would not be separable from strikes by time
-    alone, which is a different discriminator and a new plan.
-    🔴 **THE PLAN FORBIDS THE OBVIOUS FIX.** A rejection rule keyed on distance from the session
-    median residual would rescue B1 by construction — 86-03 already measured what it gives
-    (**−1.79 ± 9.88 ms**), and that number is exactly what pre-registration exists to stop anyone
-    quoting. Rejections must be **structural** (one-to-one pairing; second-nearest tap within
-    `REFRACTORY_S` ⇒ ambiguous), never residual-derived.
-    ⚠ **`MATCH_WINDOW_S` is frozen** even though 86-03 named it a contributing factor — one lever at
-    a time, or the fixture cannot say which change did the work.
-    ⚠ **B1 IS NOT MEASURED BY THIS PLAN and its numbers are IN-SAMPLE by construction** (the detector
-    is derived from this corpus). The recomputed acceptance rate is an **upper bound** on the
-    repaired instrument's health, not an estimate of it. B1 stays unmeasured until 86-05.
+  - **86-04 — find on velocity, time on raw** (wave 4, `depends_on: ["86-03"]`,
+    **autonomous: true**). **REWRITTEN 2026-09-02.** 3 auto tasks, **zero device time and zero EAS
+    builds** — everything runs off the 8 sessions already in `scratch/taptest/`.
+    🔴 **THE 2026-09-01 DRAFT WAS AIMED AT THE WRONG DOMAIN.** It proposed measuring the wheel's
+    ring-down and setting a `REFRACTORY_S` to collapse it, all inside the raw `|diff(counts)|` domain.
+    Tony pushed back — *"on the velocity trace it looked like a giant spike, it was very obvious when
+    the tap was"* — and read-only probes (`scratch/_tap_domain.py`, `_tap_domain2.py`) confirmed it on
+    all 8 sessions: with a **peak-relative** threshold, decimated `|velocity|` holds a **flat event
+    count from 10 % to 35 %** of the session maximum on every session, while raw jerk never stabilises
+    (6–12 events, wobbling at every threshold step). **The strike was never hard to see — it was hard
+    to see in that domain.** No refractory constant is needed at all; the smoothing collapses ring-down.
+    ⚠ **BUT VELOCITY CANNOT CARRY THE TIMING.** The velocity peak lags the raw strike by **+16.3 ms
+    pooled (n = 34, SD 22.6)**, per-session means **−5.0 → +39.4 ms**. Against B1's 33 ms bar, and
+    varying session to session so it would **not** cancel as a constant, timing on velocity would
+    manufacture exactly the clock error the test exists to detect. Hence the split the plan is built on:
+    **FIND on velocity, TIME on raw (argmax of `|diff(counts)|` in a ±0.25 s window, 3.7 ms, no filter
+    in the path), CHECK by interval pattern** (encoder gaps vs audio gaps — clock-offset-free by
+    construction, so it is a real encoder-side check and not a disguised look at the answer).
+    🔴 **THE PLAN NO LONGER CLAIMS TO PRE-REGISTER ITS CONSTANTS, BECAUSE IT CANNOT.** The sweep was
+    already run on this corpus. `TAP_FRAC` / `RAW_REFINE_WINDOW_S` / `PAIR_TOL_S` are **tuned in-sample
+    and say so**. What is genuinely pre-registered: each constant must equal what its written
+    derivation rule produces from Task 1's printed measurement (**the rule wins over the anticipated
+    value**), all three are frozen before 86-05's data exists, and **this corpus is spent** — it
+    developed the instrument, so it can never measure the clock.
+    🔴 **THE PLAN STILL FORBIDS THE OBVIOUS FIX**, and now a second one. (a) No rejection rule keyed
+    on the residual or its session median — 86-03 already measured what that gives (**−1.79 ± 9.88 ms**)
+    and it would rescue B1 by construction. (b) **No audio-onset-count hint into the encoder detector**:
+    it would raise acceptance by coupling the two sensors the test keeps independent. The honest cost of
+    under-detection is n, and §7 shows n is cheap — so the fix belongs in the protocol (strike with
+    consistent force, ≥ 8 strikes per session), not in the detector.
+    ⚠ **UNDER-DETECTION IS PREDICTED AND PRE-STATED**: velocity candidates total **34 against 42 audio
+    onsets**, an **~81 % ceiling still under B3's 90 % bar**. Written into the plan before Task 3 runs so
+    it cannot be discovered and then rationalised. Its cause is **not established** — Task 1 measures it
+    by reporting the velocity amplitude at each unmatched onset. Under-detection is the **safe** failure:
+    a missed strike leaves its onset unmatched inside `MATCH_WINDOW_S` (1.4 s vs ~3 s spacing) and is
+    rejected and counted — visible, not laundered, unlike 86-03's confident wrong answers.
+    ⚠ **`MATCH_WINDOW_S` stays frozen**, and now for a positive reason: with a clean encoder list it is
+    what converts a missed strike into an honest rejection. `find_taps` and its `k=10.0` must also
+    survive — the fixture needs the 86-03 detector to reproduce the defect, so deleting it deletes the
+    test.
+    ⚠ **B1 IS NOT MEASURED BY THIS PLAN.** It stays unmeasured until 86-05.
     ⚠ **86-05 is owed and needs a mobile change**: `videoStartPhoneMs` is never persisted, so B2
     (camera warm-up) and B4 (`rtt/2` symmetry) are unmeasurable without an app edit + EAS build.
     See [86-04-PLAN.md](phases/86-session-clock-accuracy/86-04-PLAN.md).
