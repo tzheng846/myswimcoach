@@ -70,6 +70,8 @@ Needs ffmpeg + ffprobe on PATH. Read-only: never writes to Supabase, never touch
 """
 
 import argparse
+import contextlib
+import io
 import json
 import math
 import os
@@ -262,6 +264,112 @@ def find_taps(t_s, counts, k=10.0, refractory_s=REFRACTORY_S):
             pass  # inside refractory of the previous strike — same physical event
         i = j
     return taps, float(thresh)
+
+
+# ── 86-04: the detection domain ────────────────────────────────────────────────
+#
+# find_taps above is the 86-03 detector. It over-triggers on the struck wheel's ring-down (10-28
+# events for ~5 strikes), which is what voided 86-03's run. The strike was never hard to see — it
+# was hard to see IN THAT DOMAIN. The helpers below measure the alternative and are used by
+# --measure-domain; 86-04 Task 2 builds the production detector on them.
+#
+# find_taps must SURVIVE regardless: the ring-down fixture needs the 86-03 detector in order to
+# reproduce the defect, so deleting it would delete the test.
+
+# Threshold grid for the peak-relative sweep. Fractions of the session's own maximum, not of a
+# noise floor: a MAD threshold is strictly WORSE in the velocity domain (430-542 crossings vs
+# 101-302 in raw), so the win comes from peak-relative thresholding in the SMOOTHED domain, not
+# from the domain alone.
+FRAC_GRID = (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60)
+
+# Search half-width used BY --measure-domain ONLY, to pair a velocity candidate with its raw
+# strike while the real window is still being derived. Deliberately generous: if the largest
+# observed offset ever approaches it, the window is binding and the measurement is worthless —
+# --measure-domain checks exactly that and says so.
+DOMAIN_PROBE_WINDOW_S = 0.25
+
+# How close a velocity candidate must be to an audio onset to count as "found it", when tallying
+# which onsets the velocity domain misses. Coarse on purpose — this is a count, not a timing.
+UNMATCHED_ONSET_WINDOW_S = 0.5
+
+# Below this, two audio onsets cannot be told apart from one strike that re-triggered the audio
+# detector — an echo, or the wheel's own acoustic ring. NOT a tuned number: it is twice
+# audio_onsets()'s own refractory, so it is the detector's stated resolution limit and nothing
+# more. Onsets inside it are FLAGGED and reported, never silently dropped: the audio count is the
+# independent sensor 86-04 leans on, and an inflated one would misattribute audio over-triggering
+# to velocity under-detection.
+AUDIO_RETRIGGER_LIMIT_S = 2 * REFRACTORY_S
+
+
+def velocity_profile(csv_path):
+    """
+    Decimated |velocity| from the production pipeline.
+
+    Imports vel_acc_extraction, which --validate-timebase already depends on. Note this is the
+    OPPOSITE dependency posture to read_raw, which avoids the import on purpose so that AC-2
+    compares two independent implementations. Here we WANT production's own smoothing, because
+    that smoothing is the thing being exploited.
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    import vel_acc_extraction as vae  # noqa: E402
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):  # load_data prints; callers want a clean table
+        df = vae.load_data(str(csv_path))
+        t_dec, _dist, vel, _accel, fs = vae.run_pipeline(df, target_fs_hz=vae.TARGET_FS_HZ)
+    av = np.nan_to_num(np.abs(np.asarray(vel, dtype=float)), nan=0.0)
+    return np.asarray(t_dec, dtype=float), av, float(fs)
+
+
+def peak_relative_events(t, y, frac):
+    """
+    Argmax of each contiguous run above `frac * max(y)`.
+
+    NO REFRACTORY ARGUMENT, and none should be added: collapsing ring-down is what the velocity
+    domain does for free, and reintroducing a refractory constant would put back the tuning knob
+    86-04 exists to remove.
+    """
+    peak = float(np.max(y)) if len(y) else 0.0
+    if peak <= 0:
+        return []
+    above = y > frac * peak
+    out, i, n = [], 0, len(above)
+    while i < n:
+        if not above[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and above[j]:
+            j += 1
+        out.append(float(t[i + int(np.argmax(y[i:j]))]))
+        i = j
+    return out
+
+
+def raw_jerk(counts):
+    """|d(counts)| with the dropout guard find_taps applies, shared so both domains see the same
+    signal. Element k spans samples k -> k+1."""
+    j = np.abs(np.diff(counts))
+    return np.where(j >= MAX_PLAUSIBLE_COUNTS_PER_SAMPLE, 0.0, j)
+
+
+def longest_plateau(counts_by_frac):
+    """
+    Longest run of constant event count across FRAC_GRID, as a [start, end) index pair.
+
+    Ties break toward the EARLIER (lower-fraction) run, matching the tie-break direction of the
+    TAP_FRAC rule itself: a lower threshold cannot miss a strike a higher one found.
+    """
+    best = (0, 0)
+    i, n = 0, len(counts_by_frac)
+    while i < n:
+        j = i
+        while j < n and counts_by_frac[j] == counts_by_frac[i]:
+            j += 1
+        if (j - i) > (best[1] - best[0]):
+            best = (i, j)
+        i = j
+    return best
 
 
 # ── video side ─────────────────────────────────────────────────────────────────
@@ -741,6 +849,258 @@ def validate_timebase(raw_dir, limit=None, verbose=True):
     return (not bad), rows, skipped
 
 
+# ── 86-04 AC-1: measure the detection domain ───────────────────────────────────
+
+def measure_domain(tap_dir, verbose=True):
+    """
+    86-04 AC-1 — measure which domain the strike is visible in, and what the three derivation
+    rules produce from that measurement.
+
+    READ-ONLY. Touches nothing but stdout. Changes no constant: 86-04's Task 1 commits this
+    measurement BEFORE Task 2 moves anything, and that ordering is not recoverable after the fact.
+
+    ⚠ THIS IS IN-SAMPLE AND THE PLAN SAYS SO. The sweep was run on the void corpus before the plan
+    was written, so the constants it produces are TUNED on this data, not pre-registered against
+    it. What is pre-registered is that each constant must equal what its rule produces here, and
+    that all of them freeze before 86-05's data exists. This corpus is spent: it develops the
+    instrument, so it can never measure the clock.
+
+    Reads each session's *.csv and its *.json sidecar (audio onsets from the void run, which are
+    the independent sensor). Never opens a video.
+    """
+    files = sorted(Path(tap_dir).glob("*.csv"))
+    if not files:
+        raise SystemExit(f"no CSVs in {tap_dir}")
+
+    sessions = []
+    for csv in files:
+        enc = read_raw(csv)
+        t_dec, av, fs = velocity_profile(csv)
+        jerk = raw_jerk(enc["counts"])
+        t_jerk = enc["t_s"][1:]  # jerk[k] spans k -> k+1, so it is timed at k+1
+
+        side = csv.with_suffix(".json")
+        onsets, sound_delay, end_origin = [], 0.0, None
+        if side.exists():
+            j = json.loads(side.read_text(encoding="utf-8"))
+            onsets = sorted(float(r["video_time_s"]) for r in j.get("taps", []))
+            sound_delay = float(j.get("sound_delay_ms") or 0.0) / 1000.0
+            end_origin = j.get("end_anchored_origin_s")
+        sessions.append({
+            "name": csv.stem, "t_dec": t_dec, "av": av, "fs": fs,
+            "t_jerk": t_jerk, "jerk": jerk,
+            "onsets": onsets, "sound_delay": sound_delay,
+            "end_origin": None if end_origin is None else float(end_origin),
+        })
+
+    # ── block 1: the sweep, both domains ──
+    if verbose:
+        print("\n=== 1. EVENT COUNT vs PEAK-RELATIVE THRESHOLD ===")
+        print("Fractions are of each session's OWN maximum. Audio onsets are the independent count.")
+        print(f"\n{'session':<14}" + "".join(f"{f:>6.0%}" for f in FRAC_GRID)
+              + f"{'audio':>8}  {'plateau':>13}")
+        print("-" * 88)
+
+    membership = {f: 0 for f in FRAC_GRID}
+    for s in sessions:
+        counts = [len(peak_relative_events(s["t_dec"], s["av"], f)) for f in FRAC_GRID]
+        a, b = longest_plateau(counts)
+        s["vel_counts"] = counts
+        s["plateau"] = (a, b)
+        for i in range(a, b):
+            membership[FRAC_GRID[i]] += 1
+        if verbose:
+            print(f"{s['name']:<14}" + "".join(f"{c:6d}" for c in counts)
+                  + f"{len(s['onsets']):8d}"
+                  + f"   {FRAC_GRID[a]:.0%}-{FRAC_GRID[b - 1]:.0%} @{counts[a]}")
+
+    if verbose:
+        print(f"\n{'(raw jerk)':<14}" + "".join(f"{f:>6.0%}" for f in FRAC_GRID) + "   for contrast")
+        print("-" * 88)
+        for s in sessions:
+            rc = [len(peak_relative_events(s["t_jerk"], s["jerk"], f)) for f in FRAC_GRID]
+            a, b = longest_plateau(rc)
+            print(f"{s['name']:<14}" + "".join(f"{c:6d}" for c in rc)
+                  + f"{'':8}   {FRAC_GRID[a]:.0%}-{FRAC_GRID[b - 1]:.0%} @{rc[a]}")
+
+    best_n = max(membership.values())
+    tap_frac = min(f for f in FRAC_GRID if membership[f] == best_n)  # ties -> smaller
+    if verbose:
+        print("\n  RULE: the grid value inside the most sessions' plateaus; ties -> the smaller.")
+        print("  in-plateau counts: "
+              + "  ".join(f"{f:.0%}={membership[f]}" for f in FRAC_GRID))
+        print(f"  -> TAP_FRAC = {tap_frac:.2f}  (inside {best_n} of {len(sessions)} plateaus)")
+
+    # ── block 2: timing offsets, velocity peak vs raw strike ──
+    pooled, per_session, min_gap, all_gaps = [], [], None, []
+    for s in sessions:
+        ev = peak_relative_events(s["t_dec"], s["av"], tap_frac)
+        s["vel_events"] = ev
+        deltas = []
+        for te in ev:
+            m = (s["t_jerk"] > te - DOMAIN_PROBE_WINDOW_S) & (s["t_jerk"] < te + DOMAIN_PROBE_WINDOW_S)
+            if not m.any():
+                continue
+            tr = float(s["t_jerk"][m][int(np.argmax(s["jerk"][m]))])
+            deltas.append((te - tr) * 1000.0)
+        per_session.append((s["name"], deltas))
+        pooled += deltas
+        # Onsets whose gap is inside the audio detector's own resolution limit cannot be told
+        # apart from a re-trigger of a single strike. Recorded per session for the report below.
+        s["flagged_onsets"] = set()
+        for a, b in zip(s["onsets"], s["onsets"][1:]):
+            gap = b - a
+            all_gaps.append((s["name"], a, b, gap))
+            if gap < AUDIO_RETRIGGER_LIMIT_S:
+                s["flagged_onsets"].add(b)
+            min_gap = gap if min_gap is None else min(min_gap, gap)
+
+    if verbose:
+        print("\n=== 2. TIMING: velocity peak minus raw strike, at TAP_FRAC ===")
+        print("This is why detection and timing live in different domains.")
+        print(f"\n{'session':<14}{'n':>4}{'mean ms':>10}{'sd':>8}{'min':>9}{'max':>9}")
+        print("-" * 88)
+        for name, d in per_session:
+            if not d:
+                print(f"{name:<14}{0:>4}{'-':>10}")
+                continue
+            a = np.array(d)
+            print(f"{name:<14}{len(a):>4}{a.mean():>+10.1f}{a.std(ddof=0):>8.1f}"
+                  f"{a.min():>+9.1f}{a.max():>+9.1f}")
+
+    p = np.array(pooled) if pooled else np.array([0.0])
+    max_off_s = float(np.max(np.abs(p))) / 1000.0
+    raw_window = math.ceil(4 * max_off_s / 0.05) * 0.05
+    window_binding = max_off_s > 0.8 * DOMAIN_PROBE_WINDOW_S
+    gap_ok = min_gap is not None and raw_window < min_gap / 2.0
+
+    if verbose:
+        fs0 = sessions[0]["fs"]
+        print(f"{'POOLED':<14}{len(p):>4}{p.mean():>+10.1f}{p.std(ddof=0):>8.1f}"
+              f"{p.min():>+9.1f}{p.max():>+9.1f}"
+              f"   | B1 bar 33 ms | 1 decimated sample {1000.0 / fs0:.1f} ms")
+        print("\n  RULE: RAW_REFINE_WINDOW_S = ceil(4 * max|offset| / 0.05) * 0.05,")
+        print("        asserted below half the smallest observed inter-strike gap.")
+        print(f"  max|offset| = {max_off_s * 1000:.1f} ms  ->  RAW_REFINE_WINDOW_S = {raw_window:.2f} s")
+        print(f"  ASSERT probe window not binding: max|offset| is "
+              f"{max_off_s / DOMAIN_PROBE_WINDOW_S:.0%} of the {DOMAIN_PROBE_WINDOW_S} s probe "
+              f"window -> {'FAIL (measurement worthless)' if window_binding else 'OK'}")
+        print(f"  ASSERT {raw_window:.2f} < min_gap/2 = "
+              f"{'n/a' if min_gap is None else f'{min_gap / 2:.2f}'} s "
+              f"(smallest observed inter-strike gap "
+              f"{'n/a' if min_gap is None else f'{min_gap:.2f}'} s) -> "
+              f"{'OK' if gap_ok else 'FAIL'}")
+
+    # The gap population itself, because the assertion above passed by 0.01 s and the reader is
+    # entitled to know why it was that tight rather than being handed a bare OK.
+    flagged = [g for g in all_gaps if g[3] < AUDIO_RETRIGGER_LIMIT_S]
+    if verbose and all_gaps:
+        gv = np.array([g[3] for g in all_gaps])
+        clean = gv[gv >= AUDIO_RETRIGGER_LIMIT_S]
+        print(f"\n  AUDIO ONSET GAPS ({len(gv)} across {len(sessions)} sessions): "
+              f"min {gv.min():.2f}  median {np.median(gv):.2f}  max {gv.max():.2f} s "
+              f"(protocol asks ~3 s)")
+        if flagged:
+            print(f"  !! {len(flagged)} gap(s) INSIDE the audio detector's own resolution limit "
+                  f"({AUDIO_RETRIGGER_LIMIT_S:.1f} s = 2x its refractory):")
+            for name, a, b, gap in flagged:
+                print(f"       {name}: onsets {a:.3f} and {b:.3f} s are {gap:.2f} s apart")
+            print("     These CANNOT be told apart from one strike re-triggering the audio")
+            print("     detector (an echo, or the wheel's own acoustic ring). So the audio onset")
+            print("     count is NOT clean ground truth, and part of the velocity-vs-audio count")
+            print("     mismatch below is audio OVER-triggering, not velocity under-detection.")
+            print(f"     Excluding them the smallest gap is {clean.min():.2f} s, and the window")
+            print(f"     assertion would clear by {clean.min() / 2 - raw_window:.2f} s instead of "
+                  f"{min_gap / 2 - raw_window:.2f} s.")
+            print("     NOT ACTED ON. 86-04's rule is evaluated on the gaps as observed, and it")
+            print("     PASSES as written. This is disclosure, not a correction.")
+
+    # ── block 3: interval pattern, encoder vs audio ──
+    # Differences of gaps, so ANY constant clock offset between the two sensors cancels exactly.
+    # That is what makes this a legitimate encoder-side check and not a look at the answer.
+    ivals, n_sess_matched = [], 0
+    if verbose:
+        print("\n=== 3. INTERVAL PATTERN: encoder gaps vs audio gaps (clock-offset-free) ===")
+        print(f"\n{'session':<14}{'vel':>5}{'audio':>7}{'max |delta| ms':>17}{'mean':>9}")
+        print("-" * 88)
+    for s in sessions:
+        ev, on = s["vel_events"], s["onsets"]
+        if len(ev) == len(on) and len(ev) > 1:
+            d = (np.diff(ev) - np.diff(on)) * 1000.0
+            ivals += list(np.abs(d))
+            n_sess_matched += 1
+            if verbose:
+                print(f"{s['name']:<14}{len(ev):>5}{len(on):>7}"
+                      f"{np.max(np.abs(d)):>17.1f}{d.mean():>+9.1f}")
+        elif verbose:
+            print(f"{s['name']:<14}{len(ev):>5}{len(on):>7}"
+                  f"{'COUNT MISMATCH - no pattern test':>34}")
+
+    max_ival_s = (max(ivals) / 1000.0) if ivals else 0.0
+    pair_tol = math.ceil(2 * max_ival_s / 0.01) * 0.01
+    if verbose:
+        print("\n  RULE: PAIR_TOL_S = ceil(2 * max|interval delta| / 0.01) * 0.01")
+        print(f"  max|delta| = {max_ival_s * 1000:.1f} ms  ->  PAIR_TOL_S = {pair_tol:.2f} s")
+        print(f"  !! THIN BASIS: {n_sess_matched} of {len(sessions)} sessions, "
+              f"{len(ivals)} intervals. Reported as such, not laundered into confidence.")
+
+    # ── block 4: which onsets the velocity domain misses, and whether anything was there ──
+    if verbose:
+        print("\n=== 4. UNMATCHED AUDIO ONSETS: was there a strike the velocity domain missed? ===")
+        print("Velocity amplitude at each unmatched onset, as a fraction of the session peak.")
+        print("A soft-but-real strike sits a few percent up; nothing-there sits at the floor.")
+        print(f"\n{'session':<14}{'onset v_s':>11}{'session s':>11}{'amp/peak':>10}   reading")
+        print("-" * 88)
+    n_unmatched, n_total_onsets, n_unmatched_flagged = 0, 0, 0
+    for s in sessions:
+        n_total_onsets += len(s["onsets"])
+        if s["end_origin"] is None:
+            continue
+        peak = float(np.max(s["av"])) or 1.0
+        for onset in s["onsets"]:
+            t_sess = onset - s["sound_delay"] + s["end_origin"]
+            if s["vel_events"] and min(abs(e - t_sess) for e in s["vel_events"]) <= UNMATCHED_ONSET_WINDOW_S:
+                continue
+            n_unmatched += 1
+            is_flagged = onset in s["flagged_onsets"]
+            n_unmatched_flagged += int(is_flagged)
+            m = (s["t_dec"] > t_sess - 0.15) & (s["t_dec"] < t_sess + 0.15)
+            amp = float(np.max(s["av"][m])) / peak if m.any() else float("nan")
+            if verbose:
+                reading = ("no local velocity window" if math.isnan(amp)
+                           else "soft strike, real" if amp >= 0.05
+                           else "at the noise floor - not a strike")
+                if is_flagged:
+                    reading += "  [audio re-trigger suspect]"
+                print(f"{s['name']:<14}{onset:>11.3f}{t_sess:>11.3f}{amp:>10.1%}   {reading}")
+    if verbose:
+        if not n_unmatched:
+            print("  (none)")
+        print(f"\n  {n_unmatched} of {n_total_onsets} audio onsets unmatched at TAP_FRAC = "
+              f"{tap_frac:.2f}  ->  ceiling {1 - n_unmatched / max(1, n_total_onsets):.0%} "
+              f"acceptance, against B3's 90%")
+        if n_unmatched_flagged:
+            print(f"  of which {n_unmatched_flagged} sit inside the audio detector's resolution")
+            print("  limit, so they may never have been separate strikes at all.")
+        print("  86-04 PREDICTED this before the re-run. Under-detection is the SAFE failure: a")
+        print("  missed strike leaves its onset unmatched and REJECTED, visible rather than")
+        print("  laundered into a confident wrong answer the way 86-03's over-triggering was.")
+        print("\n" + "=" * 88)
+        print("CONSTANTS THE RULES PRODUCE (86-04 Task 2 must enter exactly these):")
+        print(f"  TAP_FRAC            = {tap_frac:.2f}")
+        print(f"  RAW_REFINE_WINDOW_S = {raw_window:.2f}"
+              f"   [{'OK' if (gap_ok and not window_binding) else 'ASSERTION FAILED'}]")
+        print(f"  PAIR_TOL_S          = {pair_tol:.2f}")
+        print("=" * 88)
+
+    ok = bool(gap_ok and not window_binding)
+    return ok, {"tap_frac": tap_frac, "raw_refine_window_s": raw_window,
+                "pair_tol_s": pair_tol, "n_unmatched": n_unmatched,
+                "n_onsets": n_total_onsets, "min_gap_s": min_gap,
+                "max_offset_ms": max_off_s * 1000, "max_interval_delta_ms": max_ival_s * 1000,
+                "n_interval_sessions": n_sess_matched, "n_intervals": len(ivals)}
+
+
 # ── AC-1 / AC-3 / AC-4: synthetic fixtures ─────────────────────────────────────
 
 def _make_raw_csv(path, taps_s, fs=270.0, duration_s=30.0):
@@ -984,6 +1344,8 @@ def main():
     ap.add_argument("--keep-fixtures", action="store_true")
     ap.add_argument("--validate-timebase", metavar="DIR",
                     help="raw time base vs the production pipeline (AC-2)")
+    ap.add_argument("--measure-domain", metavar="DIR",
+                    help="86-04 AC-1: which domain the strike is visible in (read-only)")
     ap.add_argument("--limit", type=int, default=None)
 
     ap.add_argument("--raw", help="raw encoder CSV for one rep")
@@ -1001,6 +1363,10 @@ def main():
 
     if args.validate_timebase:
         ok, _, _ = validate_timebase(args.validate_timebase, limit=args.limit)
+        return 0 if ok else 1
+
+    if args.measure_domain:
+        ok, _ = measure_domain(args.measure_domain)
         return 0 if ok else 1
 
     missing = [n for n, v in (
