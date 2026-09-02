@@ -25,6 +25,20 @@ tech-stack:
     - "an instrument bar (B3) that can VOID a run, evaluated before the result bar (B1) is read"
     - "two independent readouts of the same event, with disagreement as a rejection rule"
 
+key-files:
+  created: [scratch/tap_test.py, .paul/phases/86-session-clock-accuracy/TAP-TEST-PROTOCOL.md]
+  modified: [scratch/tap_test.py]
+
+key-decisions:
+  - "Record the run VOID rather than tune the detector to rescue B1 (user's call at the failure checkpoint)"
+  - "Make --video-start-phone-ms optional so B1 stayed computable and B2/B4 were reported unmeasured, never invented"
+  - "Report B1's passing numbers but refuse them as a result, because B3 is a precondition not a companion metric"
+
+patterns-established:
+  - "an instrument bar (B3) evaluated BEFORE the result bar (B1) is read, with the power to void a run"
+  - "post-run protocol amendments allowed only as dated, justified public-log entries"
+  - "a rejection rule must be checked against the failure mode that actually occurs, not the one imagined"
+
 # Metrics
 tests-added: 0       # tap_test.py is an instrument, not a standing harness (plan boundary)
 tests-passing: 566   # pytest unchanged
@@ -32,11 +46,14 @@ sessions-collected: 8
 taps-accepted: 35
 taps-total: 42
 acceptance-rate: 0.833   # bar >= 0.90 -> FAIL
+duration: ~5h wall clock across 2 sessions (Tasks 1-3, then the build gate, then Tasks 4-5)
+started: 2026-09-01T17:21:00-07:00   # Tasks 1-3 committed (3f4d2c7)
+completed: 2026-09-01T22:29:00-07:00 # Tasks 4-5 committed (941e513)
 ---
 
 # Phase 86 Plan 03: Tap Test Summary
 
-**Status: CLOSED 2026-09-02 with a VOID RUN.** The device run happened, the data is good enough to
+**Status: CLOSED 2026-09-01 with a VOID RUN.** The device run happened, the data is good enough to
 diagnose but not good enough to trust, and **B3 — the instrument bar, which the protocol declares
 voids the run — FAILED at 83.3% tap acceptance against a 90% bar.** B1's numbers are therefore
 reported below but carry no evidential weight. Recording the run as void was the user's explicit
@@ -81,7 +98,7 @@ failed. A pooled mean computed over a set that includes known mispairs is not an
 `videoStartPhoneMs` was not recorded for any of the 8 sessions, and it is **never persisted**: it
 exists only in React state and the `RecordScreen.js:854` on-screen log line. Not in the DB; not in the
 clip container, whose `creation_time` has 1-second resolution against a 33 ms bar. Without it there is
-no start-anchored origin and therefore no warm-up. See the 2026-09-02 amendment.
+no start-anchored origin and therefore no warm-up. See the 2026-09-01 amendment.
 
 ⚠ **One suggestive observation, explicitly NOT a measurement of B2.** `deviceDuration − videoDuration`
 is **0.6913 s, SD 28.4 ms** across all 8 sessions. That quantity is start-lag *plus* stop-lag, and it
@@ -211,6 +228,67 @@ this plan does not test it, and both tap readouts share the phone clock so it ca
 | AC-7 the phase's estimates are settled | ⚠ **PARTIAL** — every number above carries its rep count and SE, and the measured/estimated table is complete; but the headline estimate B1 existed to settle remains unsettled |
 
 ---
+
+## Performance
+
+| Metric | Value |
+|---|---|
+| Duration | ~5 h wall clock, 2 sessions, split by the EAS build gate |
+| Started | 2026-09-01T17:21-07:00 (Tasks 1–3 committed) |
+| Completed | 2026-09-01T22:29-07:00 (Tasks 4–5 committed) |
+| Tasks | 5 of 5 executed (1 blocking human-action checkpoint resolved) |
+| Files modified | 4 tracked |
+| Data collected | 8 sessions · 42 taps · 16 media files (~72 MB, untracked) |
+
+## Task Commits
+
+| Task | Commit | Type | Description |
+|---|---|---|---|
+| Tasks 1–2: analyzer + time-base validation | `3f4d2c7` | feat | `scratch/tap_test.py`, self-test PASS, 39/39 sample-by-sample |
+| Task 3: pre-register protocol | `3f4d2c7` | feat | `TAP-TEST-PROTOCOL.md` committed **before** the run (AC-5) |
+| Tasks 1–3 record | `b45e38e` | docs | defects found while building, 4 pre-data AC amendments |
+| Task 4: device run (checkpoint) | — | — | operator-executed; 8 sessions, no commit of its own |
+| Task 5: analysis + SUMMARY | `941e513` | apply | void verdict, SUMMARY, STATE, 1 post-run amendment |
+
+⚠ Tasks 1–3 share one commit rather than committing atomically. They were applied in a prior
+session that disconnected before Task 4; this is recorded, not defended.
+
+## Deviations from Plan
+
+### Summary
+
+| Type | Count | Impact |
+|---|---|---|
+| Auto-fixed | 0 | — |
+| Scope additions | 0 | No feature or file beyond the plan's `files_modified` |
+| Instrument changes | 1 | `--video-start-phone-ms` optional — no bar, threshold or formula moved |
+| Protocol amendments (post-data) | 1 | Dated and justified per the protocol's own rule |
+| Bars failed | 1 (B3) | **Voids the run** — the plan's headline deliverable is unmet |
+| Deferred | 3 | Detector fix, encoder-side pairing check, persist `videoStartPhoneMs` |
+
+**Total impact:** No scope creep and no production code touched, but **the plan did not achieve its
+stated purpose.** It set out to replace estimates with measurements; it replaced three of them
+(86-02's AC-7, the end-anchor claim, the BLE flight bound) and left the headline one — the
+end-anchored residual a coach actually sees — still unmeasured.
+
+### The one instrument change
+
+**1. `--video-start-phone-ms` made optional**
+- **Found during:** Task 5, after the operator returned without the value
+- **Issue:** the argument was mandatory; `videoStartPhoneMs` is **never persisted** (React state and
+  the `RecordScreen.js:854` log line only), so B1 would have been uncomputable too
+- **Fix:** accept its absence; emit `start_anchored_origin_s`, `camera_warm_up_s` and every
+  `residual_start_anchored_s` as `None` rather than inventing them
+- **Files:** `scratch/tap_test.py` (+24/−11)
+- **Verification:** self-test re-run, passes identically (5 offsets within 0.33 ms, rejection 11/1)
+- **Commit:** `941e513`
+
+### Deferred Items
+
+- **Fix the encoder tap detector** — measure the wheel's ring-down from the 8 raw CSVs already on
+  disk, set `REFRACTORY_S` from that measurement, commit it before observing its effect on B1
+- **Add an encoder-side pairing check** — AC-4's audio-vs-frame rule is necessary and not sufficient
+- **Persist `videoStartPhoneMs`** (mobile change) so B2 and B4 are ever measurable
 
 ## Files Created/Modified
 

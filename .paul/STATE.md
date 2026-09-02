@@ -8,11 +8,15 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
-- **⏳ 86-03 is APPLIED and awaiting UNIFY** (`PLAN ✓ → APPLY ✓ → UNIFY ○`, 2026-09-02). Its device
-  run happened and was **VOID** under its own pre-registered B3 bar; 86-02's AC-7 passed in the
-  process. **Next action: `/paul:unify .paul/phases/86-session-clock-accuracy/86-03-PLAN.md`**, then
-  back to `/paul:apply .paul/phases/90-team-leaderboards/90-02-PLAN.md`. Details in the Phase 86
-  block below.
+- **✅ 86-03 LOOP CLOSED 2026-09-01** (`PLAN ✓ → APPLY ✓ → UNIFY ✓`). Its device run happened and was
+  **VOID** under its own pre-registered B3 bar; 86-02's AC-7 passed in the process, which closes
+  86-02. 🔴 **PHASE 86 IS NOT TRANSITIONED AND HAS NO PHASE COMMIT — 3 of 3 plans have SUMMARYs, and
+  that is exactly the plan-count trap that wrongly called 83-01, 83-02 and 88-04 done.** The phase
+  existed to replace estimates with measurements; it replaced three and left its headline one (the
+  end-anchored residual a coach sees) unmeasured. **Closing it on counts would bank a void run as a
+  finished measurement.** A successor plan (86-04) is owed; its brief and its data are ready.
+  **Next action: `/paul:apply .paul/phases/90-team-leaderboards/90-02-PLAN.md`** (90 was mid-phase
+  when 86-03 was resumed), or `/paul:plan` 86-04 if the tap test is the priority.
 - **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 1 of 3 plans closed.** Loop: 90-01
   `PLAN ✓ → APPLY ✓ → UNIFY ✓` (closed 2026-09-01, [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md));
   90-02 and 90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:apply
@@ -1078,8 +1082,13 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   item 9 (annotate the backlog fast).
 - **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 3 of 3 plans
   APPLIED, but 86-03 ENDED IN A VOID RUN, so the phase does NOT close. 86-01 LOOP CLOSED 2026-08-31;
-  86-02 LOOP CLOSED 2026-09-01 and its AC-7 is now PASSED (see below); **86-03 APPLIED 2026-09-02
-  (PLAN ✓ → APPLY ✓ → UNIFY ○) — run VOID under its own pre-registered B3 bar.**
+  86-02 LOOP CLOSED 2026-09-01 and its AC-7 is now PASSED (see below); **86-03 LOOP CLOSED 2026-09-01
+  (PLAN ✓ → APPLY ✓ → UNIFY ✓) — run VOID under its own pre-registered B3 bar.**
+  🔴 **THE LOOP CLOSED; THE PHASE DID NOT.** All three plans now have SUMMARYs, so the plan-count
+  heuristic reads 3/3 and would trigger a transition. **It is wrong here**, for the fourth time after
+  83-01, 83-02 and 88-04: 86-03's deliverable was a *measurement*, and the measurement was voided by
+  its own instrument bar. Transitioning would record "session clock accuracy — complete" over a
+  phase whose central number is still an estimate. **Phase 86 stays 🚧 pending a successor (86-04).**
   committed `828ee49` (backend repo: plan + summary + harness) and `1aa45cb` (swimnetics-mobile:
   `sessionClock.js` + `RecordScreen.js`).**
   🔴 **86-03's DEVICE RUN HAPPENED AND WAS VOIDED BY ITS OWN INSTRUMENT BAR.** The EAS build shipped,
@@ -1134,7 +1143,7 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   re-run for that reason). Live `GET /time` → 200; live `sessions` select → all three `patch_14`
   columns present and `null`. → [86-02-SUMMARY](phases/86-session-clock-accuracy/86-02-SUMMARY.md)
   ~~🔴 **AC-7 (device verify) is the only unmet AC and is BUILD-GATED** — Nothing in 86-02 has run on
-  a phone.~~ → **RESOLVED 2026-09-02 by 86-03's device run: AC-7 PASSES, 8 of 8 sessions non-NULL on
+  a phone.~~ → **RESOLVED 2026-09-01 by 86-03's device run: AC-7 PASSES, 8 of 8 sessions non-NULL on
   all three columns.** ⚠ But the accuracy figures did NOT all become measurements — 86-03's run was
   voided by B3, so the end-anchored residual, camera warm-up and the `rtt/2` symmetry check remain
   **estimates**. What did become measured: AC-7 itself, the end-anchor claim, and the BLE flight
@@ -1163,7 +1172,7 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   `video_origin_s = (sessionStartPhoneMs − videoStartPhoneMs)/1000`, which is how the mistaken framing
   survived into two plans — NOT fixed by 86-03, which must not edit the app it measures.
   → [86-03-PLAN](phases/86-session-clock-accuracy/86-03-PLAN.md).
-  ✅ **86-03 TASKS 1-3 APPLIED 2026-09-01** (`3f4d2c7`), **Tasks 4-5 APPLIED 2026-09-02** — the
+  ✅ **86-03 TASKS 1-3 APPLIED 2026-09-01** (`3f4d2c7`), **Tasks 4-5 APPLIED 2026-09-01** — the
   build gate lifted, the run happened, and the analysis is written (void; see above). Tasks 1-3's
   gates were **re-verified from a clean tree** at the start of the resumed session rather than taken
   on trust, all three green: `scratch/tap_test.py` **self-test PASS** (five injected offsets −500/−50/0/+50/
@@ -1238,7 +1247,7 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   (`writeCharacteristicWithResponseForService` out, `notify(false)` — an indication — in). ⚠ **The tap
   test has now RUN and was VOID, so this stands unchanged: no document may quote a corrected-overlay
   accuracy figure as measured.** B4 was never run for want of `videoStartPhoneMs`.
-  ~~⚠ **AC-7 is build-gated**~~ → **PASSED 2026-09-02 on the 86-03 run.**
+  ~~⚠ **AC-7 is build-gated**~~ → **PASSED 2026-09-01 on the 86-03 run.**
   Out of scope and named as such: STATE item 25's ISO debug line at `RecordScreen.js:1155`, which this
   plan makes more meaningful but does not get to redesign.
   ⚠ **UNIFY reconciled from the TREE, not from execution memory** — APPLY ran in a cut-off prior
