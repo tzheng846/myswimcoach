@@ -250,3 +250,15 @@ preference.
 - **2026-09-01, before any data — camera warm-up sign.** The PLAN wrote it as
   `start_anchored − end_anchored`, which makes a real warm-up negative. Defined here as
   `end_anchored − start_anchored`.
+- **2026-09-02, AFTER the run — `--video-start-phone-ms` made optional.** The first amendment made
+  after data exists, and it is an instrument capability change, not a bar change: no bar, threshold,
+  rejection rule or formula moved. §4 step 5 told the operator to hand-transcribe `videoStartPhoneMs`
+  off the on-screen log. It was not recorded for the 2026-09-02 run, and it is **never persisted** —
+  `grep videoStartPhoneMs` over the mobile tree finds it only in React state and the
+  `RecordScreen.js:854` log line; it is not in the DB and not in the clip container, whose
+  `creation_time` is 1-second resolution against a 33 ms bar. The analyzer now accepts its absence
+  and reports `start_anchored_origin_s`, `camera_warm_up_s` and every `residual_start_anchored_s` as
+  `None`, so **B1 stays computable while B2 and B4 are reported as unmeasured rather than invented**.
+  The self-test is unchanged and still passes identically. ⚠ The protocol asking an operator to copy
+  down a number the app throws away is the design defect this exposed; fixing it means persisting
+  `videoStartPhoneMs`, which is a mobile change and out of 86-03's scope.

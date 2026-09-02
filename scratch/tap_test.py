@@ -388,6 +388,10 @@ def frame_events(path, crop=None, k=8.0, refractory_s=REFRACTORY_S, size=64):
 
 def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms,
                 mic_distance_m, crop=None, label=None):
+    # video_start_phone_ms may be None: it is recorded only in the app's on-screen log, so an
+    # operator can come back with clips and CSVs but without it. The END-anchored residual (B1,
+    # the coach-facing number) does not use it at all, so it is still fully computable; the
+    # start-anchored residual and camera warm-up are then reported as None rather than invented.
     enc = read_raw(raw_path)
     taps, _ = find_taps(enc["t_s"], enc["counts"])
 
@@ -399,8 +403,10 @@ def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms
     half_frame = 0.5 / fps
 
     end_origin = enc["duration_s"] - vid_dur
-    start_origin = (float(video_start_phone_ms) - float(session_start_utc_ms)) / 1000.0
-    warm_up = end_origin - start_origin
+    have_start = video_start_phone_ms is not None and session_start_utc_ms is not None
+    start_origin = ((float(video_start_phone_ms) - float(session_start_utc_ms)) / 1000.0
+                    if have_start else None)
+    warm_up = (end_origin - start_origin) if have_start else None
 
     sound_delay = mic_distance_m / SPEED_OF_SOUND_MS
 
@@ -460,7 +466,8 @@ def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms
             "scatter_about_av_offset_s": round(scatter, 6),
             "encoder_time_s": round(p["enc"], 6),
             "residual_end_anchored_s": round((p["fr_est"] + end_origin) - p["enc"], 6),
-            "residual_start_anchored_s": round((p["fr_est"] + start_origin) - p["enc"], 6),
+            "residual_start_anchored_s": (round((p["fr_est"] + start_origin) - p["enc"], 6)
+                                          if have_start else None),
         })
         if abs(scatter) > GROSS_DISAGREEMENT_FRAMES / fps:
             rec["status"] = "REJECTED"
@@ -493,8 +500,8 @@ def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms
         "fps": round(fps, 4),
         "half_frame_ms": round(half_frame * 1000, 3),
         "end_anchored_origin_s": round(end_origin, 6),
-        "start_anchored_origin_s": round(start_origin, 6),
-        "camera_warm_up_s": round(warm_up, 6),
+        "start_anchored_origin_s": round(start_origin, 6) if have_start else None,
+        "camera_warm_up_s": round(warm_up, 6) if have_start else None,
         "n_encoder_taps": len(taps),
         "n_audio_onsets": len(onsets),
         "n_frame_events": len(fevents),
@@ -532,13 +539,15 @@ def summarize(reps):
         "n_accepted": len(acc),
         "acceptance_rate": round(len(acc) / total, 4) if total else None,
         "residual_end_anchored": stats([t["residual_end_anchored_s"] for t in acc]),
-        "residual_start_anchored": stats([t["residual_start_anchored_s"] for t in acc]),
+        "residual_start_anchored": stats([t["residual_start_anchored_s"] for t in acc
+                                          if t.get("residual_start_anchored_s") is not None]),
         "audio_minus_frame": stats([t["audio_minus_frame_s"] for t in acc
                                     if t.get("audio_minus_frame_s") is not None]),
         "scatter_about_av_offset": stats([t["scatter_about_av_offset_s"] for t in acc
                                           if t.get("scatter_about_av_offset_s") is not None]),
         "av_offset_ms_per_session": [r["av_offset_ms"] for r in reps],
-        "camera_warm_up": stats([r["camera_warm_up_s"] for r in reps]),
+        "camera_warm_up": stats([r["camera_warm_up_s"] for r in reps
+                                 if r.get("camera_warm_up_s") is not None]),
         "per_session_end_anchored_mean_ms": [
             round(float(np.mean([t["residual_end_anchored_s"] for t in r["taps"]
                                  if t.get("status") == "ACCEPTED"])) * 1000, 3)
@@ -997,7 +1006,6 @@ def main():
     missing = [n for n, v in (
         ("--raw", args.raw), ("--video", args.video),
         ("--session-start-utc-ms", args.session_start_utc_ms),
-        ("--video-start-phone-ms", args.video_start_phone_ms),
     ) if v is None]
     if missing:
         ap.error("missing " + ", ".join(missing))
@@ -1011,8 +1019,12 @@ def main():
     print(f"  device {rep['device_duration_s']:.3f} s · video {rep['video_duration_s']:.3f} s · "
           f"{rep['fps']:.2f} fps (half frame {rep['half_frame_ms']:.1f} ms)")
     print(f"  end-anchored origin   {rep['end_anchored_origin_s']:+.4f} s   <- what the coach sees")
-    print(f"  start-anchored origin {rep['start_anchored_origin_s']:+.4f} s   <- what 86-02 corrected")
-    print(f"  camera warm-up        {rep['camera_warm_up_s']:+.4f} s")
+    if rep["start_anchored_origin_s"] is None:
+        print("  start-anchored origin  NOT AVAILABLE - no --video-start-phone-ms supplied")
+        print("  camera warm-up         NOT AVAILABLE - needs videoStartPhoneMs (B2, B4 unmeasured)")
+    else:
+        print(f"  start-anchored origin {rep['start_anchored_origin_s']:+.4f} s   <- what 86-02 corrected")
+        print(f"  camera warm-up        {rep['camera_warm_up_s']:+.4f} s")
     print(f"  sound delay corrected {rep['sound_delay_ms']:.2f} ms "
           f"({rep['mic_distance_m']:.2f} m) - cross-check only, never the residual")
     flag = "  <-- SUSPICIOUS (>1 frame)" if rep["av_offset_suspicious"] else ""
@@ -1029,7 +1041,8 @@ def main():
         if t.get("status") == "ACCEPTED":
             print(f"    v={t['video_time_s']:8.3f}  enc={t['encoder_time_s']:8.3f}  "
                   f"end={t['residual_end_anchored_s'] * 1000:+8.2f} ms  "
-                  f"start={t['residual_start_anchored_s'] * 1000:+9.2f} ms")
+                  + ("start=      n/a" if t["residual_start_anchored_s"] is None
+                     else f"start={t['residual_start_anchored_s'] * 1000:+9.2f} ms"))
         else:
             print(f"    v={t['video_time_s']:8.3f}  {t['status']}: {t.get('reason')}")
     for key in ("residual_end_anchored", "residual_start_anchored", "scatter_about_av_offset"):

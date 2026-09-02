@@ -8,6 +8,11 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
+- **⏳ 86-03 is APPLIED and awaiting UNIFY** (`PLAN ✓ → APPLY ✓ → UNIFY ○`, 2026-09-02). Its device
+  run happened and was **VOID** under its own pre-registered B3 bar; 86-02's AC-7 passed in the
+  process. **Next action: `/paul:unify .paul/phases/86-session-clock-accuracy/86-03-PLAN.md`**, then
+  back to `/paul:apply .paul/phases/90-team-leaderboards/90-02-PLAN.md`. Details in the Phase 86
+  block below.
 - **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 1 of 3 plans closed.** Loop: 90-01
   `PLAN ✓ → APPLY ✓ → UNIFY ✓` (closed 2026-09-01, [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md));
   90-02 and 90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:apply
@@ -1071,12 +1076,55 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
   (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
   item 9 (annotate the backlog fast).
-- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 2 of 3 plans closed, 3 of 3 PLANNED.
-  86-01 LOOP CLOSED 2026-08-31; 86-02 LOOP CLOSED 2026-09-01 (PLAN ✓ → APPLY ✓ → UNIFY ✓),
-  **86-03 PLANNED 2026-09-01** (PLAN ✓ → APPLY ○ → UNIFY ○) — the tap test, the phase's only
-  measurement, `autonomous: false` and BUILD-GATED at its human-action checkpoint.
+- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 3 of 3 plans
+  APPLIED, but 86-03 ENDED IN A VOID RUN, so the phase does NOT close. 86-01 LOOP CLOSED 2026-08-31;
+  86-02 LOOP CLOSED 2026-09-01 and its AC-7 is now PASSED (see below); **86-03 APPLIED 2026-09-02
+  (PLAN ✓ → APPLY ✓ → UNIFY ○) — run VOID under its own pre-registered B3 bar.**
   committed `828ee49` (backend repo: plan + summary + harness) and `1aa45cb` (swimnetics-mobile:
   `sessionClock.js` + `RecordScreen.js`).**
+  🔴 **86-03's DEVICE RUN HAPPENED AND WAS VOIDED BY ITS OWN INSTRUMENT BAR.** The EAS build shipped,
+  8 tap sessions were recorded on the Test athlete (wheel on a desk), and all 16 files were pulled
+  from Storage. **B3 — acceptance ≥90%, the bar the protocol says VOIDS THE RUN — FAILED at 35/42 =
+  83.3%**, and AC-6 failed with only 4 of 8 sessions reaching 5 accepted taps. B1 would have passed
+  both its bars (+14.17 ± 16.06 ms, n=35; between-session SD 44.03 ms) **and is deliberately NOT
+  reported as a result**, because B3 is a precondition, not a companion metric. Recorded as void at
+  the user's explicit direction. → [86-03-SUMMARY](phases/86-session-clock-accuracy/86-03-SUMMARY.md)
+  🔴 **THE DEFECT: the encoder tap detector over-triggers, and AC-4's rejection rule is STRUCTURALLY
+  BLIND TO IT.** A struck wheel rings; `REFRACTORY_S = 0.5` does not span the ring-down, so the
+  detector found **10–28 events for ~5 real strikes** (28 in one session) and `MATCH_WINDOW_S = 1.4`
+  paired audio onsets with ringing instead of strikes. AC-4 rejects on **audio-vs-frame** disagreement
+  — two readouts of the *video* — so an **encoder** mispair leaves both in perfect agreement and is
+  marked ACCEPTED carrying a 180–320 ms residual. **10 of the 35 accepted taps sit >50 ms from their
+  own session median.** Protocol §7 predicts a within-session SD of ~9.6 ms from frame quantisation;
+  only 3 of 8 sessions are near it. **A rejection rule that cannot see the failure mode that actually
+  occurs launders bad taps as good ones** — the most valuable output of the run. The video side was
+  healthy throughout (`readout_spread` 0.28–1.11 frames against a 1.2 bar).
+  ⚠ **DO NOT quote the post-hoc per-session median of −1.79 ± 9.88 ms (n=8) as a result.** It is
+  temptingly close to zero and it is exactly what pre-registration exists to stop.
+  ✅ **86-02's AC-7 PASSES — its only unmet AC, closed by this run.** All 8 sessions uploaded with
+  non-NULL `session_start_utc_ms`, `sync_error_ms`, `clock_offset_ms`. The probe burst, the
+  `Math.round` guard, the plausibility window and the concurrent `/time` probe all survived a real
+  device. ✅ **The end-anchor claim is now EVIDENCED, not just read off a source line:** on the 2
+  sessions carrying a stored `sessions.video_origin_s`, the analyzer's independently computed
+  `deviceDuration − videoDuration` agrees to **+3.5 ms** and **+10.9 ms**.
+  ✅ **The "20–80 ms" BLE flight estimate is BOUNDED and its upper end is WRONG:** `sync_error_ms` is
+  `minRTT/2` by construction, and the 8 measured values span **0.5–30.0 ms** (mean 18.50 ± 4.37).
+  ⚠ **B2 and B4 are UNMEASURED and `videoStartPhoneMs` is UNRECOVERABLE.** It is **never persisted** —
+  only React state and the `RecordScreen.js:854` log line; not in the DB, not in the clip container
+  (`creation_time` is 1-second resolution against a 33 ms bar). The protocol asked an operator to
+  hand-copy a number the app throws away. **Persisting it is a mobile change and a successor's job.**
+  ⚠ **Camera warm-up "~2 s" ([VideoOverlayScreen.js:52](../swimnetics-mobile/src/screens/VideoOverlayScreen.js))
+  is still unmeasured but now DOUBTFUL:** `deviceDuration − videoDuration` is **0.6913 s ± 28.4 ms**
+  across all 8. That is start-lag + stop-lag and does not isolate warm-up, but a ~2 s warm-up needs a
+  stop-lag near −1.3 s, which is not physically sensible.
+  ⚠ **Successor brief, and the data is already on disk in `scratch/taptest/`:** (1) measure the
+  ring-down from the 8 raw CSVs and set the refractory period from that measurement, committed BEFORE
+  looking at its effect on B1; (2) add an **encoder-side** pairing check so a mispair is rejected
+  rather than laundered; (3) persist `videoStartPhoneMs`. **Re-analysis needs no new device run** — a
+  re-run is needed only for B2/B4.
+  ⚠ One post-run protocol amendment, dated and justified in `## Amendments`:
+  `--video-start-phone-ms` made optional so B1 stayed computable and B2/B4 were reported as unmeasured
+  rather than invented. No bar, threshold, rejection rule or formula moved; self-test unchanged.
   ⚠ **86-02's APPLY also ran in an unrecorded session** and was left uncommitted with **no SUMMARY** —
   found on disk 2026-09-01, the third instance of this pattern after 84-02 and 88-05. Closed with the
   same reconciliation posture: every claim re-derived from the diff and by re-running the gates.
@@ -1085,9 +1133,12 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   other standing-harness input are provably untouched; the other six harnesses were deliberately NOT
   re-run for that reason). Live `GET /time` → 200; live `sessions` select → all three `patch_14`
   columns present and `null`. → [86-02-SUMMARY](phases/86-session-clock-accuracy/86-02-SUMMARY.md)
-  🔴 **AC-7 (device verify) is the only unmet AC and is BUILD-GATED** — it needs an EAS build and
-  rides Phase 84's owed batch. Nothing in 86-02 has run on a phone. Every accuracy figure in this
-  phase remains an **estimate** until 86-03.
+  ~~🔴 **AC-7 (device verify) is the only unmet AC and is BUILD-GATED** — Nothing in 86-02 has run on
+  a phone.~~ → **RESOLVED 2026-09-02 by 86-03's device run: AC-7 PASSES, 8 of 8 sessions non-NULL on
+  all three columns.** ⚠ But the accuracy figures did NOT all become measurements — 86-03's run was
+  voided by B3, so the end-anchored residual, camera warm-up and the `rtt/2` symmetry check remain
+  **estimates**. What did become measured: AC-7 itself, the end-anchor claim, and the BLE flight
+  bound. See the 86-03 block above for the measured/estimated table.
   ⚠ **Tooling trap found while closing, will recur:** `.venv/Scripts/python.exe` has **no pytest**,
   and `python -m pytest … | tail` still exits **0** when the module is missing — the suite silently
   does not run. Use the conda interpreter (`C:\Users\TonyZheng\miniconda3\python.exe`, pytest 9.0.2).
@@ -1112,9 +1163,10 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   `video_origin_s = (sessionStartPhoneMs − videoStartPhoneMs)/1000`, which is how the mistaken framing
   survived into two plans — NOT fixed by 86-03, which must not edit the app it measures.
   → [86-03-PLAN](phases/86-session-clock-accuracy/86-03-PLAN.md).
-  ✅ **86-03 TASKS 1-3 APPLIED 2026-09-01** (`3f4d2c7`) — the instrument and the pre-registered
-  protocol are done and committed; only the build-gated device run (Task 4) and the analysis
-  (Task 5) remain. `scratch/tap_test.py` **self-test PASS** (five injected offsets −500/−50/0/+50/
+  ✅ **86-03 TASKS 1-3 APPLIED 2026-09-01** (`3f4d2c7`), **Tasks 4-5 APPLIED 2026-09-02** — the
+  build gate lifted, the run happened, and the analysis is written (void; see above). Tasks 1-3's
+  gates were **re-verified from a clean tree** at the start of the resumed session rather than taken
+  on trust, all three green: `scratch/tap_test.py` **self-test PASS** (five injected offsets −500/−50/0/+50/
   +500 ms recovered within **0.33 ms** against a 2 ms bar, rejection path fires, container offset
   provably does not leak); `--validate-timebase raw/` → **39/39 clean files agree with
   `vel_acc_extraction` SAMPLE BY SAMPLE at 0.000000 ms and 0.000000 mm**, one file excluded for a
@@ -1183,9 +1235,10 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   ⚠ **`rtt/2` assumes symmetric legs and remains an ESTIMATE until 86-03.** Two facts bound it, both
   verified: `processPending()` is the **first** call in a free-running `loop()` with no `delay` while
   not recording, so device-side queueing is negligible; and both directions are acknowledged
-  (`writeCharacteristicWithResponseForService` out, `notify(false)` — an indication — in). Until the
-  tap test runs, no document may quote a corrected-overlay accuracy figure as measured.
-  ⚠ **AC-7 is build-gated** and must ride the same EAS build as Phase 84's owed device-verify batch.
+  (`writeCharacteristicWithResponseForService` out, `notify(false)` — an indication — in). ⚠ **The tap
+  test has now RUN and was VOID, so this stands unchanged: no document may quote a corrected-overlay
+  accuracy figure as measured.** B4 was never run for want of `videoStartPhoneMs`.
+  ~~⚠ **AC-7 is build-gated**~~ → **PASSED 2026-09-02 on the 86-03 run.**
   Out of scope and named as such: STATE item 25's ISO debug line at `RecordScreen.js:1155`, which this
   plan makes more meaningful but does not get to redesign.
   ⚠ **UNIFY reconciled from the TREE, not from execution memory** — APPLY ran in a cut-off prior
