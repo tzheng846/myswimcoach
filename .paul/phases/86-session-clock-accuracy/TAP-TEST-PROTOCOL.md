@@ -193,6 +193,41 @@ into a measurement. Do not treat "nothing was broken" as a failed experiment.
 
 ---
 
+## 10. Confirmatory run (86-05)
+
+*Registered 2026-09-02, before the run exists. §9 was already taken, hence §10.*
+
+86-03's run was VOID and 86-04 repaired the instrument offline against the same 8 sessions. **That
+corpus is now spent** — it developed the instrument, so it can never measure the clock. B1 is still
+unmeasured, and this section registers the run that measures it.
+
+### Bars — UNCHANGED IN VALUE
+
+B1, B2, B3 and B4 in §5 are carried forward **exactly as written**. 86-04 moved no bar. The only
+thing that changed is the instrument underneath them, and it changed before this run's data exists.
+
+### What the operator must do differently
+
+| # | Change | Why |
+|---|---|---|
+| 1 | **Persist `videoStartPhoneMs`** | A mobile change + EAS build. Until it lands, **B2 and B4 are unmeasurable** — see the 2026-09-01 amendment. This is the only gate that costs a build. |
+| 2 | **≥ 8 strikes per session** | 86-03 got 5+ accepted on only 4 of 8 sessions, and the repaired detector deliberately drops soft strikes rather than guessing. There is a second reason: `av_offset` needs **≥ 3 paired taps** or it silently falls back to 0.0, and a miscentred scatter check then rejects honest taps. Tap test 1 hit exactly that in the re-run. |
+| 3 | **Strike with consistent force** | Detection is peak-relative to the session's *hardest* strike, so a soft one falls under the bar. This is a protocol fix on purpose: letting the detector use the audio onset count as a hint would couple the two sensors the test keeps independent. |
+| 4 | **≥ 3 s between strikes** | Unchanged from §4, but now load-bearing twice: it protects the 1.4 s pairing window **and** keeps audio onsets outside the audio detector's own 0.5 s refractory. One gap of 0.52 s in the 86-03 corpus produced a false extra onset that cost two taps to contention. |
+| 5 | **Supply `--crop`** | So frame differencing sees the wheel and not the striking hand. |
+
+### What to report
+
+Everything §8 already asks for, plus the three health fields 86-04 added:
+`encoder_overtrigger_ratio` (want ~1.0; 86-03 reached 5.6), `interval_pattern_max_delta_s`, and the
+per-tap `vel_to_raw_offset_ms`. **If `vel_to_raw_offset_ms` ever collapses toward zero, the timing
+has migrated into the velocity domain and the run is void** — that lag is real and must stay visible.
+
+**Do not change the correction, the origin formula, or any threshold in response to the result.**
+§8's rule, restated here because 86-04 was the plan that had to obey it.
+
+---
+
 ## Instrument status
 
 As of this commit, on 43 real raw CSVs and synthetic fixtures:
@@ -262,3 +297,79 @@ preference.
   The self-test is unchanged and still passes identically. ⚠ The protocol asking an operator to copy
   down a number the app throws away is the design defect this exposed; fixing it means persisting
   `videoStartPhoneMs`, which is a mobile change and out of 86-03's scope.
+
+- **2026-09-02, AFTER the run — 86-04's instrument repair. NO BAR MOVED.** Detection changed
+  domain; every threshold in §5 and §6 is untouched. Recorded here in full because the constants
+  behind it were **tuned on the void corpus, not pre-registered against it** — the sweep was run
+  before 86-04 was written, and saying otherwise would be the exact failure this file exists to
+  prevent. What *is* pre-registered is that each constant equals what its stated rule produces, and
+  that all three froze before 86-05's data exists.
+
+  **What was wrong.** The detector hunted raw `|d(counts)|` against a `median + 10·MAD` floor. A
+  struck wheel rings, so one strike produced 10–28 crossings that the 0.5 s refractory could not
+  collapse, and a ring-down artifact could take a real strike's place. The strike was never hard to
+  see — it was hard to see *in that domain*.
+
+  **What changed.** `FIND` on decimated `|velocity|` at `TAP_FRAC = 0.20` of the session's own
+  maximum (flat event count across 10–35% on all 8 sessions, where raw jerk never stabilises; **no
+  refractory constant at all** — the smoothing collapses ring-down for free). `TIME` on raw
+  `|d(counts)|` within `RAW_REFINE_WINDOW_S = 0.25 s`, because the velocity peak lags the raw strike
+  by **+16.3 ms pooled (n = 34, SD 22.6), per-session means −5.0 to +39.4 ms** — against a 33 ms bar,
+  and varying session to session so it would not cancel as a constant, timing there would manufacture
+  the very clock error this test detects. `CHECK` by contention (two onsets, one tap) and by interval
+  pattern at `PAIR_TOL_S = 0.05 s` — a difference of gaps, so any constant clock offset cancels
+  exactly, which is what makes it an admissible check rather than a look at the answer. Reproduce all
+  three constants with `python scratch/tap_test.py --measure-domain scratch/taptest`.
+
+  **Result on the void corpus, IN-SAMPLE and an upper bound — not a measurement of anything.**
+
+  | | 86-03 | 86-04 |
+  |---|---|---|
+  | acceptance | 35/42 = **83.3%** | 28/42 = **66.7%** |
+  | worst `encoder_overtrigger_ratio` | **5.6** | **1.0** |
+  | accepted taps > 50 ms from their session median | **10** | **0** |
+  | worst deviation from session median | **315.1 ms** | **33.7 ms** |
+  | `readout_spread_frames` ≤ 1.2 | all 8 | all 8 (improved on 5) |
+
+  **Acceptance got worse and that is the correct trade.** The laundering is gone: no accepted tap
+  now sits more than 34 ms from its session median, where 86-03 had ten beyond 50 ms and one at
+  315 ms. 86-04 traded confident wrong answers for visible rejections. **B3 still FAILS on this
+  corpus** (66.7% < 90%), which is expected and was written down before the re-run — the corpus was
+  collected through the broken instrument and cannot be rescued by a better one.
+
+  **The 14 rejections, honestly classified:** 7 unmatched (velocity found no strike — 4 of them show
+  a real 7–19% velocity excursion at the onset, 3 sit at the noise floor), 5 audio-vs-frame
+  disagreement (the pre-existing §6 rule, video-side, and *fewer* than 86-03's 7), 2 contention. The
+  interval-pattern check **never fired**: its worst session delta was 38.4 ms against a 50 ms
+  tolerance.
+
+  ⚠ **One rejection is not trustworthy, and the reason is worth keeping.** `av_offset` is estimated
+  only when ≥ 3 taps pair; below that it falls back to **0.0**, and §6's scatter check is then
+  centred on zero instead of the session's real A/V offset. Tap test 1 paired only 2, so its single
+  disagreement rejection is measured against the wrong centre. **Under-detection can starve the
+  estimator that the rejection rule depends on** — a feedback loop between the two failure modes.
+  Not fixed here: 86-04's own rule is one lever at a time, and §10's "≥ 8 strikes per session"
+  addresses the cause rather than the symptom.
+
+  ⚠ **The audio onset count is not clean ground truth either.** Tap test 8's first two onsets are
+  **0.52 s** apart against a population of 2.54–4.42 s, sitting on the audio detector's own 0.5 s
+  refractory edge — indistinguishable from one strike re-triggering it. That false onset is what
+  produced both contention rejections, and it means part of the velocity-vs-audio count mismatch is
+  audio **over**-triggering rather than velocity under-detection. Flagged, never dropped.
+
+  **Three defects found while applying the repair, each of which would have looked like success:**
+  (1) the interval check ran before the scatter check and rejected session-wide, so one shifted
+  audio onset condemned all 12 fixture taps — the standing desync gate went 11/1 → 0/12; it now runs
+  last, over taps whose audio readout has already been vouched for. (2) The fixture's 200 counts/s
+  baseline is 8.5% of peak `|velocity|`, so a planted ring fraction arrived inflated and the repair
+  "failed" for a reason unrelated to ring-down. (3) `|velocity|` of an overshooting impulse has two
+  lobes, so one strike raised two candidates refining to the *identical* raw sample — inflating the
+  very health field meant to expose over-triggering.
+
+  **AC amendment (86-04's own AC-5).** It asked for `|residual| ≤ 2 ms` on a single fixture tap.
+  Not reachable: one tap carries a uniform ±half-frame (16.7 ms) quantisation error by construction,
+  the same mistake corrected in 86-03's AC-1 above. The 2 ms bar is applied instead to the **encoder
+  time against the fixture's own known strike** — exact, no frame quantisation in the path, and it
+  tests what the AC actually cares about: real strike, or ring-down artifact hundreds of ms away.
+  Verified both ways: the fixture makes 86-03 accept 6 taps carrying > 150 ms (worst +190 ms) from
+  zero injected error, and 86-04 pairs that same tap to the real strike within **0.46 ms**.
