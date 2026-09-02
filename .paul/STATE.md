@@ -1111,7 +1111,39 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   **`go_signal_s`**. ⚠ `RecordScreen.js:769` still carries the stale comment
   `video_origin_s = (sessionStartPhoneMs − videoStartPhoneMs)/1000`, which is how the mistaken framing
   survived into two plans — NOT fixed by 86-03, which must not edit the app it measures.
-  → [86-03-PLAN](phases/86-session-clock-accuracy/86-03-PLAN.md). **86-03 redirects the tap test
+  → [86-03-PLAN](phases/86-session-clock-accuracy/86-03-PLAN.md).
+  ✅ **86-03 TASKS 1-3 APPLIED 2026-09-01** (`3f4d2c7`) — the instrument and the pre-registered
+  protocol are done and committed; only the build-gated device run (Task 4) and the analysis
+  (Task 5) remain. `scratch/tap_test.py` **self-test PASS** (five injected offsets −500/−50/0/+50/
+  +500 ms recovered within **0.33 ms** against a 2 ms bar, rejection path fires, container offset
+  provably does not leak); `--validate-timebase raw/` → **39/39 clean files agree with
+  `vel_acc_extraction` SAMPLE BY SAMPLE at 0.000000 ms and 0.000000 mm**, one file excluded for a
+  stated provable reason (one count step of exactly half a revolution, where modular arithmetic
+  and `np.unwrap` break the tie one full revolution apart). `pytest` **566 passed**, unchanged.
+  → [TAP-TEST-PROTOCOL](phases/86-session-clock-accuracy/TAP-TEST-PROTOCOL.md), committed BEFORE
+  the run so the bars cannot move to meet the data (AC-5).
+  🔴 **BUILDING THE INSTRUMENT FOUND THREE DEFECTS, ALL OF WHICH WOULD HAVE CORRUPTED THE
+  MEASUREMENT SILENTLY.** (1) An **off-by-one in the tap detector** — `jerk[k]` spans samples
+  `k→k+1`, so reporting `k` put every tap one raw sample (**3.7 ms**) early, a constant positive
+  residual that would have been attributed to the clock. (2) **Encoder dropouts look exactly like
+  strikes** — aliased count steps appear in **37 of 40** real raw recordings, up to 66 in one
+  file, so the detector now refuses any step above 1024 counts/sample (12.7 m/s at the tether).
+  (3) A **naive `micros()` unwrap invents time** — `raw/leo3.csv` has 17 backward timestamp steps
+  in a 46 s recording, and treating each as a uint32 rollover put its time base **20.3 hours**
+  out; only a step below −2³¹ is a rollover.
+  ⚠ **FOUR ACs WERE AMENDED BEFORE ANY DATA EXISTED**, each dated and justified in the protocol's
+  `## Amendments`: AC-1's flat 2 ms bar was kept by **stratifying the fixture's sub-frame phases**
+  rather than loosening it; AC-2's coach-mark landmark was replaced by the stricter sample-by-
+  sample comparison above (a coach's dive mark is a human judgement, not a threshold crossing);
+  AC-4's half-frame rejection was widened to 1.5 frames because the self-test showed a
+  median-centred half-frame bound **rejects the tails of a uniform distribution and biases the
+  surviving mean** — observed at +9.6 ms in a fixture with zero true error; and the camera-warm-up
+  sign was flipped (the PLAN's order made a real warm-up negative).
+  ✅ **A decision the PLAN had only asserted is now evidenced:** the decimated trace sits a median
+  **103 ms** (worst 353 ms) from raw at distance landmarks, because a small vertical difference
+  becomes a large horizontal one wherever the distance curve is flat. Reading the raw CSV rather
+  than the processed trace is load-bearing, not a preference.
+  **86-03 redirects the tap test
   accordingly:** its primary target is the **end-anchored playback origin** (the number a coach
   actually sees, never validated, independent of 86-02); differencing the two origins on one rep
   gives the **first real measurement of camera warm-up**; and it **bounds rather than isolates**
