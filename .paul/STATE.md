@@ -8,14 +8,18 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
-- **📋 86-04 PLAN CREATED 2026-09-01, REWRITTEN 2026-09-02, awaiting approval**
-  (`PLAN ✓ → APPLY ○ → UNIFY ○`) —
-  [86-04-PLAN.md](phases/86-session-clock-accuracy/86-04-PLAN.md). **Repairs the instrument that
-  voided 86-03; produces NO B1 measurement and spends no device time or EAS build.** 3 auto tasks,
-  `autonomous: true`, everything runs off the 8 sessions already in `scratch/taptest/`.
-  🔴 **The 2026-09-01 draft was aimed at the wrong domain and was replaced, not amended** —
-  see the Phase 86 entry below for what changed and why.
-  **Next action: `/paul:apply .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`**, or
+- **🔧 86-04 APPLIED 2026-09-02, awaiting UNIFY** (`PLAN ✓ → APPLY ✓ → UNIFY ○`) —
+  [86-04-PLAN.md](phases/86-session-clock-accuracy/86-04-PLAN.md). 3/3 tasks, 8/8 AC, each task
+  committed separately so the measurement provably predates the constants it produced
+  (`2043026` → `b40bcaf` → `78711b6`). Gates: self-test **PASS** incl. the new ring-down case,
+  `--validate-timebase` **39/39 at 0.000000 ms**, pytest **566 passed**.
+  🔴 **THE REPAIR WORKED AND ACCEPTANCE STILL FELL, 83.3% → 66.7% — WHICH IS THE CORRECT
+  TRADE.** Accepted taps sitting >50 ms from their session median went **10 → 0**, worst deviation
+  **315.1 ms → 33.7 ms**, worst over-trigger ratio **5.6 → 1.0**. 86-03's laundering is gone; what
+  replaced it is visible rejections. **B3 still fails on this corpus (66.7% < 90%)** — expected,
+  written down before the re-run, and unfixable here because the data was collected through the
+  broken instrument. **B1 REMAINS UNMEASURED.**
+  **Next action: `/paul:unify .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`**, or
   `/paul:plan .paul/phases/90-team-leaderboards/90-03-PLAN.md` — 90-03 is already written and is
   now the only plan left in Phase 90.
 - **✅ 86-03 LOOP CLOSED 2026-09-01** (`PLAN ✓ → APPLY ✓ → UNIFY ✓`). Its device run happened and was
