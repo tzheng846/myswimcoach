@@ -19,9 +19,8 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   replaced it is visible rejections. **B3 still fails on this corpus (66.7% < 90%)** — expected,
   written down before the re-run, and unfixable here because the data was collected through the
   broken instrument. **B1 REMAINS UNMEASURED.**
-  **Next action: `/paul:unify .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`**, or
-  `/paul:plan .paul/phases/90-team-leaderboards/90-03-PLAN.md` — 90-03 is already written and is
-  now the only plan left in Phase 90.
+  **Next action: `/paul:unify .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`** — with
+  Phase 90 closed and transitioned 2026-09-02, this is now the **only** loop left open in the repo.
 - **✅ 86-03 LOOP CLOSED 2026-09-01** (`PLAN ✓ → APPLY ✓ → UNIFY ✓`). Its device run happened and was
   **VOID** under its own pre-registered B3 bar; 86-02's AC-7 passed in the process, which closes
   86-02. 🔴 **PHASE 86 IS NOT TRANSITIONED AND HAS NO PHASE COMMIT — 3 of 3 plans had SUMMARYs, and
@@ -30,14 +29,16 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   end-anchored residual a coach sees) unmeasured. **Closing it on counts would bank a void run as a
   finished measurement.** ~~A successor plan (86-04) is owed~~ → **WRITTEN 2026-09-01, see above.**
   The phase is now **3 of 4 closed, 4 planned**, so the count heuristic no longer reads done either.
-- **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 2 of 3 plans closed. NOT
-  TRANSITIONED — 90-03 is written but unapplied, so the phase is genuinely 2/3, not a count
-  ambiguity.** Loop: 90-01
+- **Phase 90** (Team leaderboards) — ✅ **COMPLETE AND TRANSITIONED 2026-09-02. 3 of 3 plans, every
+  loop closed, phase commit made.** Closed on the phase's five CONTEXT goals being delivered and
+  **seen on screen**, not on the plan count: the deliverable is a ranked board a coach looked at and
+  approved. (Contrast Phase 86, which had 3 of 3 SUMMARYs and its headline measurement still
+  untaken — that is the trap this close deliberately does not repeat.) Loop: 90-01
   `PLAN ✓ → APPLY ✓ → UNIFY ✓` (closed 2026-09-01, [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md));
   90-02 ✅ **LOOP CLOSED 2026-09-02** `PLAN ✓ → APPLY ✓ → UNIFY ✓`
   ([90-02-SUMMARY.md](phases/90-team-leaderboards/90-02-SUMMARY.md));
-  90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:apply
-  .paul/phases/90-team-leaderboards/90-03-PLAN.md`.**
+  90-03 ✅ **LOOP CLOSED 2026-09-02** `PLAN ✓ → APPLY ✓ → UNIFY ✓`
+  ([90-03-SUMMARY.md](phases/90-team-leaderboards/90-03-SUMMARY.md)).
   CONTEXT: [90/CONTEXT.md](phases/90-team-leaderboards/CONTEXT.md) (2 discuss rounds, 8 decisions).
   Waves are strictly serial — 90-01 → 90-02 → 90-03 — because 02 imports 01's catalog and select
   string, and 03 rewrites the `page.js` 02 creates.
@@ -92,12 +93,29 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
     stated in the plan: what is most likely wrong here is *which swims are in the page*, and that is
     verifiable before any board exists.
     See [90-02-PLAN.md](phases/90-team-leaderboards/90-02-PLAN.md).
-  - **90-03 — the boards** (wave 3, `depends_on: ["90-02"]`, **not autonomous**). Eight boards per
-    stroke, top-5 with show-all, the `swimnetics.unit` toggle reused from 88-03, and a blocking
-    human-verify. Its load-bearing assertion: a metric render and an imperial render must produce
-    the **same sequence of names and ranks** — structural, because `rankBoard` runs on SI and
-    `displayUnit` is applied at format time (88-03 D2).
-    See [90-03-PLAN.md](phases/90-team-leaderboards/90-03-PLAN.md).
+  - **90-03 — the boards** ✅ **LOOP CLOSED 2026-09-02** (wave 3,
+    `depends_on: ["90-02"]`, **not autonomous**). 3/3 auto tasks, **8/8 AC**, blocking human-verify
+    **approved**. New `web/components/portal/LeaderboardBoard.js` (82 lines); `page.js`'s
+    placeholder per-metric count replaced by a `sm:grid-cols-2` grid of eight boards plus the
+    metric/imperial toggle on the standing `swimnetics.unit` key; `scratch/leaderboard_check.mjs`
+    grew a render half — **63 → 97 checks, 0 failed**, still no auth, no network, no dev server.
+    Its load-bearing assertion holds: a metric render and an imperial render produce the **same
+    sequence of names and ranks** while every value string changes — structural, because
+    `rankBoard` runs on SI and `displayUnit` is applied at format time (88-03 D2). The seconds
+    board is asserted **byte-identical** under imperial rather than special-cased. Gates: `npm run
+    build` clean (21 routes), eslint **exactly the 26/23 baseline**, all seven standing harnesses
+    pass **unedited**, `pytest tests/` **566 passed**.
+    ⚠ Two facts the plan text predates: the library grew to **108 sessions, 84 eligible, 24
+    excluded** (the plan said 15 of 99 — the caveat block computes it live, so the page is right
+    and the plan text is stale); and the unit toggle sits on the stroke-tab row rather than
+    below the caveat block, approved at the checkpoint.
+    ⚠ **AC-8 rested entirely on the human.** In-session browser navigation to `localhost` was
+    denied and the page sits behind a coach sign-in that must not be performed on the user's
+    behalf, so the machine half stopped at "route returns 200, dev-server logs clean" and the
+    census was printed for side-by-side comparison. Recorded rather than implied to have been
+    machine-checked.
+    See [90-03-PLAN.md](phases/90-team-leaderboards/90-03-PLAN.md) ·
+    [90-03-SUMMARY.md](phases/90-team-leaderboards/90-03-SUMMARY.md).
   🔴 **PLANNING FOUND A DEFECT CONTEXT MISSED, and it is the phase's biggest single finding:
   `metrics_json.session.lap_time_s` IS NOT A LAP TIME.** [metrics.py:1870](../metrics.py) computes
   it as `float(t[-1])` — the **duration of the recording**. Measured across the 84 eligible
