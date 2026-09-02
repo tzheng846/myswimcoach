@@ -1,16 +1,26 @@
 // Phase 90-01 check — the pure leaderboard ranking core.
+// Phase 90-03 added section 7 — the BOARD RENDER, through the real LeaderboardBoard component.
 //
-// ⚠ SIMPLER THAN THE RECENT HARNESSES ON PURPOSE. 87-02 / 88-03 / 88-04 / 88-05 all transpile JSX
-// and server-render because the thing under test was a component. web/lib/leaderboard.js is plain
-// ESM with no JSX and no "@/" alias imports, so this harness imports it directly: no `typescript`,
-// no react-dom/server, no node_modules staging, no cleanup. It needs no auth, no network and no
-// dev server (AC-6).
+// Sections 1–6 need nothing but a bare import: web/lib/leaderboard.js is plain ESM with no JSX and
+// no "@/" alias imports (90-01 AC-6). Section 7 uses the standing render pattern from
+// scratch/unit_check.mjs / split_picker_check.mjs — transpile the JSX with the `typescript` package
+// already in web/node_modules, drop the CJS output inside node_modules so `react` resolves by the
+// normal walk-up, render with react-dom/server, assert on the markup, then remove the staging
+// directory. Still no auth, no network and no dev server.
+//
+// ⚠ MEASURED LIMITATION OF SECTION 7, stated rather than left silent: `renderToStaticMarkup` never
+// runs effects and never dispatches a click, so `expanded` cannot be toggled from outside. The
+// expanded branch is covered the 87-02 way — the harness rewrites the ONE state initializer to a
+// global while transpiling its own private copy, and asserts on the exact initializer text so the
+// rewrite fails loudly if that line ever moves. Production source is untouched. That the BUTTON
+// actually flips the board when clicked is step 4 of 90-03's human-verify.
 //
 // Run: node scratch/leaderboard_check.mjs
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 import {
   DEFAULT_N,
@@ -19,9 +29,11 @@ import {
   SESSION_SELECT,
   isEligible,
   lastNMean,
+  metricByKey,
   metricValue,
   rankBoard,
 } from "../web/lib/leaderboard.js";
+import { M_TO_YD, displayUnit } from "../web/lib/unitConvert.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LIB = path.resolve(here, "..", "web", "lib", "leaderboard.js");
@@ -308,6 +320,254 @@ console.log("\n6. end-to-end board");
     JSON.stringify(rankBoard(interleaved, "splits_20m", { nameFor: (id) => names[id] })) ===
       JSON.stringify(board)
   );
+}
+
+// ─── 7. Phase 90-03: the board render ──────────────────────────────────────────────────────────
+console.log("\n7. 90-03  board render");
+{
+  const web = path.resolve(here, "..", "web");
+  const require = createRequire(path.join(web, "package.json"));
+  const ts = require("typescript");
+  const React = require("react");
+  const { renderToStaticMarkup } = require("react-dom/server");
+
+  const out = path.join(web, "node_modules", ".leaderboard-check");
+  fs.rmSync(out, { recursive: true, force: true });
+  fs.mkdirSync(out, { recursive: true });
+
+  // The 87-02 trick: rewrite the ONE state initializer in the harness's private copy so the
+  // expanded branch is reachable without an effect or a click. Asserted first, so a moved line
+  // fails here instead of silently leaving the branch uncovered.
+  const SRC = path.join(web, "components", "portal", "LeaderboardBoard.js");
+  const EXPANDED_INIT = "const [expanded, setExpanded] = useState(false);";
+  let code = fs.readFileSync(SRC, "utf8");
+  check("harness: expanded initializer found for rewrite", code.includes(EXPANDED_INIT));
+  code = code.replace(
+    EXPANDED_INIT,
+    "const [expanded, setExpanded] = useState(globalThis.__TEST_EXPANDED__ || false);"
+  );
+  fs.writeFileSync(
+    path.join(out, "LeaderboardBoard.cjs"),
+    ts.transpileModule(code, {
+      compilerOptions: {
+        jsx: ts.JsxEmit.ReactJSX,
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+      },
+      fileName: "LeaderboardBoard.js",
+    }).outputText
+  );
+  const LeaderboardBoard = require(path.join(out, "LeaderboardBoard.cjs")).default;
+
+  const render = (props, expandedState = false) => {
+    globalThis.__TEST_EXPANDED__ = expandedState;
+    return renderToStaticMarkup(React.createElement(LeaderboardBoard, props));
+  };
+
+  // Markup readers. Each keys off a class fragment unique to its cell, so a row is parsed by role
+  // rather than by position — the nested unit <span> makes a positional parse wrong.
+  const liRows = (html) =>
+    [...html.matchAll(/<li class="flex items-baseline[\s\S]*?<\/li>/g)].map((m) => m[0]);
+  const cell = (row, re) => {
+    const m = row.match(re);
+    return m ? m[1].trim() : "";
+  };
+  const rankIn = (row) => cell(row, /font-mono text-xs text-muted">([^<]*)</);
+  const nameIn = (row) => cell(row, /flex-1 truncate [^"]*">([^<]*)</);
+  const valueIn = (row) => cell(row, /shrink-0 font-mono text-(?:ink|muted)">([^<]*)</);
+  const unitIn = (row) => cell(row, /font-sans text-muted">([^<]*)</);
+  const namesOf = (html) => liRows(html).map(nameIn);
+  const ranksOf = (html) => liRows(html).map(rankIn);
+
+  // ── fixtures ────────────────────────────────────────────────────────────────
+  const NAMES = { a: "Ana", b: "Bo", c: "Cy", d: "Dee", e: "Eli", f: "Fay", g: "Gus" };
+  const VALUES = { a: 1.88, b: 1.8, c: 1.72, d: 1.64, e: 1.56, f: 1.48, g: 1.4 };
+  const nameFor = (id) => NAMES[id];
+  const swims = (athlete, key, value, count = 5) =>
+    Array.from({ length: count }, () => ({
+      athlete_id: athlete,
+      total_dist_m: 21.5,
+      [key]: value,
+    }));
+
+  const speed = metricByKey("mean_vel_ms");
+  const ids7 = ["a", "b", "c", "d", "e", "f", "g"];
+  const entries7 = rankBoard(
+    ids7.flatMap((id) => swims(id, "mean_vel_ms", VALUES[id])),
+    speed,
+    { nameFor }
+  );
+  const si = displayUnit(speed.unit, false);
+  const board7 = render({ metric: speed, entries: entries7, ...si });
+
+  // ── AC-1: a board reads as an ordering ──────────────────────────────────────
+  check(
+    "AC-1  the title is the catalog label",
+    board7.includes(`>${speed.label}</h2>`),
+    speed.label
+  );
+  check("AC-1  a higher-is-better board says so", board7.includes("higher is better"));
+  check(
+    "AC-1  a lower-is-better board says so instead",
+    (() => {
+      const lap = metricByKey("elapsed_s");
+      const html = render({
+        metric: lap,
+        entries: rankBoard(
+          [{ athlete_id: "a", total_dist_m: 21.5, dive_start_s: 4.0, finish_s: 19.1 }],
+          lap,
+          { nameFor }
+        ),
+        ...displayUnit(lap.unit, false),
+      });
+      return html.includes("lower is better") && !html.includes("higher is better");
+    })()
+  );
+  {
+    const first = liRows(board7)[0];
+    check(
+      'AC-1  row one is "1  Ana  1.88 m/s  n=5"',
+      rankIn(first) === "1" &&
+        nameIn(first) === "Ana" &&
+        valueIn(first) === "1.88" &&
+        unitIn(first) === "m/s" &&
+        first.includes("n=5"),
+      `${rankIn(first)} | ${nameIn(first)} | ${valueIn(first)} ${unitIn(first)}`
+    );
+    check(
+      "AC-1  ranked best-first",
+      namesOf(board7).join(",") === "Ana,Bo,Cy,Dee,Eli",
+      namesOf(board7).join(",")
+    );
+  }
+
+  // ── AC-2: top five, with the full order one click away ──────────────────────
+  check("AC-2  a 7-athlete board renders 5 rows collapsed", liRows(board7).length === 5);
+  check(
+    "AC-2  the ranks shown are 1..5",
+    ranksOf(board7).join(",") === "1,2,3,4,5",
+    ranksOf(board7).join(",")
+  );
+  check('AC-2  the control reads "Show all 7"', board7.includes("Show all 7"));
+  check("AC-2  and not the collapse label", !board7.includes("Show top 5"));
+  {
+    const expanded = render({ metric: speed, entries: entries7, ...si }, true);
+    check("AC-2  expanded renders all 7 rows", liRows(expanded).length === 7);
+    check('AC-2  and the control flips to "Show top 5"', expanded.includes("Show top 5"));
+    check("AC-2  with no stale show-all label", !expanded.includes("Show all 7"));
+    check(
+      "AC-2  expanding adds rows and reorders nothing",
+      namesOf(expanded).slice(0, 5).join(",") === namesOf(board7).join(","),
+      namesOf(expanded).join(",")
+    );
+  }
+  {
+    const four = rankBoard(
+      ["a", "b", "c", "d"].flatMap((id) => swims(id, "mean_vel_ms", VALUES[id])),
+      speed,
+      { nameFor }
+    );
+    const html = render({ metric: speed, entries: four, ...si });
+    check("AC-2  a 4-athlete board renders all 4 rows", liRows(html).length === 4);
+    check(
+      "AC-2  and renders NO show-all control at all",
+      !html.includes("Show all") && !html.includes("Show top") && !html.includes("<button"),
+      "butterfly 4 / backstroke 2 is the live case"
+    );
+  }
+
+  // ── AC-3: a missing value is shown, not hidden, and not ranked ──────────────
+  {
+    const split = metricByKey("splits_20m");
+    const rows = [
+      ...["a", "b", "c", "d", "e", "f"].flatMap((id) => swims(id, "splits_20m", VALUES[id])),
+      ...swims("g", "splits_20m", null, 2), // Dane's live shape: eligible swims, no value
+    ];
+    const entries = rankBoard(rows, split, { nameFor });
+    const html = render({ metric: split, entries, ...displayUnit(split.unit, false) });
+    const rowsOut = liRows(html);
+
+    check("AC-3  6 ranked + 1 unranked = 5 shown + the unranked row", rowsOut.length === 6);
+    const last = rowsOut[rowsOut.length - 1];
+    check("AC-3  the unranked athlete is at the bottom", nameIn(last) === "Gus", nameIn(last));
+    check("AC-3  with an em dash where the value goes", valueIn(last) === "—", valueIn(last));
+    check("AC-3  and no rank number", rankIn(last) === "", `got "${rankIn(last)}"`);
+    check(
+      'AC-3  "Show all N" counts RANKED athletes only',
+      html.includes("Show all 6") && !html.includes("Show all 7")
+    );
+    check(
+      "AC-3  the no-rank note distinguishes it from last place",
+      html.includes("not last place")
+    );
+    check(
+      "AC-3  and that note is absent when every athlete is ranked",
+      !board7.includes("not last place")
+    );
+  }
+
+  // ── AC-4: THE LOAD-BEARING CHECK — imperial converts every value, reorders nothing ──
+  {
+    const imp = displayUnit(speed.unit, true);
+    const metricHtml = render({ metric: speed, entries: entries7, ...si });
+    const imperialHtml = render({ metric: speed, entries: entries7, ...imp });
+
+    check(
+      "AC-4  the athlete sequence is identical between the two renders",
+      namesOf(imperialHtml).join(",") === namesOf(metricHtml).join(","),
+      namesOf(imperialHtml).join(",")
+    );
+    check(
+      "AC-4  the rank sequence is identical between the two renders",
+      ranksOf(imperialHtml).join(",") === ranksOf(metricHtml).join(","),
+      ranksOf(imperialHtml).join(",")
+    );
+    const mv = liRows(metricHtml).map(valueIn);
+    const iv = liRows(imperialHtml).map(valueIn);
+    check(
+      "AC-4  every value string changed",
+      mv.length === 5 && iv.length === 5 && mv.every((v, i) => v !== iv[i]),
+      `${mv.join(",")} -> ${iv.join(",")}`
+    );
+    check(
+      "AC-4  the unit string changed m/s -> yd/s",
+      liRows(metricHtml).every((r) => unitIn(r) === "m/s") &&
+        liRows(imperialHtml).every((r) => unitIn(r) === "yd/s")
+    );
+    check(
+      "AC-4  the conversion is exactly M_TO_YD applied at format time",
+      iv[0] === (entries7[0].value * M_TO_YD).toFixed(2),
+      `${iv[0]} vs ${(entries7[0].value * M_TO_YD).toFixed(2)}`
+    );
+  }
+
+  // ── AC-6: lap time is visibly the derived one, and seconds never convert ────
+  {
+    const lap = metricByKey("elapsed_s");
+    // The stored scalar rides along on the row at the firmware's fixed 39.0 s record length. If it
+    // is ever read, this board prints 39.0.
+    const rows = [
+      { athlete_id: "a", total_dist_m: 21.5, dive_start_s: 4.0, finish_s: 19.1, lap_time_s: 39.0 },
+      { athlete_id: "b", total_dist_m: 21.5, dive_start_s: 4.0, finish_s: 20.4, lap_time_s: 39.0 },
+    ];
+    const entries = rankBoard(rows, lap, { nameFor });
+    const html = render({ metric: lap, entries, ...displayUnit(lap.unit, false) });
+    check("AC-6  the derived 15.1 s renders", valueIn(liRows(html)[0]) === "15.1", valueIn(liRows(html)[0]));
+    check("AC-6  the stored 39.0 s appears nowhere on the board", !html.includes("39.0"));
+    check("AC-6  seconds print to 1 decimal", liRows(html).map(valueIn).join(",") === "15.1,16.4");
+    check(
+      "AC-6  lower-is-better puts the faster swim first",
+      namesOf(html).join(",") === "Ana,Bo",
+      namesOf(html).join(",")
+    );
+    check(
+      "AC-6  the seconds board is byte-identical under imperial",
+      render({ metric: lap, entries, ...displayUnit(lap.unit, true) }) === html
+    );
+  }
+
+  fs.rmSync(out, { recursive: true, force: true });
+  check("harness: staging directory removed", !fs.existsSync(out));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

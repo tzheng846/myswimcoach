@@ -1,9 +1,13 @@
 "use client";
 
 // Phase 90-02 — the /app/leaderboard route: the right swims, in the right stroke, with the
-// assumptions stated. The eight metric BOARDS are 90-03; what this page renders below the caveat
-// is a deliberately plain per-metric count, there to make the partition readable on screen and to
-// be replaced wholesale by the boards.
+// assumptions stated. Phase 90-03 replaced 90-02's placeholder per-metric count with the eight
+// real boards and the unit toggle.
+//
+// ⚠ The toggle reads the STANDING `swimnetics.unit` preference (`useUnitPref`), the same one the
+// report card and /video already share — a coach who set yards there sees yards here without
+// touching anything. Conversion is `displayUnit` at the last moment; `rankBoard` never sees a
+// converted number (88-03 D2), so flipping units cannot reorder a board.
 
 import { useEffect, useMemo, useState } from "react";
 import { fetchLeaderboard } from "@/lib/leaderboardData";
@@ -13,11 +17,15 @@ import {
   MIN_DIST_M,
   rankBoard,
 } from "@/lib/leaderboard";
+import { displayUnit } from "@/lib/unitConvert";
+import useUnitPref from "@/lib/useUnitPref";
+import LeaderboardBoard from "@/components/portal/LeaderboardBoard";
 import { STROKE_LABELS } from "@/components/portal/SessionCard";
 
 export default function LeaderboardPage() {
   const [data, setData] = useState(undefined); // undefined = loading, null = error
   const [stroke, setStroke] = useState(null);
+  const { unit, setUnit } = useUnitPref();
 
   useEffect(() => {
     let live = true;
@@ -71,23 +79,42 @@ export default function LeaderboardPage() {
         </p>
       ) : (
         <>
-          <div className="mt-4 inline-flex flex-wrap rounded-lg border border-surface-3 bg-surface p-0.5 text-sm">
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setStroke(t.key)}
-                className={`rounded-md px-3 py-1.5 font-semibold transition-colors ${
-                  t.key === active.key
-                    ? "bg-primary text-white"
-                    : "text-subtle hover:text-ink"
-                }`}
-              >
-                {t.label}{" "}
-                <span className="font-normal opacity-80">
-                  {t.athletes} athletes · {t.swims} swims
-                </span>
-              </button>
-            ))}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex flex-wrap rounded-lg border border-surface-3 bg-surface p-0.5 text-sm">
+              {tabs.map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => setStroke(t.key)}
+                  className={`rounded-md px-3 py-1.5 font-semibold transition-colors ${
+                    t.key === active.key
+                      ? "bg-primary text-white"
+                      : "text-subtle hover:text-ink"
+                  }`}
+                >
+                  {t.label}{" "}
+                  <span className="font-normal opacity-80">
+                    {t.athletes} athletes · {t.swims} swims
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* The same control the report card uses, on the same stored preference. */}
+            <div className="flex gap-1.5">
+              {["metric", "imperial"].map((u) => (
+                <button
+                  key={u}
+                  onClick={() => setUnit(u)}
+                  className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${
+                    unit === u
+                      ? "border-accent bg-accent text-white"
+                      : "border-surface-3 bg-surface-2 text-subtle"
+                  }`}
+                >
+                  {u === "metric" ? "m" : "yd"}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Both assumptions, stated once, where a coach reading a rank will see them. */}
@@ -111,21 +138,22 @@ export default function LeaderboardPage() {
             </p>
           </div>
 
-          <div className="mt-6 divide-y divide-navy/40 rounded-xl border border-navy/50 bg-surface">
+          {/* Eight boards in catalog order. The `key` carries the stroke, so a tab switch
+              REMOUNTS every board and its "show all" collapses — no expanded state leaks across
+              tabs, and no state is reset in an effect to achieve it. */}
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
             {LEADERBOARD_METRICS.map((metric) => {
-              const ranked = rankBoard(active.rows, metric, {
-                nameFor: (id) => data.athletes.get(id) ?? String(id),
-              }).filter((e) => e.value != null).length;
+              const { factor, unit: displayed } = displayUnit(metric.unit, unit === "imperial");
               return (
-                <div
-                  key={metric.key}
-                  className="flex items-center justify-between px-4 py-2.5 text-sm"
-                >
-                  <span className="text-ink">{metric.label}</span>
-                  <span className="text-muted">
-                    {ranked} of {active.athletes} athletes ranked
-                  </span>
-                </div>
+                <LeaderboardBoard
+                  key={`${active.key}:${metric.key}`}
+                  metric={metric}
+                  entries={rankBoard(active.rows, metric, {
+                    nameFor: (id) => data.athletes.get(id) ?? String(id),
+                  })}
+                  factor={factor}
+                  unit={displayed}
+                />
               );
             })}
           </div>
