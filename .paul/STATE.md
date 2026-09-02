@@ -8,9 +8,10 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
-- **🔧 86-04 APPLIED 2026-09-02, awaiting UNIFY** (`PLAN ✓ → APPLY ✓ → UNIFY ○`) —
-  [86-04-PLAN.md](phases/86-session-clock-accuracy/86-04-PLAN.md). 3/3 tasks, 8/8 AC, each task
-  committed separately so the measurement provably predates the constants it produced
+- **✅ 86-04 LOOP CLOSED 2026-09-02** (`PLAN ✓ → APPLY ✓ → UNIFY ✓`) —
+  [86-04-PLAN.md](phases/86-session-clock-accuracy/86-04-PLAN.md) ·
+  [86-04-SUMMARY.md](phases/86-session-clock-accuracy/86-04-SUMMARY.md). 3/3 tasks, **8/8 AC**, each
+  task committed separately so the measurement provably predates the constants it produced
   (`2043026` → `b40bcaf` → `78711b6`). Gates: self-test **PASS** incl. the new ring-down case,
   `--validate-timebase` **39/39 at 0.000000 ms**, pytest **566 passed**.
   🔴 **THE REPAIR WORKED AND ACCEPTANCE STILL FELL, 83.3% → 66.7% — WHICH IS THE CORRECT
@@ -19,8 +20,23 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   replaced it is visible rejections. **B3 still fails on this corpus (66.7% < 90%)** — expected,
   written down before the re-run, and unfixable here because the data was collected through the
   broken instrument. **B1 REMAINS UNMEASURED.**
-  **Next action: `/paul:unify .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`** — with
-  Phase 90 closed and transitioned 2026-09-02, this is now the **only** loop left open in the repo.
+  UNIFY found: 3 auto-fixed defects, each of which would have read as success — the interval check
+  ran session-wide and regressed the standing desync gate **11/1 → 0/12** (moved to a PASS 3 over
+  scatter-surviving taps); the fixture's 200 counts/s baseline was **8.5 % of peak `|velocity|`** and
+  lifted every planted ring over the cut; and `|velocity|` of an overshooting impulse has **two
+  lobes**, so one strike raised two candidates refining to the same raw sample and inflated the very
+  over-trigger field meant to expose that. 1 AC amended: AC-5's 2 ms bar moved off a frame-quantised
+  residual (±16.7 ms by construction) onto the encoder time vs the fixture's known strike — **0.46 ms**.
+  AC-7's verdict on under-detection is **split, not tidy**: of 7 unmatched onsets, **4 are real soft
+  strikes** (7.2–19.0 % of peak) and **3 are at the noise floor** (1.7–3.3 %) — the phone heard
+  something that was not a strike, so the **audio onset count is not clean ground truth either**.
+  🔴 **PHASE 86 NOW READS 4 PLANS / 4 SUMMARYS AND THE COUNT IS WRONG AGAIN** — the same trap as
+  83-01, 83-02, 88-04 and 86-03. **No transition, no phase commit.**
+  **Next action: 86-05 — the confirmatory run, already registered in
+  [TAP-TEST-PROTOCOL.md](phases/86-session-clock-accuracy/TAP-TEST-PROTOCOL.md) §10 with B1–B4
+  unchanged in value.** It is **gated on a mobile change + EAS build** (persist `videoStartPhoneMs`)
+  and a pool session with ≥ 8 consistent-force strikes per rep. With Phase 90 closed 2026-09-02 and
+  this loop closed, **there is no open PAUL loop in the repo** — the next move is a plan, not an apply.
 - **✅ 86-03 LOOP CLOSED 2026-09-01** (`PLAN ✓ → APPLY ✓ → UNIFY ✓`). Its device run happened and was
   **VOID** under its own pre-registered B3 bar; 86-02's AC-7 passed in the process, which closes
   86-02. 🔴 **PHASE 86 IS NOT TRANSITIONED AND HAS NO PHASE COMMIT — 3 of 3 plans had SUMMARYs, and
@@ -1144,10 +1160,58 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
   (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
   item 9 (annotate the backlog fast).
-- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 3 of 4 plans
-  CLOSED, 4 planned. 86-04 PLANNED 2026-09-01 (`PLAN ✓ → APPLY ○ → UNIFY ○`).**
-  - **86-04 — find on velocity, time on raw** (wave 4, `depends_on: ["86-03"]`,
-    **autonomous: true**). **REWRITTEN 2026-09-02.** 3 auto tasks, **zero device time and zero EAS
+- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 4 of 4 plans
+  CLOSED, 4 planned — AND THE PHASE IS STILL NOT DONE. 86-04 LOOP CLOSED 2026-09-02
+  (`PLAN ✓ → APPLY ✓ → UNIFY ✓`).** 🔴 **THE PLAN COUNT NOW READS 4/4 AND WOULD TRIGGER A
+  TRANSITION. IT IS WRONG — for the fifth time after 83-01, 83-02, 88-04 and 86-03's own 3/3.**
+  The phase exists to replace estimates with measurements. It has replaced three and left its
+  headline one untaken: **B1 (the end-anchored residual a coach actually sees) is UNMEASURED**, B2
+  and B4 are **unmeasurable** until `videoStartPhoneMs` persists, camera warm-up is unmeasured and
+  doubtful, and `rtt/2` is still an estimate. 86-04 spent **zero device time and produced no B1 by
+  construction**. Closing on counts would bank a void run plus an in-sample instrument diagnostic as
+  a finished measurement. **86-05 is owed. No phase commit.**
+  - **86-04 — find on velocity, time on raw** ✅ **LOOP CLOSED 2026-09-02** (wave 4,
+    `depends_on: ["86-03"]`, **autonomous: true**), 3/3 tasks, **8/8 AC**,
+    [86-04-SUMMARY.md](phases/86-session-clock-accuracy/86-04-SUMMARY.md).
+    `scratch/tap_test.py` 1061 → **1722** lines; `TAP-TEST-PROTOCOL.md` **+111/−0, append-only**.
+    ✅ **The repair worked**: worst `encoder_overtrigger_ratio` **5.6 → 1.00**, accepted taps sitting
+    >50 ms from their session median **10 → 0**, worst deviation **315.1 ms → 33.7 ms**,
+    `readout_spread_frames` ≤ 1.2 on all 8 (improved on 5). ⚠ **And acceptance fell 83.3 % → 66.7 %**
+    (28/42; rejections **7 unmatched · 5 readout-disagreement · 2 contention**) — the correct trade,
+    pre-stated, and **B3 still fails on this corpus**, which is unfixable here because the data was
+    collected through the broken instrument. The **interval-pattern check never fired** (worst
+    38.4 ms against a 50 ms tolerance) — it cost nothing and stands as a guard for 86-05.
+    Constants came out exactly as their rules anticipated: `TAP_FRAC` **0.20** (inside 8 of 8
+    plateaus), `RAW_REFINE_WINDOW_S` **0.25** (4 × 55.7 ms), `PAIR_TOL_S` **0.05** (2 × 21.7 ms,
+    **thin basis: 3 of 8 sessions, 12 intervals**).
+    🔴 **AC-7's verdict on under-detection is SPLIT, and the unanticipated half is the useful one.**
+    Of 7 unmatched onsets, **4 are real soft strikes** (19.0 / 16.7 / 9.0 / 7.2 % of session peak —
+    the peak-relative threshold dropped them) and **3 sit at the noise floor** (1.9 / 1.7 / 3.3 %):
+    nothing happened on the wheel, so **the audio onset count is not clean ground truth either**.
+    ⚠ **Two findings deferred to §10's operator protocol rather than a second round of tuning**, per
+    the plan's own rule that a second failed repair means a new plan, not more tuning: (a) `av_offset`
+    is only estimated with **≥ 3 paired taps**, else it silently falls back to 0.0 and the scatter
+    check is miscentred — **Tap_test_1 paired only 2**, so its one disagreement rejection is not
+    trustworthy, and each failure mode makes the other worse; (b) **Tap_test_8's first two onsets are
+    0.52 s apart** against a 2.54–4.42 s population, on the audio detector's own 0.5 s refractory
+    edge — that single false onset produced **both** contention rejections and is why the
+    `RAW_REFINE_WINDOW_S` assertion cleared by 0.01 s instead of 1.02 s.
+    ⚠ **3 defects auto-fixed during APPLY, each of which would have read as success**: the interval
+    check ran **session-wide** and regressed the standing desync gate **11/1 → 0/12** (moved to a
+    PASS 3 over taps the scatter check already vouched for — the ordering is load-bearing); the
+    fixture's 200 counts/s baseline was **8.5 % of peak `|velocity|`**, lifting every planted ring
+    over the 0.20 cut for a reason unrelated to ring-down; and `|velocity|` of an overshooting
+    impulse has **two lobes**, so one strike raised two candidates refining to the *identical* raw
+    sample, inflating the very over-trigger field meant to expose that (deduped keeping the **first**
+    candidate's offset — taking the smaller would bias the reported velocity-to-raw lag toward zero,
+    which §10 makes a **void** condition).
+    ⚠ **1 AC amended:** AC-5's `|residual| ≤ 2 ms` is unreachable on a single frame-quantised tap
+    (uniform ±16.7 ms at 30 fps, the same mistake 86-03 made and corrected in its AC-1). The 2 ms bar
+    moved onto the **encoder time vs the fixture's known strike** — exact, and it tests what the AC
+    cares about. Result **0.46 ms**; 86-03 on the same zero-error fixture accepts **6 taps carrying
+    >150 ms** (worst +190 ms).
+    *Plan record as written 2026-09-02, before APPLY:*
+    3 auto tasks, **zero device time and zero EAS
     builds** — everything runs off the 8 sessions already in `scratch/taptest/`.
     🔴 **THE 2026-09-01 DRAFT WAS AIMED AT THE WRONG DOMAIN.** It proposed measuring the wheel's
     ring-down and setting a `REFRACTORY_S` to collapse it, all inside the raw `|diff(counts)|` domain.
