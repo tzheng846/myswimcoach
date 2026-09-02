@@ -8,18 +8,28 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
-- **Phase 90** (Team leaderboards) — **🚧 PLANNING. 3 plans created 2026-09-01, none applied.**
-  Loop: `PLAN ✓ → APPLY ○ → UNIFY ○` on all three. **Next action: `/paul:apply
-  .paul/phases/90-team-leaderboards/90-01-PLAN.md`.**
+- **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 1 of 3 plans closed.** Loop: 90-01
+  `PLAN ✓ → APPLY ✓ → UNIFY ✓` (closed 2026-09-01, [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md));
+  90-02 and 90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:apply
+  .paul/phases/90-team-leaderboards/90-02-PLAN.md`.**
   CONTEXT: [90/CONTEXT.md](phases/90-team-leaderboards/CONTEXT.md) (2 discuss rounds, 8 decisions).
   Waves are strictly serial — 90-01 → 90-02 → 90-03 — because 02 imports 01's catalog and select
   string, and 03 rewrites the `page.js` 02 creates.
-  - **90-01 — ranking core** (wave 1, `depends_on: []`, autonomous). New pure
-    `web/lib/leaderboard.js` + `scratch/leaderboard_check.mjs`: the 8-metric catalog, the 15 m
-    guard, the derived lap time, the last-N mean, and `rankBoard` with a stable tie-break. No React,
-    no Supabase — the harness imports the module directly (verified: `import("…/rollingMean.js")`
-    resolves under bare node today), so it needs neither `typescript` staging nor a dev server.
-    See [90-01-PLAN.md](phases/90-team-leaderboards/90-01-PLAN.md).
+  - **90-01 — ranking core** ✅ **LOOP CLOSED 2026-09-01** (wave 1, `depends_on: []`, autonomous).
+    New pure `web/lib/leaderboard.js` (162 lines) + `scratch/leaderboard_check.mjs` (314): the
+    8-metric catalog, `SESSION_SELECT`, the 15 m guard, the derived lap time, the last-N mean, and
+    `rankBoard` with a stable tie-break. **6/6 AC pass.** Purely additive — no existing file
+    touched. Harness **63 passed, 0 failed**, exit 0 with no auth, no network, no dev server and no
+    `typescript` staging (a pure ESM lib with no JSX and no `@/` aliases is imported directly — a
+    cheaper harness pattern than 87-02/88-03/88-04/88-05's transpile-and-render). eslint clean,
+    `npm run build` clean. The module's own source text is asserted on, so `lap_time_s`, `t[-1]`,
+    `supabase` and `react` are absent from it **by test**, and a per-metric loop pins the catalog to
+    `SESSION_SELECT` so the two cannot drift. ⚠ One deviation: Task 1's requested header comment
+    contained the very strings Task 2 bans, so the header was reworded rather than the assertions
+    weakened. ⚠ One addition: `metricByKey` (matches `reportMetrics.js`), so `rankBoard` takes a key
+    string or a catalog entry.
+    See [90-01-PLAN.md](phases/90-team-leaderboards/90-01-PLAN.md) ·
+    [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md).
   - **90-02 — data layer + route** (wave 2, `depends_on: ["90-01"]`, autonomous). One
     `fetchLeaderboard()` in `web/lib/leaderboardData.js` — **the single seam Phase 89 D1 will
     rewrite** (CONTEXT R4) — plus `/app/leaderboard` with stroke tabs, the caveat block and one nav
