@@ -60,10 +60,31 @@ A tap whose audio and frame readouts disagree, about that session's own A/V offs
 half a frame is REJECTED — which catches a mispaired or missed tap. A whole-session container
 offset is reported (and flagged above one frame) rather than silently failing every tap.
 
+FINDING THE STRIKE — TWO DOMAINS, ON PURPOSE (86-04)
+----------------------------------------------------
+86-03's run was VOIDED by its own B3 bar because this module's detector over-triggered: it hunted
+raw |d(counts)| against a median+10*MAD floor, the struck wheel rings, and one strike produced 10-28
+crossings that a 0.5 s refractory could not collapse. The strike was never hard to see — it was hard
+to see IN THAT DOMAIN.
+
+  FIND on decimated |velocity|, peak-relative      the smoothing collapses ring-down for free;
+                                                   the event count is flat across 10-35% of the
+                                                   session maximum on all 8 corpus sessions,
+                                                   where raw jerk never stabilises
+  TIME on raw |d(counts)|, argmax in a window      3.7 ms, no filter anywhere in the path
+  CHECK by interval pattern + contention           encoder-side, and clock-offset-free
+
+Velocity cannot carry the timing: its peak lags the raw strike by +16.3 ms pooled (n=34, SD 22.6),
+per-session means -5.0 to +39.4 ms. Against B1's 33 ms bar, and varying session to session so it
+would not cancel as a constant, timing there would MANUFACTURE the very clock error this module
+exists to detect. Hence the split, and hence vel_to_raw_offset_ms is recorded on every tap.
+
 MODES
 -----
-  --self-test              synthetic fixtures with injected offsets           (AC-1, AC-3, AC-4)
+  --self-test              synthetic fixtures with injected offsets     (AC-1, AC-3, AC-4, AC-5)
   --validate-timebase DIR  raw time base vs the production pipeline           (AC-2)
+  --measure-domain DIR     which domain the strike is visible in, and the constants the rules
+                           produce from that measurement                      (86-04 AC-1)
   (default)                analyze one real rep
 
 Needs ffmpeg + ffprobe on PATH. Read-only: never writes to Supabase, never touches a stored session.
@@ -282,6 +303,49 @@ def find_taps(t_s, counts, k=10.0, refractory_s=REFRACTORY_S):
 # from the domain alone.
 FRAC_GRID = (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60)
 
+# ── the three constants 86-04 derives, and the honest status of all three ──────
+#
+# ⚠ THESE ARE TUNED IN-SAMPLE ON THE VOID CORPUS, NOT PRE-REGISTERED AGAINST IT. The sweep was run
+# on that data before 86-04 was written, so every number below is fitted to it. What IS
+# pre-registered is narrower and still load-bearing: each constant equals exactly what its stated
+# rule produces from --measure-domain's output, all three freeze before 86-05's data exists, and
+# the corpus is SPENT — it developed the instrument, so it can never measure the clock.
+#
+# Reproduce all three: `python scratch/tap_test.py --measure-domain scratch/taptest`
+
+# Detection threshold, as a fraction of the session's own maximum |velocity|.
+#
+# RULE: the grid value inside the most sessions' plateaus, ties toward the smaller (a lower
+# threshold cannot miss a strike a higher one found).
+# MEASURED: inside all 8 of 8 sessions' plateaus; 0.25/0.30/0.35 tie with it and give an identical
+# event count on every session, so the tie-break is the only thing separating them.
+#
+# Peak-relative, NOT median+k*MAD. A MAD threshold is strictly worse here — 430-542 crossings in
+# velocity against 101-302 in raw — so the win comes from peak-relative thresholding in the
+# SMOOTHED domain, not from the domain by itself.
+TAP_FRAC = 0.20
+
+# Half-width of the raw-domain search around each velocity candidate.
+#
+# RULE: ceil(4 * max|velocity-to-raw offset| / 0.05) * 0.05, asserted below half the smallest
+# observed inter-strike gap.
+# MEASURED: max|offset| 55.7 ms over 34 taps -> 0.25 s. Both assertions hold, but the second only
+# by 0.01 s, and the reason is a data defect rather than a physical bound: ONE audio gap in the
+# corpus is 0.52 s against a population of 2.54-4.42 s. See AUDIO_RETRIGGER_LIMIT_S. Excluding it
+# the assertion clears by 1.02 s.
+RAW_REFINE_WINDOW_S = 0.25
+
+# Tolerance on the encoder-vs-audio interval-pattern check.
+#
+# RULE: ceil(2 * max|interval delta| / 0.01) * 0.01.
+# MEASURED: max|delta| 21.7 ms -> 0.05 s. ⚠ THIN BASIS: only the 3 sessions where the velocity and
+# audio counts agree can contribute, so this rests on 12 intervals. Stated rather than laundered.
+#
+# The check compares DIFFERENCES OF GAPS, so any constant offset between the encoder clock and the
+# video clock cancels exactly. That is what makes it a legitimate encoder-side check rather than a
+# disguised look at the answer it is supposed to police.
+PAIR_TOL_S = 0.05
+
 # Search half-width used BY --measure-domain ONLY, to pair a velocity candidate with its raw
 # strike while the real window is still being derived. Deliberately generous: if the largest
 # observed offset ever approaches it, the window is binding and the measurement is worthless —
@@ -351,6 +415,73 @@ def raw_jerk(counts):
     signal. Element k spans samples k -> k+1."""
     j = np.abs(np.diff(counts))
     return np.where(j >= MAX_PLAUSIBLE_COUNTS_PER_SAMPLE, 0.0, j)
+
+
+def find_tap_candidates(csv_path):
+    """
+    Velocity-domain candidates: reliable in COUNT, coarse in TIME.
+
+    Do not report these times as taps — refine_on_raw does the timing. The velocity peak lags the
+    raw strike by +16.3 ms pooled, and the per-session means run -5.0 to +39.4 ms; against B1's
+    33 ms bar, and varying session to session so it would not cancel as a constant, timing here
+    would manufacture exactly the clock error this instrument exists to detect.
+    """
+    t_dec, av, _fs = velocity_profile(csv_path)
+    return peak_relative_events(t_dec, av, TAP_FRAC)
+
+
+def refine_on_raw(t_s, counts, t_candidate):
+    """
+    Time one candidate on the raw counts: argmax of |d(counts)| within RAW_REFINE_WINDOW_S.
+
+    3.7 ms resolution with no filter anywhere in the path, which is the whole reason the timing
+    lives in this domain. Returns None when the window holds no raw samples at all.
+
+    jerk[k] spans samples k -> k+1, so the strike lands on k+1 — which is what `t_s[1:]` indexes.
+    Getting this wrong reports every tap one raw sample early, a constant positive residual that
+    would be quietly attributed to the clock. It is defect 1 in the protocol's Instrument status,
+    found by --self-test, and it is just as easy to reintroduce here as it was in find_taps.
+    """
+    jerk = raw_jerk(counts)
+    t_jerk = t_s[1:]
+    m = (t_jerk > t_candidate - RAW_REFINE_WINDOW_S) & (t_jerk < t_candidate + RAW_REFINE_WINDOW_S)
+    if not m.any():
+        return None
+    return float(t_jerk[m][int(np.argmax(jerk[m]))])
+
+
+def detect_taps(csv_path, enc):
+    """
+    The 86-04 detector: find on velocity, time on raw.
+
+    Returns (taps, offsets) where offsets[i] is the velocity-to-raw lag for taps[i], recorded so
+    the +16.3 ms bias stays observable per tap instead of being silently absorbed.
+    """
+    taps, offsets, seen = [], [], set()
+    for cand in find_tap_candidates(csv_path):
+        t_raw = refine_on_raw(enc["t_s"], enc["counts"], cand)
+        if t_raw is None:
+            continue
+        # Two candidates that refine to the SAME raw sample are the same physical strike, by
+        # definition — a tap list holding one instant twice is simply wrong, and the duplicate
+        # would inflate encoder_overtrigger_ratio, the very health field meant to expose
+        # over-triggering. This is not a tuning knob and there is no tolerance in it: the times
+        # are the identical array element or they are different strikes.
+        #
+        # It happens because |velocity| of an impulse that overshoots has TWO lobes, so one strike
+        # can raise two runs above the cut. Real strikes are single-sided (the corpus gives one
+        # velocity event per strike), but the synthetic fixture's ringing impulse is not, and it
+        # doubled 10 of 12 strikes there.
+        #
+        # The FIRST candidate's offset is kept, not the smallest: the two lobes straddle the
+        # strike, so picking the smaller |offset| would bias the reported velocity-to-raw lag
+        # toward zero — and that lag is a diagnostic for exactly this kind of drift.
+        if t_raw in seen:
+            continue
+        seen.add(t_raw)
+        taps.append(t_raw)
+        offsets.append(cand - t_raw)
+    return taps, offsets
 
 
 def longest_plateau(counts_by_frac):
@@ -495,13 +626,21 @@ def frame_events(path, crop=None, k=8.0, refractory_s=REFRACTORY_S, size=64):
 # ── the measurement ────────────────────────────────────────────────────────────
 
 def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms,
-                mic_distance_m, crop=None, label=None):
+                mic_distance_m, crop=None, label=None, detector="86-04"):
     # video_start_phone_ms may be None: it is recorded only in the app's on-screen log, so an
     # operator can come back with clips and CSVs but without it. The END-anchored residual (B1,
     # the coach-facing number) does not use it at all, so it is still fully computable; the
     # start-anchored residual and camera warm-up are then reported as None rather than invented.
     enc = read_raw(raw_path)
-    taps, _ = find_taps(enc["t_s"], enc["counts"])
+    # `detector` exists ONLY so the ring-down fixture can run the same clip through both
+    # instruments and assert that the repair actually changed the outcome. The field path never
+    # sets it: a fixture that only demonstrates the fix would not fail if the fix regressed.
+    if detector == "86-03":
+        taps, _ = find_taps(enc["t_s"], enc["counts"])
+        vel_offsets = [None] * len(taps)
+    else:
+        taps, vel_offsets = detect_taps(raw_path, enc)
+    offset_by_tap = {t: o for t, o in zip(taps, vel_offsets)}
 
     vid_dur = video_duration_s(video_path)
     onsets = audio_onsets(video_path)
@@ -550,6 +689,28 @@ def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms
         av_offset = 0.0
         av_estimated = False
 
+    # ── ENCODER-SIDE CHECKS (86-04) ───────────────────────────────────────────────────────────
+    # 86-03's only rejection rule compared audio against frames — two readouts of the VIDEO — so an
+    # ENCODER mispair left both in perfect agreement and was marked ACCEPTED carrying 180-320 ms.
+    # Both checks below look at the encoder side, and neither reads a residual.
+
+    # (a) CONTENTION. Two audio onsets selecting the same encoder tap means at least one is wrong.
+    # One-to-one pairing is a structural property, not a statistical one, so both are rejected
+    # rather than the "better" one being kept — choosing between them would need the residual.
+    # `detector == "86-03"` selects the whole 86-03 INSTRUMENT, not merely its detector: that
+    # instrument had no encoder-side check at all, and leaving these on would let the repair catch
+    # the defect the fixture is trying to reproduce.
+    checks_on = detector != "86-03"
+
+    used = {}
+    for p in pairs:
+        if p["enc"] is not None:
+            used[p["enc"]] = used.get(p["enc"], 0) + 1
+    contended = {t for t, n in used.items() if n > 1} if checks_on else set()
+
+    # (b) INTERVAL PATTERN runs in PASS 3, on the taps that survived PASS 2 — see there for why the
+    # ordering is load-bearing.
+
     # PASS 2 — residuals on the frame timeline, rejection on scatter about the session's own offset.
     records = []
     for p in pairs:
@@ -566,6 +727,7 @@ def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms
             continue
 
         scatter = (p["t_audio"] - p["fr_est"]) - av_offset
+        vo = offset_by_tap.get(p["enc"])
         rec.update({
             "video_time_sound_corrected_s": round(p["t_audio"], 6),
             "frame_time_s": round(p["fr"], 6),
@@ -573,11 +735,19 @@ def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms
             "audio_minus_frame_s": round(p["t_audio"] - p["fr_est"], 6),
             "scatter_about_av_offset_s": round(scatter, 6),
             "encoder_time_s": round(p["enc"], 6),
+            # Recorded, never applied: the velocity candidate's lag behind the raw strike. If this
+            # ever collapses toward zero the timing has silently migrated into the wrong domain.
+            "vel_to_raw_offset_ms": None if vo is None else round(vo * 1000, 3),
             "residual_end_anchored_s": round((p["fr_est"] + end_origin) - p["enc"], 6),
             "residual_start_anchored_s": (round((p["fr_est"] + start_origin) - p["enc"], 6)
                                           if have_start else None),
         })
-        if abs(scatter) > GROSS_DISAGREEMENT_FRAMES / fps:
+        if p["enc"] in contended:
+            rec["status"] = "REJECTED"
+            rec["reason"] = (f"contention: encoder tap at {p['enc']:.3f}s is the nearest tap for "
+                             f"{used[p['enc']]} audio onsets, so at least one pairing is wrong "
+                             f"and choosing between them would need the residual")
+        elif abs(scatter) > GROSS_DISAGREEMENT_FRAMES / fps:
             rec["status"] = "REJECTED"
             rec["reason"] = (f"readouts disagree by {scatter * 1000:+.1f} ms about this "
                              f"session's A/V offset — beyond {GROSS_DISAGREEMENT_FRAMES} frames "
@@ -586,6 +756,34 @@ def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms
         else:
             rec["status"] = "ACCEPTED"
         records.append(rec)
+
+    # PASS 3 — the interval-pattern check, on the taps PASS 2 left standing.
+    #
+    # ⚠ THE ORDERING IS LOAD-BEARING, and running this earlier is a real defect — caught by the
+    # standing AC-4 desync gate, which went from 11 accepted / 1 rejected to 0 / 12. This check
+    # compares ENCODER gaps against AUDIO gaps, so a bad AUDIO onset fails it just as loudly as a
+    # bad encoder tap, and because the verdict is session-wide one bad onset would condemn every
+    # honest tap beside it. PASS 2's scatter check is precisely the thing that identifies an
+    # untrustworthy audio readout, so running it first leaves this check looking at a clean audio
+    # sequence — after which any disagreement really is encoder-side, which is what it is for.
+    #
+    # A difference of differences, so any constant offset between the two clocks cancels exactly.
+    # It cannot be gamed by the quantity being measured, and it reads no residual.
+    seq = [r for r in records if r.get("status") == "ACCEPTED"]
+    interval_max_delta = None
+    if len(seq) >= 2:
+        enc_gaps = np.diff([r["encoder_time_s"] for r in seq])
+        aud_gaps = np.diff([r["video_time_sound_corrected_s"] for r in seq])
+        interval_max_delta = float(np.max(np.abs(enc_gaps - aud_gaps)))
+    interval_failed = (checks_on and interval_max_delta is not None
+                       and interval_max_delta > PAIR_TOL_S)
+    if interval_failed:
+        for r in seq:
+            r["status"] = "REJECTED"
+            r["reason"] = (f"interval pattern: encoder gaps disagree with audio gaps by up to "
+                           f"{interval_max_delta * 1000:.1f} ms, beyond PAIR_TOL_S "
+                           f"({PAIR_TOL_S * 1000:.0f} ms) — the two sensors are not describing "
+                           f"the same sequence of strikes")
 
     accepted = [r for r in records if r.get("status") == "ACCEPTED"]
     # Health metric, not a filter: honest taps spread over exactly one frame, because the frame
@@ -610,9 +808,19 @@ def analyze_rep(raw_path, video_path, session_start_utc_ms, video_start_phone_ms
         "end_anchored_origin_s": round(end_origin, 6),
         "start_anchored_origin_s": round(start_origin, 6) if have_start else None,
         "camera_warm_up_s": round(warm_up, 6) if have_start else None,
+        "detector": detector,
         "n_encoder_taps": len(taps),
         "n_audio_onsets": len(onsets),
         "n_frame_events": len(fevents),
+        # The number that would have made 86-03's defect obvious on session 1 instead of at
+        # aggregation: 28 encoder events against 5 onsets is 5.6.
+        "encoder_overtrigger_ratio": round(len(taps) / max(1, len(onsets)), 3),
+        "encoder_overtrigger_suspicious": bool(len(taps) / max(1, len(onsets)) > 2.0),
+        "interval_pattern_max_delta_s": (round(interval_max_delta, 6)
+                                         if interval_max_delta is not None else None),
+        "interval_pattern_failed": bool(interval_failed),
+        "n_contended_taps": len(contended),
+        "vel_to_raw_offset_ms": [round(o * 1000, 3) for o in vel_offsets if o is not None],
         "readout_spread_frames": round(spread_frames, 3) if spread_frames is not None else None,
         "readout_spread_suspicious": bool(spread_frames is not None and spread_frames > 1.2),
         "av_offset_ms": round(av_offset * 1000, 3),
@@ -1103,16 +1311,37 @@ def measure_domain(tap_dir, verbose=True):
 
 # ── AC-1 / AC-3 / AC-4: synthetic fixtures ─────────────────────────────────────
 
-def _make_raw_csv(path, taps_s, fs=270.0, duration_s=30.0):
+def _make_raw_csv(path, taps_s, fs=270.0, duration_s=30.0, ringdown=None, baseline_counts_s=200.0):
+    """
+    `ringdown` is a list of (delay_s, amplitude_fraction) re-triggers appended after each strike —
+    the wheel still rocking seconds after being hit. Absent, the fixture is a clean impulse train.
+
+    The fractions matter as much as the delays. Real re-triggers cross the 86-03 detector's
+    median+10*MAD floor (which sits at ~1 count on a quiet trace) while staying BELOW 20% of the
+    strike's velocity excursion — which is exactly why the raw domain sees 10-28 events for ~5
+    strikes and the velocity domain sees 5. A fixture outside that regime would not model the
+    defect: too loud and the repair fails too, too quiet and neither instrument notices.
+
+    `baseline_counts_s` is the steady rotation underneath, and a ring-down fixture must lower it.
+    Measured: at the default 200 counts/s the baseline is 8.5% of the session's peak |velocity|, so
+    an amplitude fraction f arrives at the detector as roughly 0.085 + 0.85f — planting 0.15 lands
+    at 0.208, over the 0.20 cut, and the re-triggers become visible to the repaired detector for a
+    reason that has nothing to do with ring-down. The tap corpus is a wheel on a DESK, near
+    stationary between strikes, so a low baseline is also the more faithful model of it.
+    """
     n = int(duration_s * fs) + 1  # +1 so (n-1)/fs is EXACTLY duration_s
     t = np.arange(n) / fs
-    counts = 200.0 * t  # a slow steady rotation underneath
-    for tap in taps_s:
-        i = int(round(tap * fs))
+    counts = baseline_counts_s * t  # a slow steady rotation underneath
+
+    def _impulse(i, amp):
         if 0 <= i < n - 12:
             # A strike: a sharp jerk that rings down over ~12 samples.
-            ring = 140.0 * np.exp(-np.arange(12) / 2.5) * np.cos(np.arange(12) * 1.1)
-            counts[i:i + 12] += ring
+            counts[i:i + 12] += amp * np.exp(-np.arange(12) / 2.5) * np.cos(np.arange(12) * 1.1)
+
+    for tap in taps_s:
+        _impulse(int(round(tap * fs)), 140.0)
+        for delay_s, frac in (ringdown or ()):
+            _impulse(int(round((tap + delay_s) * fs)), 140.0 * frac)
     ts = (np.arange(n) * (1e6 / fs)).astype(np.int64)
     pd.DataFrame({
         "timestamp_us": ts,
@@ -1253,6 +1482,71 @@ def self_test(keep=False):
         failures.append(f"single-tap desync: accepted {rep['n_accepted']}, "
                         f"rejected {rep['n_rejected']}")
 
+    # AC-5: 86-03's defect, reproduced from a fixture with ZERO injected clock error and pinned
+    # BOTH ways. Asserting only that the repair works would not fail if the repair regressed.
+    #
+    # The mechanism, which is the one that voided 86-03: ring-down re-triggers spaced further apart
+    # than the 0.5 s refractory are each detected as taps, and the last one lands INSIDE the
+    # refractory of the next real strike — so the real strike is discarded and an artifact 300 ms
+    # early takes its place. Audio and frames still agree perfectly with each other, because both
+    # are readouts of the VIDEO, so 86-03's only rejection rule sees nothing wrong and ACCEPTS it.
+    print("\nAC-5 ring-down (zero injected error; 86-03 launders it, 86-04 must not):")
+    RINGDOWN = [(0.62, 0.15), (1.24, 0.12), (1.86, 0.10), (2.70, 0.08)]
+    raw_ring = tmp / "fixture_ringdown.csv"
+    _make_raw_csv(raw_ring, TAPS, duration_s=DEVICE_DUR, ringdown=RINGDOWN,
+                  baseline_counts_s=20.0)
+    clip = tmp / "fixture_ringdown.mkv"
+    _make_clip(clip, [tp - DELTA_V for tp in TAPS], duration_s=VIDEO_DUR)
+
+    old = analyze_rep(raw_ring, clip, SESSION_START, SESSION_START + int(DELTA_V * 1000),
+                      mic_distance_m=0.0, label="ringdown-8603", detector="86-03")
+    new = analyze_rep(raw_ring, clip, SESSION_START, SESSION_START + int(DELTA_V * 1000),
+                      mic_distance_m=0.0, label="ringdown-8604", detector="86-04")
+
+    laundered = [t for t in old["taps"] if t.get("status") == "ACCEPTED"
+                 and abs(t["residual_end_anchored_s"]) > 0.150]
+    print(f"  86-03: {old['n_encoder_taps']} encoder taps for {old['n_audio_onsets']} onsets "
+          f"(over-trigger {old['encoder_overtrigger_ratio']:.1f}x), "
+          f"{len(laundered)} ACCEPTED with |residual| > 150 ms")
+    if not laundered:
+        failures.append("ring-down fixture did not reproduce 86-03's defect — the fixture no "
+                        "longer models the failure mode, so the other half proves nothing")
+        print("  -> FAIL (nothing to repair; fixture is not exercising the defect)")
+    else:
+        worst = max(laundered, key=lambda t: abs(t["residual_end_anchored_s"]))
+        print(f"         worst: v={worst['video_time_s']:.3f} carried "
+              f"{worst['residual_end_anchored_s'] * 1000:+.0f} ms and was ACCEPTED")
+        same = [t for t in new["taps"] if t["video_time_s"] == worst["video_time_s"]]
+        rec = same[0] if same else None
+        if rec is None:
+            fixed = False
+            how = "that tap vanished from the repaired run entirely"
+        elif rec.get("status") != "ACCEPTED":
+            fixed = True
+            how = f"REJECTED ({str(rec.get('reason'))[:60]}...)"
+        else:
+            # PLAN AMENDMENT, recorded rather than quietly applied. 86-04's AC-5 asked for
+            # |residual| <= 2 ms on this ONE tap. That is not reachable and the AC was wrong to
+            # ask: a single tap carries a uniform +/- half-frame (16.7 ms) quantisation error by
+            # construction, which is why the other fixtures stratify 12 taps so it cancels. The
+            # same mistake was made and corrected in 86-03's AC-1 — see the protocol's Amendments.
+            #
+            # The 2 ms bar is applied instead to the ENCODER time against the fixture's own known
+            # strike, which is exact, has no frame quantisation anywhere in it, and tests the
+            # thing AC-5 actually cares about: was this paired to the real strike, or to a
+            # ring-down artifact hundreds of ms away? The residual is reported beside it.
+            err = min(abs(rec["encoder_time_s"] - tp) for tp in TAPS)
+            fixed = err <= 0.002
+            how = (f"ACCEPTED, paired to the real strike within {err * 1000:.2f} ms "
+                   f"(residual {rec['residual_end_anchored_s'] * 1000:+.2f} ms — frame-quantised, "
+                   f"so it is reported, not asserted)")
+        print(f"  86-04: {new['n_encoder_taps']} encoder taps for {new['n_audio_onsets']} onsets "
+              f"(over-trigger {new['encoder_overtrigger_ratio']:.1f}x); that tap is now {how}")
+        print(f"  -> {'OK' if fixed else 'FAIL'}")
+        if not fixed:
+            failures.append(f"ring-down: repaired instrument still mishandles the tap at "
+                            f"v={worst['video_time_s']:.3f} — {how}")
+
     # Informational, not a bar: how far AAC priming moves the audio readout on THIS ffmpeg. A real
     # iOS clip is AAC in mp4, so a constant audio-vs-frame offset in the field is expected to look
     # like this rather than like a clock error.
@@ -1294,7 +1588,8 @@ def self_test(keep=False):
             print(f"  {f}")
         return 1
     print(f"SELF-TEST PASS - {len(OFFSETS_MS)} injected offsets recovered within "
-          f"{TOL_MS:.2f} ms, rejection path fires, no container-offset leak")
+          f"{TOL_MS:.2f} ms, rejection path fires, no container-offset leak, "
+          f"86-03's ring-down laundering reproduced and repaired")
     return 0
 
 
