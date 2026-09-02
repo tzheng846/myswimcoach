@@ -8,15 +8,21 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
 ## Current Position
 
 - **Milestone:** v0.5 Commercial Foundation
+- **📋 86-04 PLAN CREATED 2026-09-01, awaiting approval** (`PLAN ✓ → APPLY ○ → UNIFY ○`) —
+  [86-04-PLAN.md](phases/86-session-clock-accuracy/86-04-PLAN.md). **Repairs the instrument that
+  voided 86-03; produces NO B1 measurement and spends no device time or EAS build.** 3 auto tasks,
+  `autonomous: true`, everything runs off the 8 sessions already in `scratch/taptest/`.
+  **Next action: `/paul:apply .paul/phases/86-session-clock-accuracy/86-04-PLAN.md`**, or
+  `/paul:apply .paul/phases/90-team-leaderboards/90-02-PLAN.md` if leaderboards are the priority
+  (90 was mid-phase when 86-03 was resumed).
 - **✅ 86-03 LOOP CLOSED 2026-09-01** (`PLAN ✓ → APPLY ✓ → UNIFY ✓`). Its device run happened and was
   **VOID** under its own pre-registered B3 bar; 86-02's AC-7 passed in the process, which closes
-  86-02. 🔴 **PHASE 86 IS NOT TRANSITIONED AND HAS NO PHASE COMMIT — 3 of 3 plans have SUMMARYs, and
+  86-02. 🔴 **PHASE 86 IS NOT TRANSITIONED AND HAS NO PHASE COMMIT — 3 of 3 plans had SUMMARYs, and
   that is exactly the plan-count trap that wrongly called 83-01, 83-02 and 88-04 done.** The phase
   existed to replace estimates with measurements; it replaced three and left its headline one (the
   end-anchored residual a coach sees) unmeasured. **Closing it on counts would bank a void run as a
-  finished measurement.** A successor plan (86-04) is owed; its brief and its data are ready.
-  **Next action: `/paul:apply .paul/phases/90-team-leaderboards/90-02-PLAN.md`** (90 was mid-phase
-  when 86-03 was resumed), or `/paul:plan` 86-04 if the tap test is the priority.
+  finished measurement.** ~~A successor plan (86-04) is owed~~ → **WRITTEN 2026-09-01, see above.**
+  The phase is now **3 of 4 closed, 4 planned**, so the count heuristic no longer reads done either.
 - **Phase 90** (Team leaderboards) — **🚧 IN PROGRESS, 1 of 3 plans closed.** Loop: 90-01
   `PLAN ✓ → APPLY ✓ → UNIFY ✓` (closed 2026-09-01, [90-01-SUMMARY.md](phases/90-team-leaderboards/90-01-SUMMARY.md));
   90-02 and 90-03 `PLAN ✓ → APPLY ○ → UNIFY ○`. **Next action: `/paul:apply
@@ -1080,7 +1086,38 @@ in [DATA-FLOW.md](../DATA-FLOW.md). The full pre-2026-08-20 running log (4,905 l
   See [81-01-SUMMARY.md](phases/81-annotation-video-marking/81-01-SUMMARY.md). **Phase 81 stays 🚧 — 81-02
   (key-3 UW-kick marker + ALL backend: annotations/phase_metrics/api recompute) still owed.** Enables STATE
   item 9 (annotate the backlog fast).
-- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 3 of 3 plans
+- **Phase 86** (session clock accuracy — absolute, measured session start) — **🚧 3 of 4 plans
+  CLOSED, 4 planned. 86-04 PLANNED 2026-09-01 (`PLAN ✓ → APPLY ○ → UNIFY ○`).**
+  - **86-04 — repair the instrument, re-register the run** (wave 4, `depends_on: ["86-03"]`,
+    **autonomous: true**). 3 auto tasks, **zero device time and zero EAS builds** — everything runs
+    off the 8 sessions already in `scratch/taptest/`. (1) Add `--measure-ringdown` and measure the
+    wheel's ring-down from the 8 raw CSVs; (2) set `REFRACTORY_S` from that measurement, add an
+    **encoder-side** ambiguity + contention rejection so a mispair is rejected instead of laundered,
+    and pin the whole repair with a fixture that reproduces 86-03's defect **both ways** (old
+    constants launder it, new ones do not); (3) re-analyse the void run as an in-sample diagnostic
+    and append a `## 10. Confirmatory run (86-05)` registration to the protocol.
+    🔴 **THE REFRACTORY CONSTANT IS CHOSEN BY A RULE WRITTEN INTO THE PLAN BEFORE THE NUMBER EXISTS**
+    (`R = max short gap`, `L = min long gap`, valley criterion `L > 2R` at classifiers 1.0/1.5/2.0 s,
+    then `REFRACTORY_S = ceil(1.5R/0.05)·0.05` with `REFRACTORY_S < L/2`), and Task 1 commits the
+    measurement **before** Task 2 moves the constant. **If the valley criterion fails, no constant is
+    chosen and that is the plan's result** — ring-down would not be separable from strikes by time
+    alone, which is a different discriminator and a new plan.
+    🔴 **THE PLAN FORBIDS THE OBVIOUS FIX.** A rejection rule keyed on distance from the session
+    median residual would rescue B1 by construction — 86-03 already measured what it gives
+    (**−1.79 ± 9.88 ms**), and that number is exactly what pre-registration exists to stop anyone
+    quoting. Rejections must be **structural** (one-to-one pairing; second-nearest tap within
+    `REFRACTORY_S` ⇒ ambiguous), never residual-derived.
+    ⚠ **`MATCH_WINDOW_S` is frozen** even though 86-03 named it a contributing factor — one lever at
+    a time, or the fixture cannot say which change did the work.
+    ⚠ **B1 IS NOT MEASURED BY THIS PLAN and its numbers are IN-SAMPLE by construction** (the detector
+    is derived from this corpus). The recomputed acceptance rate is an **upper bound** on the
+    repaired instrument's health, not an estimate of it. B1 stays unmeasured until 86-05.
+    ⚠ **86-05 is owed and needs a mobile change**: `videoStartPhoneMs` is never persisted, so B2
+    (camera warm-up) and B4 (`rtt/2` symmetry) are unmeasurable without an app edit + EAS build.
+    See [86-04-PLAN.md](phases/86-session-clock-accuracy/86-04-PLAN.md).
+
+  *Record below as written 2026-09-01, when 86-03 closed and 86-04 did not yet exist:*
+  **🚧 3 of 3 plans
   APPLIED, but 86-03 ENDED IN A VOID RUN, so the phase does NOT close. 86-01 LOOP CLOSED 2026-08-31;
   86-02 LOOP CLOSED 2026-09-01 and its AC-7 is now PASSED (see below); **86-03 LOOP CLOSED 2026-09-01
   (PLAN ✓ → APPLY ✓ → UNIFY ✓) — run VOID under its own pre-registered B3 bar.**
